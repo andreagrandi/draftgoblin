@@ -1,0 +1,60 @@
+Deck builder pair selection
+Pool: tests/fixtures/deckbuilder-constrained-pool.json
+Set: TST
+Pool size: 28 cards
+Chosen pair: WU (automatic, score 50.00)
+Runner-up: WB (score 33.37)
+Score gap: 16.63
+Pair scores:
+- WU: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 28
+- WB: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- WR: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- WG: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- UB: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- UR: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- UG: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- BR: score 7.50; top 23 sum 0.00; 17Lands WR neutral 50.0%; playables 0
+- BG: score 7.50; top 23 sum 0.00; 17Lands WR neutral 50.0%; playables 0
+- RG: score 7.50; top 23 sum 0.00; 17Lands WR neutral 50.0%; playables 0
+
+Spell selection:
+Eligible spells for WU: 28
+Selected spells: 23/23
+Creature count: 17 (target 14-17)
+Two-drops MV 2: 5 (minimum 5)
+Expensive spells MV >= 6: 3 (soft cap 3)
+Splash: disabled (--allow-splash is inert in v1; off-pair cards excluded)
+Relaxation order: expensive-spell cap -> minimum two-drop quota -> creature ceiling -> creature floor -> eligible-card shortage
+Applied relaxations: none
+Creatures:
+- MV 2 | score 50 | Cloudkin Cadet (W)
+- MV 2 | score 50 | Harbor Recruit (U)
+- MV 2 | score 50 | Ledger Squire (W)
+- MV 2 | score 50 | Mistway Scout (U)
+- MV 2 | score 50 | River Patrol (W)
+- MV 3 | score 50 | Aerial Adept (U)
+- MV 3 | score 50 | Archive Guardian (W)
+- MV 3 | score 50 | Canal Bruiser (U)
+- MV 3 | score 50 | Glint Heron (W)
+- MV 3 | score 50 | Inkfathom Guide (U)
+- MV 3 | score 50 | Lantern Watch (W)
+- MV 3 | score 50 | Moonlit Vanguard (U)
+- MV 3 | score 50 | Omen Reader (W)
+- MV 3 | score 50 | Tide Scholar (U)
+- MV 6 | score 50 | Cloudtop Colossus (W)
+- MV 6 | score 50 | Deepwater Leviathan (U)
+- MV 6 | score 50 | Sanctum Behemoth (W)
+Non-creatures:
+- MV 3 | score 50 | Borrowed Time (W)
+- MV 3 | score 50 | Cancel the Alarm (U)
+- MV 3 | score 50 | Chart a Course (W)
+- MV 3 | score 50 | Dazzling Denial (U)
+- MV 3 | score 50 | Essence Scatter (W)
+- MV 3 | score 50 | Frost Trick (U)
+Bench:
+- MV 6 | score 50 | Skyline Colossus (U) (cut: expensive-spell cap)
+- MV 3 | score 50 | Guiding Light (W) (cut: lower score)
+- MV 3 | score 50 | Hold Still (U) (cut: lower score)
+- MV 3 | score 50 | Insightful Study (W) (cut: lower score)
+- MV 3 | score 50 | Jury-Rig (U) (cut: lower score)
+Card data from 17Lands (17lands.com)

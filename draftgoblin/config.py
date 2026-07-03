@@ -25,6 +25,17 @@ class DeckBuilderConfig:
     creature_ceiling: int = 17
     minimum_two_drops: int = 5
     maximum_expensive_spells: int = 3
+    two_drop_mana_value: float = 2.0
+    expensive_spell_mana_value: float = 6.0
+    near_tie_creature_preference_points: float = 2.0
+    bench_card_count: int = 5
+    relaxation_order: tuple[str, ...] = (
+        "expensive-spell cap",
+        "minimum two-drop quota",
+        "creature ceiling",
+        "creature floor",
+        "eligible-card shortage",
+    )
     main_color_source_floor: int = 7
 
 
