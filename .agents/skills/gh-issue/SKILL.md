@@ -110,9 +110,9 @@ Project ID: `PVT_kwHOAAm1584BcXPu`
 
 Set Priority:
 
-- High: `64555943`
-- Medium: `eb1638a3`
-- Low: `7c646b9f`
+- High: `9253744f`
+- Medium: `9664f46f`
+- Low: `46883d66`
 
 ```sh
 gh project item-edit --id "$ITEM_ID" --project-id PVT_kwHOAAm1584BcXPu \
@@ -122,12 +122,12 @@ gh project item-edit --id "$ITEM_ID" --project-id PVT_kwHOAAm1584BcXPu \
 
 Set Area:
 
-- Draft Engine: `844bf4b5`
-- Card Data: `4f4f92cc`
-- Arena Integration: `1617aa1c`
-- UX: `6e4231b5`
-- Operations: `9e8a8914`
-- Testing: `7e7deb50`
+- Draft Engine: `9a9b1e4b`
+- Card Data: `36a55847`
+- Arena Integration: `8773e939`
+- UX: `72d9c16b`
+- Operations: `cd7eec9b`
+- Testing: `8a3248da`
 
 ```sh
 gh project item-edit --id "$ITEM_ID" --project-id PVT_kwHOAAm1584BcXPu \
