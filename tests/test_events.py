@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from draftgoblin.events import (
+    AccountEvent,
+    DraftCompletedEvent,
+    DraftLogParseError,
+    DraftStartedEvent,
+    PackOfferedEvent,
+    PickMadeEvent,
+    parse_events,
+)
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
+EXPECTED_PICK_COORDINATES = [
+    (pack_number, pick_number)
+    for pack_number in range(3)
+    for pick_number in range(14)
+]
+EXPECTED_CHOSEN_GRP_IDS = [
+    105097,
+    105134,
+    105003,
+    105037,
+    105117,
+    105014,
+    105034,
+    104997,
+    105030,
+    104989,
+    105054,
+    105070,
+    105054,
+    105084,
+    105037,
+    104998,
+    105005,
+    104983,
+    105017,
+    105003,
+    105047,
+    104996,
+    105006,
+    105033,
+    105013,
+    105003,
+    105049,
+    105032,
+    105000,
+    104986,
+    105164,
+    105005,
+    105117,
+    105053,
+    104989,
+    105002,
+    105031,
+    104995,
+    105004,
+    104995,
+    104911,
+    105182,
+]
+EXPECTED_FIRST_PACK = (
+    104894,
+    104976,
+    105080,
+    104995,
+    105027,
+    105030,
+    105170,
+    104932,
+    104893,
+    105091,
+    104969,
+    105097,
+    104979,
+    105164,
+)
+
+
+def test_parse_fixture_yields_account_start_all_picks_and_completion() -> None:
+    fixture_lines = FIXTURE_PATH.read_text(encoding="utf-8").splitlines()
+
+    events = list(parse_events(lines=fixture_lines))
+
+    expected_sequence: list[type[object]] = [AccountEvent, DraftStartedEvent]
+    for _ in range(42):
+        expected_sequence.extend([PackOfferedEvent, PickMadeEvent])
+    expected_sequence.append(DraftCompletedEvent)
+    assert [type(event) for event in events] == expected_sequence
+
+    account = events[0]
+    assert isinstance(account, AccountEvent)
+    assert account.client_id == "FIXTURECLIENTID1234567890"
+    assert account.screen_name == "FixturePlayer"
+    assert account.previous_client_id is None
+
+    draft_started = events[1]
+    assert isinstance(draft_started, DraftStartedEvent)
+    assert draft_started.event_name == "QuickDraft_MSH_20260702"
+    assert draft_started.set_code == "MSH"
+    assert draft_started.course_id == "00000000-0000-4000-8000-000000000004"
+    assert draft_started.account_id == account.client_id
+
+    pack_events = [event for event in events if isinstance(event, PackOfferedEvent)]
+    pick_events = [event for event in events if isinstance(event, PickMadeEvent)]
+    assert len(pack_events) == 42
+    assert len(pick_events) == 42
+    assert [
+        (event.pack_number, event.pick_number) for event in pack_events
+    ] == EXPECTED_PICK_COORDINATES
+    assert [
+        (event.pack_number, event.pick_number) for event in pick_events
+    ] == EXPECTED_PICK_COORDINATES
+    assert [event.chosen_grp_id for event in pick_events] == EXPECTED_CHOSEN_GRP_IDS
+    assert [len(event.offered_grp_ids) for event in pack_events] == list(
+        range(14, 0, -1)
+    ) * 3
+    assert pack_events[0].offered_grp_ids == EXPECTED_FIRST_PACK
+    assert pick_events[0].chosen_grp_id == 105097
+    assert pack_events[-1].offered_grp_ids == (105182,)
+    assert pick_events[-1].chosen_grp_id == 105182
+
+    completion = events[-1]
+    assert isinstance(completion, DraftCompletedEvent)
+    assert completion.event_name == "QuickDraft_MSH_20260702"
+    assert completion.set_code == "MSH"
+    assert completion.pack_number == 2
+    assert completion.pick_number == 13
+    assert len(completion.picked_grp_ids) == 42
+    assert completion.inferred is False
+    assert completion.account_id == account.client_id
+
+
+def test_parser_emits_account_change_when_authenticate_response_changes() -> None:
+    first_auth_line = json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": "FIRSTACCOUNT",
+                "screenName": "FirstPlayer",
+            },
+        }
+    )
+    second_auth_line = json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": "SECONDACCOUNT",
+                "screenName": "SecondPlayer",
+            },
+        }
+    )
+
+    events = list(parse_events(lines=[first_auth_line, second_auth_line]))
+
+    assert events == [
+        AccountEvent(
+            client_id="FIRSTACCOUNT",
+            screen_name="FirstPlayer",
+            previous_client_id=None,
+        ),
+        AccountEvent(
+            client_id="SECONDACCOUNT",
+            screen_name="SecondPlayer",
+            previous_client_id="FIRSTACCOUNT",
+        ),
+    ]
+
+
+def test_parser_infers_completion_from_final_empty_pack_without_completed_status() -> None:
+    picked_cards = [str(grp_id) for grp_id in range(1, 43)]
+    payload = {
+        "Result": "Success",
+        "EventName": "QuickDraft_ABC_20260702",
+        "DraftStatus": "PickNext",
+        "PackNumber": 2,
+        "PickNumber": 13,
+        "NumCardsToPick": 1,
+        "DraftPack": [],
+        "PickedCards": picked_cards,
+    }
+    line = json.dumps({"CurrentModule": "BotDraft", "Payload": json.dumps(payload)})
+
+    events = list(parse_events(lines=[line]))
+
+    assert events == [
+        DraftCompletedEvent(
+            event_name="QuickDraft_ABC_20260702",
+            set_code="ABC",
+            pack_number=2,
+            pick_number=13,
+            picked_grp_ids=tuple(range(1, 43)),
+            inferred=True,
+            account_id=None,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw_line",
+    [
+        json.dumps({"CurrentModule": "BotDraft", "Payload": "not-json"}),
+        json.dumps({"CurrentModule": "BotDraft"}),
+        json.dumps(
+            {
+                "CurrentModule": "BotDraft",
+                "Payload": json.dumps(
+                    {
+                        "Result": "Success",
+                        "EventName": "QuickDraft_ABC_20260702",
+                        "DraftStatus": "PatchDrift",
+                        "PackNumber": 0,
+                        "PickNumber": 0,
+                        "DraftPack": ["1"],
+                        "PickedCards": [],
+                    }
+                ),
+            }
+        ),
+    ],
+)
+def test_malformed_or_unknown_draft_lines_raise_diagnostic_with_raw_line(
+    raw_line: str,
+) -> None:
+    with pytest.raises(DraftLogParseError) as error:
+        list(parse_events(lines=[raw_line]))
+
+    assert error.value.raw_line == raw_line
+    assert raw_line in str(error.value)
+
