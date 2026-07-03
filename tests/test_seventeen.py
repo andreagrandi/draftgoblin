@@ -1,0 +1,171 @@
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from draftgoblin.config import COLOR_PAIRS, PICK_ENGINE
+from draftgoblin.seventeen import (
+    NEUTRAL_PRIOR_SOURCE,
+    PREMIER_DRAFT_FORMAT,
+    QUICK_DRAFT_FORMAT,
+    SEVENTEEN_LANDS_ATTRIBUTION,
+    SeventeenLandsError,
+    load_or_refresh_17lands_data,
+    load_or_refresh_17lands_format_data,
+    seventeen_lands_cache_path,
+)
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
+QUICK_CARD_RATINGS_PATH = FIXTURE_DIR / "17lands-card-ratings-quick.json"
+PREMIER_CARD_RATINGS_PATH = FIXTURE_DIR / "17lands-card-ratings-premier.json"
+COLOR_RATINGS_PATH = FIXTURE_DIR / "17lands-color-ratings.json"
+
+
+class FrozenClock:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+class RecordingFetcher:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.urls: list[str] = []
+        self.quick_card_ratings = _load_json(path=QUICK_CARD_RATINGS_PATH)
+        self.premier_card_ratings = _load_json(path=PREMIER_CARD_RATINGS_PATH)
+        self.color_ratings = _load_json(path=COLOR_RATINGS_PATH)
+
+    def __call__(self, url: str, timeout_seconds: int) -> Any:
+        self.urls.append(url)
+        if self.fail:
+            raise SeventeenLandsError("network unavailable")
+
+        if "/card_ratings/data" in url and "event_type=PremierDraft" in url:
+            return self.premier_card_ratings
+
+        if "/card_ratings/data" in url:
+            return self.quick_card_ratings
+
+        if "/color_ratings/data" in url:
+            return self.color_ratings
+
+        raise AssertionError(f"unexpected URL {url}")
+
+
+def test_17lands_format_data_is_cached_and_not_refetched_within_24h(
+    tmp_path: Path,
+) -> None:
+    clock = FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC))
+    fetcher = RecordingFetcher()
+
+    first = load_or_refresh_17lands_format_data(
+        set_code="tst",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=clock,
+        fetch_json=fetcher,
+    )
+    clock.now = clock.now + timedelta(hours=23, minutes=59)
+    second = load_or_refresh_17lands_format_data(
+        set_code="tst",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=clock,
+        fetch_json=fetcher,
+    )
+
+    assert len(fetcher.urls) == 2
+    assert second.fetched_at == first.fetched_at
+    assert second.card_ratings[1001].gih_win_rate == 0.61
+    assert seventeen_lands_cache_path(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+    ).exists()
+
+
+def test_stale_17lands_cache_serves_last_good_data_when_offline(
+    tmp_path: Path,
+) -> None:
+    clock = FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC))
+    first = load_or_refresh_17lands_format_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=clock,
+        fetch_json=RecordingFetcher(),
+    )
+    clock.now = clock.now + timedelta(hours=25)
+    offline_fetcher = RecordingFetcher(fail=True)
+
+    stale = load_or_refresh_17lands_format_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=clock,
+        fetch_json=offline_fetcher,
+    )
+
+    assert len(offline_fetcher.urls) == 1
+    assert stale.fetched_at == first.fetched_at
+    assert stale.card_ratings[1001].name == "Fixture Quick Bomb"
+
+
+def test_quickdraft_ratings_fall_back_to_premier_then_neutral_prior(
+    tmp_path: Path,
+) -> None:
+    data = load_or_refresh_17lands_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC)),
+        fetch_json=RecordingFetcher(),
+        thin_sample_minimum=500,
+    )
+
+    quick_rating = data.rating_for(grp_id=1001)
+    thin_fallback = data.rating_for(grp_id=1002)
+    missing_fallback = data.rating_for(grp_id=1003)
+    neutral = data.rating_for(grp_id=9999)
+
+    assert quick_rating.gih_win_rate == 0.61
+    assert quick_rating.metadata.source_format == QUICK_DRAFT_FORMAT
+    assert quick_rating.metadata.fallback_reason is None
+
+    assert thin_fallback.gih_win_rate == 0.55
+    assert thin_fallback.metadata.source_format == PREMIER_DRAFT_FORMAT
+    assert thin_fallback.metadata.fallback_reason == "primary-thin"
+
+    assert missing_fallback.name == "Fixture Premier Only Card"
+    assert missing_fallback.metadata.source_format == PREMIER_DRAFT_FORMAT
+    assert missing_fallback.metadata.fallback_reason == "primary-missing"
+
+    assert neutral.neutral_prior is True
+    assert neutral.metadata.source == NEUTRAL_PRIOR_SOURCE
+    assert neutral.metadata.fallback_reason == "fallback-missing"
+    assert neutral.neutral_prior_score == PICK_ENGINE.neutral_prior_score
+    assert data.attribution == SEVENTEEN_LANDS_ATTRIBUTION
+
+
+def test_pair_win_rates_are_available_for_all_ten_pairs(tmp_path: Path) -> None:
+    dataset = load_or_refresh_17lands_format_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC)),
+        fetch_json=RecordingFetcher(),
+    )
+
+    assert set(dataset.pair_win_rates) == set(COLOR_PAIRS)
+    assert dataset.pair_win_rates["WU"].wins == 60
+    assert dataset.pair_win_rates["WU"].games == 100
+    assert dataset.pair_win_rates["WU"].win_rate == 0.6
+    assert dataset.attribution == SEVENTEEN_LANDS_ATTRIBUTION
+
+
+def _load_json(*, path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))

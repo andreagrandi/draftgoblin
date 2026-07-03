@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Fixture Thin Quick Card",
+    "mtga_id": 1002,
+    "color": "U",
+    "rarity": "uncommon",
+    "avg_seen": 4.5,
+    "seen_count": 2600,
+    "pick_count": 900,
+    "game_count": 1200,
+    "opening_hand_game_count": 360,
+    "opening_hand_win_rate": 0.54,
+    "ever_drawn_game_count": 900,
+    "ever_drawn_win_rate": 0.55,
+    "drawn_improvement_win_rate": 0.03
+  },
+  {
+    "name": "Fixture Premier Only Card",
+    "mtga_id": 1003,
+    "color": "B",
+    "rarity": "rare",
+    "avg_seen": 3.1,
+    "seen_count": 2100,
+    "pick_count": 700,
+    "game_count": 1100,
+    "opening_hand_game_count": 280,
+    "opening_hand_win_rate": 0.57,
+    "ever_drawn_game_count": 820,
+    "ever_drawn_win_rate": 0.58,
+    "drawn_improvement_win_rate": 0.05
+  }
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Fixture Quick Bomb",
+    "mtga_id": 1001,
+    "color": "W",
+    "rarity": "rare",
+    "avg_seen": 1.23,
+    "seen_count": 1200,
+    "pick_count": 800,
+    "game_count": 700,
+    "opening_hand_game_count": 180,
+    "opening_hand_win_rate": 0.62,
+    "ever_drawn_game_count": 650,
+    "ever_drawn_win_rate": 0.61,
+    "drawn_improvement_win_rate": 0.08
+  },
+  {
+    "name": "Fixture Thin Quick Card",
+    "mtga_id": 1002,
+    "color": "U",
+    "rarity": "uncommon",
+    "avg_seen": 5.75,
+    "seen_count": 180,
+    "pick_count": 30,
+    "game_count": 90,
+    "opening_hand_game_count": 20,
+    "opening_hand_win_rate": null,
+    "ever_drawn_game_count": 120,
+    "ever_drawn_win_rate": null,
+    "drawn_improvement_win_rate": null
+  }
+]
