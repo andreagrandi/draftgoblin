@@ -27,7 +27,7 @@ def test_version_output_includes_required_disclaimer(
     ("command", "expected_help"),
     [
         ("watch", "Stub"),
-        ("replay", "Stub"),
+        ("replay", "Deterministic"),
         ("build", "Stub"),
         ("refresh-data", "Scryfall"),
     ],
