@@ -4,7 +4,7 @@ An unofficial Quick Draft assistant for MTG Arena.
 
 ## Status
 
-Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with stub subcommands for `watch`, `replay`, `build`, and `refresh-data` so parser, data, scoring, and TUI work can land incrementally.
+Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with a parser-backed `replay` command and a `refresh-data` command plus stub subcommands for `watch` and `build` so scoring and TUI work can land incrementally.
 
 ## Usage
 
@@ -12,6 +12,8 @@ Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists 
 uv run draftgoblin --version
 uv run draftgoblin --help
 uv run draftgoblin watch --help
+uv run draftgoblin refresh-data --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
+uv run draftgoblin replay tests/fixtures/quick-draft-msh-player.log --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
 ```
 
 ## Disclaimer

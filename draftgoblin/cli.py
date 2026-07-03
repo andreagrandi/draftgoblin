@@ -1,5 +1,5 @@
 """Command-line interface for Draftgoblin.
-Define parser wiring and temporary command stubs.
+Define parser wiring and command handlers.
 """
 
 from __future__ import annotations
@@ -11,12 +11,18 @@ from pathlib import Path
 
 from draftgoblin import DISCLAIMER, __version__
 from draftgoblin.carddb import (
+    CardDatabase,
     CardDatabaseError,
+    build_card_database_from_bulk_file,
     card_database_cache_path,
+    load_card_database,
     refresh_card_database,
 )
 from draftgoblin.config import COLOR_PAIRS
+from draftgoblin.events import DraftLogParseError
 from draftgoblin.paths import UnsupportedPlatformError, resolve_player_log_path
+from draftgoblin.pool import DraftPoolError
+from draftgoblin.replay import ReplayError, replay_log_file
 
 CommandHandler = Callable[[argparse.Namespace], int]
 
@@ -63,12 +69,27 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser = subparsers.add_parser(
         name="replay",
         help="Replay a captured Player.log fixture in plain-text mode.",
-        description="Stub for deterministic offline replay over a captured log file.",
+        description="Deterministic offline replay over a captured log file.",
     )
     replay_parser.add_argument(
         "logfile",
         type=Path,
         help="Captured Player.log file to replay.",
+    )
+    replay_parser.add_argument(
+        "--bulk-file",
+        type=Path,
+        default=None,
+        help=(
+            "Resolve card names from a local Scryfall JSONL(.gz) bulk file "
+            "instead of the cached card database."
+        ),
+    )
+    replay_parser.add_argument(
+        "--app-dir",
+        type=Path,
+        default=None,
+        help=argparse.SUPPRESS,
     )
     replay_parser.set_defaults(handler=handle_replay)
 
@@ -151,12 +172,30 @@ def handle_watch(args: argparse.Namespace) -> int:
 
 
 def handle_replay(args: argparse.Namespace) -> int:
-    """Handle the replay command stub.
-    Keep the command callable while parser and event modules are pending.
+    """Handle deterministic offline replay.
+    Card metadata is loaded only from cache or an explicitly supplied bulk file.
     """
 
-    print(f"replay stub: would replay {args.logfile}.")
+    try:
+        database = _load_replay_card_database(args=args)
+        output = replay_log_file(logfile=args.logfile, card_database=database)
+    except (CardDatabaseError, DraftLogParseError, DraftPoolError, ReplayError) as error:
+        print(f"replay failed: {error}", file=sys.stderr)
+        return 1
+
+    print(output, end="")
     return 0
+
+
+def _load_replay_card_database(*, args: argparse.Namespace) -> CardDatabase:
+    """Load replay card metadata without network access.
+    The vendored bulk path is useful for fixture and CI regression checks.
+    """
+
+    if args.bulk_file is not None:
+        return build_card_database_from_bulk_file(path=args.bulk_file)
+
+    return load_card_database(app_dir=args.app_dir)
 
 
 def handle_build(args: argparse.Namespace) -> int:
