@@ -14,6 +14,10 @@ class DeckBuilderConfig:
     """
 
     target_spell_count: int = 23
+    pair_score_card_weight: float = 0.85
+    pair_score_win_rate_weight: float = 0.15
+    neutral_pair_win_rate: float = 0.5
+    pair_score_decimal_places: int = 2
     default_land_count: int = 17
     aggressive_land_count: int = 16
     top_heavy_land_count: int = 18

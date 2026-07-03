@@ -19,6 +19,13 @@ from draftgoblin.carddb import (
     refresh_card_database,
 )
 from draftgoblin.config import COLOR_PAIRS
+from draftgoblin.deckbuilder import (
+    DeckBuilderError,
+    format_build_result,
+    load_persisted_pool,
+    load_pool_file,
+    select_color_pair,
+)
 from draftgoblin.events import DraftLogParseError
 from draftgoblin.logfollow import LogFollowError
 from draftgoblin.paths import UnsupportedPlatformError, resolve_player_log_path
@@ -134,18 +141,23 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser_command = subparsers.add_parser(
         name="build",
         help="Build a deck from a persisted or exported draft pool.",
-        description="Stub for the future 40-card deck builder.",
+        description="Select a deck-builder color pair from an existing drafted pool.",
     )
     build_parser_command.add_argument(
         "--pool",
         type=Path,
         default=None,
-        help="Pool file to build from once pool persistence exists.",
+        help="JSON pool file to build from instead of persisted state.",
     )
     build_parser_command.add_argument(
         "--account",
         default=None,
         help="MTGA account identifier to disambiguate persisted pools.",
+    )
+    build_parser_command.add_argument(
+        "--draft-id",
+        default=None,
+        help="Draft identifier to disambiguate persisted pools.",
     )
     build_parser_command.add_argument(
         "--pair",
@@ -156,7 +168,27 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser_command.add_argument(
         "--allow-splash",
         action="store_true",
-        help="Allow splash cards once the deck builder implements splash logic.",
+        help="Reserve splash logic for later deck-building stages.",
+    )
+    build_parser_command.add_argument(
+        "--set-code",
+        default=None,
+        help="Set code for simple --pool files that do not include one.",
+    )
+    build_parser_command.add_argument(
+        "--bulk-file",
+        type=Path,
+        default=None,
+        help=(
+            "Resolve card names from a local Scryfall JSONL(.gz) bulk file "
+            "instead of the cached card database."
+        ),
+    )
+    build_parser_command.add_argument(
+        "--app-dir",
+        type=Path,
+        default=None,
+        help=argparse.SUPPRESS,
     )
     build_parser_command.set_defaults(handler=handle_build)
 
@@ -291,15 +323,36 @@ def _load_replay_card_database(*, args: argparse.Namespace) -> CardDatabase:
 
 
 def handle_build(args: argparse.Namespace) -> int:
-    """Handle the build command stub.
-    Keep flags in place for later pool and deck-builder work.
+    """Handle stage-1 deck-builder pair selection.
+    The command is fully offline, using persisted pools and local caches.
     """
 
-    pool = args.pool if args.pool is not None else "the latest persisted pool"
-    pair = args.pair if args.pair is not None else "auto-selected pair"
-    splash = "with splash enabled" if args.allow_splash else "without splash"
-    account = args.account if args.account is not None else "active account"
-    print(f"build stub: would build {pool} for {account} using {pair} {splash}.")
+    try:
+        database = _load_replay_card_database(args=args)
+        pool = (
+            load_pool_file(path=args.pool, set_code=args.set_code)
+            if args.pool is not None
+            else load_persisted_pool(
+                app_dir=args.app_dir,
+                account_id=args.account,
+                draft_id=args.draft_id,
+            )
+        )
+        ratings_data = load_cached_17lands_data(
+            set_code=pool.set_code,
+            app_dir=args.app_dir,
+        )
+        selection = select_color_pair(
+            pool_grp_ids=pool.pool_grp_ids,
+            card_database=database,
+            ratings_data=ratings_data,
+            forced_pair=args.pair,
+        )
+    except (CardDatabaseError, DeckBuilderError, DraftPoolError, SeventeenLandsError) as error:
+        print(f"build failed: {error}", file=sys.stderr)
+        return 1
+
+    print(format_build_result(pool=pool, selection=selection), end="")
     return 0
 
 
