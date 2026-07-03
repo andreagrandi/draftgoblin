@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 
 from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.config import PICK_ENGINE, PickEngineConfig
+from draftgoblin.config import COLOR_PAIRS, PICK_ENGINE, PickEngineConfig
 from draftgoblin.seventeen import (
     FORMAT_RATING_SOURCE,
     NEUTRAL_PRIOR_SOURCE,
@@ -33,6 +33,41 @@ class ScoreNormalization:
 
 
 @dataclass(frozen=True, slots=True)
+class ColorCommitment:
+    """Color inference for the current pick.
+    The level is a 0.0-1.0 ramp from open to locked.
+    """
+
+    pick_index: int
+    pool_size: int
+    color_weights: tuple[tuple[str, float], ...]
+    inferred_pair: str | None
+    level: float
+
+    @property
+    def locked(self) -> bool:
+        """Return whether commitment is fully locked.
+        Locked picks may use pair-filtered ratings when available.
+        """
+
+        return self.level >= 1.0
+
+    @property
+    def phase(self) -> str:
+        """Return a compact label for status-line rendering.
+        This keeps CLI and TUI language consistent.
+        """
+
+        if self.level <= 0.0:
+            return "open"
+
+        if self.locked:
+            return "locked"
+
+        return "building"
+
+
+@dataclass(frozen=True, slots=True)
 class ScoredCard:
     """One offered card with its computed pick score.
     Rows keep source metadata so renderers can mark fallbacks clearly.
@@ -42,11 +77,13 @@ class ScoredCard:
     rating: ResolvedCardRating
     original_index: int
     base_rating: float
+    base_score: float
     color_factor: float
     adjusted_rating: float
     raw_score: float
     score: int
     source_label: str
+    color_fit: str
 
     @property
     def no_data(self) -> bool:
@@ -74,11 +111,12 @@ class ScoredPack:
     cards: tuple[ScoredCard, ...]
     normalization: ScoreNormalization
     source_summary: str
+    commitment: ColorCommitment
 
 
 class PickEngine:
     """Score offered cards using 17Lands data and configured priors.
-    Color commitment is intentionally neutral until the next milestone.
+    Pool color weights progressively bias scores toward an inferred pair.
     """
 
     def __init__(
@@ -99,16 +137,26 @@ class PickEngine:
         *,
         offered_grp_ids: tuple[int, ...],
         card_database: CardDatabase,
+        pool_grp_ids: tuple[int, ...] = (),
+        pick_index: int | None = None,
     ) -> ScoredPack:
         """Return offered cards sorted from highest score to lowest.
         Ties keep stronger raw ratings ahead, then preserve pack order.
         """
 
+        commitment = _color_commitment(
+            pool_grp_ids=pool_grp_ids,
+            pick_index=_pick_index(pool_grp_ids=pool_grp_ids, pick_index=pick_index),
+            card_database=card_database,
+            ratings_data=self.ratings_data,
+            config=self.config,
+        )
         scored_cards = tuple(
             self._score_card(
                 grp_id=grp_id,
                 original_index=index,
                 card_database=card_database,
+                commitment=commitment,
             )
             for index, grp_id in enumerate(offered_grp_ids)
         )
@@ -117,6 +165,7 @@ class PickEngine:
             cards=sorted_cards,
             normalization=self.normalization,
             source_summary=_source_summary(cards=sorted_cards),
+            commitment=commitment,
         )
 
     def _score_card(
@@ -125,30 +174,43 @@ class PickEngine:
         grp_id: int,
         original_index: int,
         card_database: CardDatabase,
+        commitment: ColorCommitment,
     ) -> ScoredCard:
         card = card_database.lookup(grp_id=grp_id)
         rating = _rating_for(
             ratings_data=self.ratings_data,
             grp_id=grp_id,
             config=self.config,
+            commitment=commitment,
         )
         base_rating = _base_rating(rating=rating, config=self.config)
-        color_factor = 1.0
-        adjusted_rating = base_rating * color_factor
-        raw_score = _normalized_score(
-            adjusted_rating=adjusted_rating,
+        color_fit = _color_fit(card=card, commitment=commitment)
+        color_factor = _color_factor(
+            color_fit=color_fit,
+            commitment=commitment,
+            config=self.config,
+        )
+        base_score = _normalized_score(
+            adjusted_rating=base_rating,
             normalization=self.normalization,
+        )
+        raw_score = _clamp(
+            value=base_score * color_factor,
+            lower=0.0,
+            upper=100.0,
         )
         return ScoredCard(
             card=card,
             rating=rating,
             original_index=original_index,
             base_rating=base_rating,
+            base_score=base_score,
             color_factor=color_factor,
-            adjusted_rating=adjusted_rating,
+            adjusted_rating=base_rating * color_factor,
             raw_score=raw_score,
             score=_integer_score(raw_score=raw_score),
             source_label=_source_label(rating=rating),
+            color_fit=color_fit,
         )
 
 
@@ -158,6 +220,8 @@ def score_pack(
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData | None = None,
     config: PickEngineConfig = PICK_ENGINE,
+    pool_grp_ids: tuple[int, ...] = (),
+    pick_index: int | None = None,
 ) -> ScoredPack:
     """Convenience wrapper for callers that do not keep an engine instance.
     The reusable PickEngine class avoids rebuilding normalization per pack.
@@ -166,7 +230,169 @@ def score_pack(
     return PickEngine(ratings_data=ratings_data, config=config).score_pack(
         offered_grp_ids=offered_grp_ids,
         card_database=card_database,
+        pool_grp_ids=pool_grp_ids,
+        pick_index=pick_index,
     )
+
+
+def _pick_index(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    pick_index: int | None,
+) -> int:
+    if pick_index is not None:
+        return max(1, pick_index)
+
+    return len(pool_grp_ids) + 1
+
+
+def _color_commitment(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    pick_index: int,
+    card_database: CardDatabase,
+    ratings_data: SeventeenLandsData | None,
+    config: PickEngineConfig,
+) -> ColorCommitment:
+    weights = _pool_color_weights(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        ratings_data=ratings_data,
+        config=config,
+    )
+    inferred_pair = _inferred_pair(weights=weights, config=config)
+    level = _commitment_level(pick_index=pick_index, config=config)
+    if inferred_pair is None:
+        level = 0.0
+
+    return ColorCommitment(
+        pick_index=pick_index,
+        pool_size=len(pool_grp_ids),
+        color_weights=tuple((color, weights[color]) for color in weights),
+        inferred_pair=inferred_pair,
+        level=level,
+    )
+
+
+def _pool_color_weights(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    ratings_data: SeventeenLandsData | None,
+    config: PickEngineConfig,
+) -> dict[str, float]:
+    weights = _empty_color_weights()
+    for grp_id in pool_grp_ids:
+        card = card_database.lookup(grp_id=grp_id)
+        if card.unknown or not card.colors:
+            continue
+
+        rating = _rating_for(
+            ratings_data=ratings_data,
+            grp_id=grp_id,
+            config=config,
+        )
+        base_rating = _base_rating(rating=rating, config=config)
+        weight = _pool_card_weight(base_rating=base_rating, config=config)
+        for color in card.colors:
+            if color in weights:
+                weights[color] += weight
+
+    return weights
+
+
+def _empty_color_weights() -> dict[str, float]:
+    colors: dict[str, float] = {}
+    for pair in COLOR_PAIRS:
+        for color in pair:
+            colors.setdefault(color, 0.0)
+
+    return colors
+
+
+def _pool_card_weight(*, base_rating: float, config: PickEngineConfig) -> float:
+    lower = min(config.pool_weight_minimum, config.pool_weight_maximum)
+    upper = max(config.pool_weight_minimum, config.pool_weight_maximum)
+    rating_delta = base_rating - config.neutral_prior_win_rate
+    weight = config.pool_weight_baseline + (rating_delta * config.pool_weight_rating_scale)
+    return _clamp(value=weight, lower=lower, upper=upper)
+
+
+def _inferred_pair(
+    *,
+    weights: dict[str, float],
+    config: PickEngineConfig,
+) -> str | None:
+    positive_colors = tuple(
+        color for color, weight in weights.items() if weight > config.pool_weight_epsilon
+    )
+    if len(positive_colors) < config.minimum_pair_colors:
+        return None
+
+    return max(COLOR_PAIRS, key=lambda pair: _pair_weight(pair=pair, weights=weights))
+
+
+def _pair_weight(*, pair: str, weights: dict[str, float]) -> float:
+    return sum(weights.get(color, 0.0) for color in pair)
+
+
+def _commitment_level(*, pick_index: int, config: PickEngineConfig) -> float:
+    if pick_index <= config.open_pick_count:
+        return 0.0
+
+    ramp_start = max(config.commitment_start_pick, config.open_pick_count + 1)
+    if pick_index < ramp_start:
+        return 0.0
+
+    if pick_index >= config.locked_pick_index:
+        return 1.0
+
+    ramp_span = config.locked_pick_index - ramp_start + 1
+    if ramp_span <= 0:
+        return 1.0
+
+    return _clamp(
+        value=(pick_index - ramp_start + 1) / ramp_span,
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+def _color_fit(*, card: CardInfo, commitment: ColorCommitment) -> str:
+    if card.unknown:
+        return "unknown"
+
+    if not card.colors:
+        return "colorless"
+
+    if commitment.level <= 0.0 or commitment.inferred_pair is None:
+        return "open"
+
+    if all(color in commitment.inferred_pair for color in card.colors):
+        return "on-color"
+
+    return "off-color"
+
+
+def _color_factor(
+    *,
+    color_fit: str,
+    commitment: ColorCommitment,
+    config: PickEngineConfig,
+) -> float:
+    if commitment.level <= 0.0 or color_fit in {"open", "colorless", "unknown"}:
+        return 1.0
+
+    if color_fit == "on-color":
+        factor = 1.0 + (commitment.level * (config.on_color_bonus_multiplier - 1.0))
+        return max(0.0, factor)
+
+    if color_fit == "off-color":
+        penalty = 1.0 - config.off_color_penalty_multiplier
+        factor = 1.0 - (commitment.level * penalty)
+        return max(0.0, factor)
+
+    return 1.0
 
 
 def _normalization_from_data(
@@ -217,9 +443,16 @@ def _rating_for(
     ratings_data: SeventeenLandsData | None,
     grp_id: int,
     config: PickEngineConfig,
+    commitment: ColorCommitment | None = None,
 ) -> ResolvedCardRating:
     if ratings_data is None:
         return _neutral_rating(grp_id=grp_id, config=config)
+
+    if commitment is not None and commitment.locked and commitment.inferred_pair is not None:
+        return ratings_data.pair_rating_for(
+            grp_id=grp_id,
+            pair=commitment.inferred_pair,
+        )
 
     return ratings_data.rating_for(grp_id=grp_id)
 

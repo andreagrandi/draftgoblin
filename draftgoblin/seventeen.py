@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from os import PathLike
 from pathlib import Path
@@ -371,6 +371,17 @@ class SeventeenLandsData:
     requested_format: str
     primary: SeventeenLandsFormatData
     fallback: SeventeenLandsFormatData | None
+    pair_card_ratings: dict[str, SeventeenLandsFormatData] = field(default_factory=dict)
+    pair_card_ratings_loader: Callable[[str], SeventeenLandsFormatData | None] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    missing_pair_card_ratings: set[str] = field(
+        default_factory=set,
+        repr=False,
+        compare=False,
+    )
     thin_sample_minimum: int = PICK_ENGINE.thin_sample_minimum
     attribution: str = SEVENTEEN_LANDS_ATTRIBUTION
 
@@ -445,6 +456,47 @@ class SeventeenLandsData:
             fallback_reason=neutral_reason,
         )
 
+    def pair_rating_for(self, *, grp_id: int, pair: str) -> ResolvedCardRating:
+        """Resolve a card through locked-pair data when it is strong enough.
+        Missing or thin pair rows fall back to all-decks resolution.
+        """
+
+        pair_data = self._pair_card_data(pair=pair)
+        pair_stats = None if pair_data is None else pair_data.card_ratings.get(grp_id)
+        if _has_strong_gih_signal(
+            stats=pair_stats,
+            thin_sample_minimum=self.thin_sample_minimum,
+        ):
+            return _resolved_from_stats(
+                stats=pair_stats,
+                requested_format=self.requested_format,
+                source_format=pair_data.event_format if pair_data is not None else None,
+                fallback_reason=None,
+            )
+
+        return self.rating_for(grp_id=grp_id)
+
+    def _pair_card_data(self, *, pair: str) -> SeventeenLandsFormatData | None:
+        pair_data = self.pair_card_ratings.get(pair)
+        if pair_data is not None:
+            return pair_data
+
+        if pair in self.missing_pair_card_ratings or self.pair_card_ratings_loader is None:
+            return None
+
+        try:
+            pair_data = self.pair_card_ratings_loader(pair)
+        except SeventeenLandsError:
+            self.missing_pair_card_ratings.add(pair)
+            return None
+
+        if pair_data is None:
+            self.missing_pair_card_ratings.add(pair)
+            return None
+
+        self.pair_card_ratings[pair] = pair_data
+        return pair_data
+
 
 def seventeen_lands_cache_path(
     *,
@@ -461,25 +513,47 @@ def seventeen_lands_cache_path(
     return root / SEVENTEEN_CACHE_DIRECTORY_NAME / filename
 
 
+def seventeen_lands_pair_card_cache_path(
+    *,
+    set_code: str,
+    event_format: str,
+    pair: str,
+    app_dir: PathInput | None = None,
+) -> Path:
+    """Return the cache path for pair-filtered card ratings.
+    Pair ratings are separate so all-decks caches stay small and stable.
+    """
+
+    root = Path(app_data_dir() if app_dir is None else app_dir)
+    filename = (
+        f"{_path_segment(set_code.upper())}-"
+        f"{_path_segment(event_format)}-"
+        f"{_required_pair(pair, field_name='pair')}-cards.json"
+    )
+    return root / SEVENTEEN_CACHE_DIRECTORY_NAME / filename
+
+
 def card_ratings_url(
     *,
     set_code: str,
     event_format: str,
     end_date: date,
+    colors: str | None = None,
 ) -> str:
     """Build the 17Lands card-ratings endpoint URL.
     A broad date range gives the same all-time table as the website filters.
     """
 
-    return _url_with_query(
-        endpoint=CARD_RATINGS_ENDPOINT,
-        params={
-            "expansion": set_code.upper(),
-            "event_type": event_format,
-            "start_date": ALL_TIME_START_DATE.isoformat(),
-            "end_date": end_date.isoformat(),
-        },
-    )
+    params = {
+        "expansion": set_code.upper(),
+        "event_type": event_format,
+        "start_date": ALL_TIME_START_DATE.isoformat(),
+        "end_date": end_date.isoformat(),
+    }
+    if colors is not None:
+        params["colors"] = colors
+
+    return _url_with_query(endpoint=CARD_RATINGS_ENDPOINT, params=params)
 
 
 def color_ratings_url(
@@ -552,6 +626,17 @@ def load_or_refresh_17lands_data(
         requested_format=event_format,
         primary=primary,
         fallback=fallback,
+        pair_card_ratings_loader=lambda pair: load_or_refresh_17lands_pair_card_data(
+            set_code=set_code,
+            event_format=event_format,
+            pair=pair,
+            app_dir=app_dir,
+            refresh=refresh,
+            clock=clock,
+            fetch_json=fetch_json,
+            timeout_seconds=timeout_seconds,
+            cache_ttl=cache_ttl,
+        ),
         thin_sample_minimum=thin_sample_minimum,
     )
 
@@ -586,8 +671,62 @@ def load_cached_17lands_data(
         requested_format=event_format,
         primary=primary,
         fallback=fallback,
+        pair_card_ratings_loader=lambda pair: _load_optional_pair_card_data(
+            set_code=set_code,
+            event_format=event_format,
+            pair=pair,
+            app_dir=app_dir,
+        ),
         thin_sample_minimum=thin_sample_minimum,
     )
+
+
+def load_or_refresh_17lands_pair_card_data(
+    *,
+    set_code: str,
+    event_format: str = QUICK_DRAFT_FORMAT,
+    pair: str,
+    app_dir: PathInput | None = None,
+    refresh: bool = False,
+    clock: Clock | None = None,
+    fetch_json: FetchJson | None = None,
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+    cache_ttl: timedelta | None = None,
+) -> SeventeenLandsFormatData:
+    """Load pair-filtered card ratings, refreshing only when needed.
+    These ratings are fetched lazily once scoring locks onto a pair.
+    """
+
+    now = _now(clock=clock)
+    ttl = _cache_ttl(cache_ttl=cache_ttl)
+    cached = _load_optional_pair_card_data(
+        set_code=set_code,
+        event_format=event_format,
+        pair=pair,
+        app_dir=app_dir,
+    )
+    if cached is not None and not refresh and not _is_stale(
+        fetched_at=cached.fetched_at,
+        now=now,
+        cache_ttl=ttl,
+    ):
+        return cached
+
+    try:
+        return refresh_17lands_pair_card_data(
+            set_code=set_code,
+            event_format=event_format,
+            pair=pair,
+            app_dir=app_dir,
+            fetched_at=now,
+            fetch_json=fetch_json,
+            timeout_seconds=timeout_seconds,
+        )
+    except SeventeenLandsError:
+        if cached is not None and not refresh:
+            return cached
+
+        raise
 
 
 def load_or_refresh_17lands_format_data(
@@ -738,6 +877,41 @@ def refresh_17lands_format_data(
     return dataset
 
 
+def refresh_17lands_pair_card_data(
+    *,
+    set_code: str,
+    event_format: str,
+    pair: str,
+    app_dir: PathInput | None = None,
+    fetched_at: datetime | None = None,
+    fetch_json: FetchJson | None = None,
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+) -> SeventeenLandsFormatData:
+    """Fetch pair-filtered card ratings and write their separate cache.
+    Pair caches contain only card ratings; aggregate pair rates stay primary.
+    """
+
+    timestamp = datetime.now(tz=UTC) if fetched_at is None else fetched_at.astimezone(UTC)
+    dataset = fetch_17lands_pair_card_data(
+        set_code=set_code,
+        event_format=event_format,
+        pair=pair,
+        fetched_at=timestamp,
+        fetch_json=fetch_json,
+        timeout_seconds=timeout_seconds,
+    )
+    save_17lands_format_data(
+        dataset,
+        cache_path=seventeen_lands_pair_card_cache_path(
+            set_code=set_code,
+            event_format=event_format,
+            pair=pair,
+            app_dir=app_dir,
+        ),
+    )
+    return dataset
+
+
 def fetch_17lands_format_data(
     *,
     set_code: str,
@@ -775,6 +949,40 @@ def fetch_17lands_format_data(
         fetched_at=timestamp,
         card_ratings_payload=card_payload,
         color_ratings_payload=color_payload,
+    )
+
+
+def fetch_17lands_pair_card_data(
+    *,
+    set_code: str,
+    event_format: str,
+    pair: str,
+    fetched_at: datetime | None = None,
+    fetch_json: FetchJson | None = None,
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+) -> SeventeenLandsFormatData:
+    """Fetch and normalize one pair-filtered card-rating table.
+    Only the card endpoint is needed because pair win rates live in primary data.
+    """
+
+    timestamp = datetime.now(tz=UTC) if fetched_at is None else fetched_at.astimezone(UTC)
+    end_date = timestamp.date()
+    json_fetcher = _default_fetch_json if fetch_json is None else fetch_json
+    card_payload = json_fetcher(
+        card_ratings_url(
+            set_code=set_code,
+            event_format=event_format,
+            end_date=end_date,
+            colors=_required_pair(pair, field_name="pair"),
+        ),
+        timeout_seconds,
+    )
+    return build_17lands_format_data(
+        set_code=set_code,
+        event_format=event_format,
+        fetched_at=timestamp,
+        card_ratings_payload=card_payload,
+        color_ratings_payload=[],
     )
 
 
@@ -849,6 +1057,28 @@ def _load_optional_cached_format_data(
             set_code=set_code,
             event_format=event_format,
             app_dir=app_dir,
+        )
+    except SeventeenLandsCacheMissingError:
+        return None
+
+
+def _load_optional_pair_card_data(
+    *,
+    set_code: str,
+    event_format: str,
+    pair: str,
+    app_dir: PathInput | None,
+) -> SeventeenLandsFormatData | None:
+    try:
+        return load_17lands_format_data(
+            set_code=set_code,
+            event_format=event_format,
+            cache_path=seventeen_lands_pair_card_cache_path(
+                set_code=set_code,
+                event_format=event_format,
+                pair=pair,
+                app_dir=app_dir,
+            ),
         )
     except SeventeenLandsCacheMissingError:
         return None

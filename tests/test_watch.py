@@ -121,7 +121,8 @@ def test_plain_watch_account_switch_announces_and_separates_state(
 
     assert "Active account: First (ACCOUNT-A)" in output
     assert "Account switched: First (ACCOUNT-A) -> Second (ACCOUNT-B)" in output
-    assert "Status: active account Second (ACCOUNT-B), pick P1P1, pool 0" in output
+    assert "Status: active account Second (ACCOUNT-B), pick P1P1" in output
+    assert "inferred pair open, commitment 0% (open), pool 0" in output
 
     first_state = load_draft_state(
         account_id="ACCOUNT-A",

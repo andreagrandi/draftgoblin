@@ -40,11 +40,22 @@ class PickEngineConfig:
     normalization_upper_percentile: float = 95.0
     normalization_min_half_span: float = 0.05
     score_decimal_places: int = 0
+    # Picks 1-5 stay open; pick 6 starts the linear color ramp.
     open_pick_count: int = 5
     commitment_start_pick: int = 6
+    # Pick 16 and later are treated as locked to the inferred pair.
     locked_pick_index: int = 16
+    # Locked on-color cards get up to +15% score; off-color cards keep 75%.
     on_color_bonus_multiplier: float = 1.15
     off_color_penalty_multiplier: float = 0.75
+    # Each picked card starts at 1.0 color weight, then ratings move it up/down.
+    pool_weight_baseline: float = 1.0
+    pool_weight_rating_scale: float = 10.0
+    pool_weight_minimum: float = 0.25
+    pool_weight_maximum: float = 2.0
+    # Require two materially represented colors before naming a pair.
+    pool_weight_epsilon: float = 0.01
+    minimum_pair_colors: int = 2
     premier_fallback_enabled: bool = True
 
 
