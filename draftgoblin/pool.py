@@ -232,6 +232,23 @@ def load_draft_state(
     return _load_state_file(path=path)
 
 
+def list_draft_states(*, app_dir: PathInput | None = None) -> tuple[DraftState, ...]:
+    """Load every persisted draft state under the state root.
+    States are returned in stable account and filename order.
+    """
+
+    root = draft_state_root(app_dir=app_dir)
+    if not root.exists():
+        return ()
+
+    states: list[DraftState] = []
+    for account_dir in sorted(root.iterdir()):
+        if account_dir.is_dir():
+            states.extend(_load_matching_states(account_dir=account_dir))
+
+    return tuple(states)
+
+
 def save_draft_state(
     state: DraftState,
     *,
