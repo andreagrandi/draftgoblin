@@ -118,7 +118,42 @@ def test_build_pool_file_selects_pair_offline(
     assert "Chosen pair: WU (automatic" in captured.out
     assert "Runner-up:" in captured.out
     assert "Score gap:" in captured.out
+    assert "Spell selection:" in captured.out
+    assert "Selected spells: 4/23" in captured.out
     assert "Card data from 17Lands" in captured.out
+    assert captured.err == ""
+
+
+
+def test_build_allow_splash_is_accepted_but_inert(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bulk_file = _write_build_bulk_file(directory=tmp_path)
+    pool_file = tmp_path / "pool.json"
+    pool_file.write_text(
+        json.dumps({"set_code": "TST", "pool_grp_ids": [1, 2, 3, 4, 5]}),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        argv=[
+            "build",
+            "--pool",
+            str(pool_file),
+            "--allow-splash",
+            "--bulk-file",
+            str(bulk_file),
+            "--app-dir",
+            str(tmp_path / "app"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Splash: --allow-splash accepted but inert in v1" in captured.out
+    assert "Eligible spells for WU: 4" in captured.out
     assert captured.err == ""
 
 
@@ -206,6 +241,14 @@ def test_config_exposes_documented_tunables() -> None:
     assert config.DECK_BUILDER.pair_score_card_weight == 0.85
     assert config.DECK_BUILDER.pair_score_win_rate_weight == 0.15
     assert config.DECK_BUILDER.default_land_count == 17
+    assert config.DECK_BUILDER.creature_floor == 14
+    assert config.DECK_BUILDER.creature_ceiling == 17
+    assert config.DECK_BUILDER.minimum_two_drops == 5
+    assert config.DECK_BUILDER.maximum_expensive_spells == 3
+    assert config.DECK_BUILDER.two_drop_mana_value == 2.0
+    assert config.DECK_BUILDER.expensive_spell_mana_value == 6.0
+    assert config.DECK_BUILDER.near_tie_creature_preference_points == 2.0
+    assert "minimum two-drop quota" in config.DECK_BUILDER.relaxation_order
     assert config.PICK_ENGINE.thin_sample_minimum == 500
     assert config.PICK_ENGINE.neutral_prior_win_rate == 0.55
     assert config.PICK_ENGINE.score_decimal_places == 0

@@ -25,6 +25,7 @@ from draftgoblin.deckbuilder import (
     load_persisted_pool,
     load_pool_file,
     select_color_pair,
+    select_deck_spells,
 )
 from draftgoblin.events import DraftLogParseError
 from draftgoblin.logfollow import LogFollowError
@@ -141,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser_command = subparsers.add_parser(
         name="build",
         help="Build a deck from a persisted or exported draft pool.",
-        description="Select a deck-builder color pair from an existing drafted pool.",
+        description="Select a color pair and constrained spell list from a drafted pool.",
     )
     build_parser_command.add_argument(
         "--pool",
@@ -168,7 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser_command.add_argument(
         "--allow-splash",
         action="store_true",
-        help="Reserve splash logic for later deck-building stages.",
+        help="Accepted but inert in v1; splash selection is deferred.",
     )
     build_parser_command.add_argument(
         "--set-code",
@@ -323,7 +324,7 @@ def _load_replay_card_database(*, args: argparse.Namespace) -> CardDatabase:
 
 
 def handle_build(args: argparse.Namespace) -> int:
-    """Handle stage-1 deck-builder pair selection.
+    """Handle deck-builder pair selection and constrained spell fill.
     The command is fully offline, using persisted pools and local caches.
     """
 
@@ -348,11 +349,25 @@ def handle_build(args: argparse.Namespace) -> int:
             ratings_data=ratings_data,
             forced_pair=args.pair,
         )
+        spell_selection = select_deck_spells(
+            pool_grp_ids=pool.pool_grp_ids,
+            card_database=database,
+            pair=selection.chosen.pair,
+            ratings_data=ratings_data,
+            allow_splash=args.allow_splash,
+        )
     except (CardDatabaseError, DeckBuilderError, DraftPoolError, SeventeenLandsError) as error:
         print(f"build failed: {error}", file=sys.stderr)
         return 1
 
-    print(format_build_result(pool=pool, selection=selection), end="")
+    print(
+        format_build_result(
+            pool=pool,
+            selection=selection,
+            spell_selection=spell_selection,
+        ),
+        end="",
+    )
     return 0
 
 

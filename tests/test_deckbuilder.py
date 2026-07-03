@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from draftgoblin.carddb import CardDatabase, CardInfo
+from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
 from draftgoblin.config import DECK_BUILDER
 from draftgoblin.deckbuilder import (
     DeckBuilderError,
@@ -14,6 +14,7 @@ from draftgoblin.deckbuilder import (
     load_persisted_pool,
     load_pool_file,
     select_color_pair,
+    select_deck_spells,
 )
 from draftgoblin.pool import DraftState, save_draft_state
 from draftgoblin.seventeen import (
@@ -26,6 +27,8 @@ from draftgoblin.seventeen import (
 )
 
 FIXTURE_NOW = datetime(2026, 7, 3, 12, 0, tzinfo=UTC).isoformat()
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+GOLDEN_DIR = Path(__file__).parent / "golden"
 
 
 def test_pair_selection_scores_pool_after_draft_and_reports_gap() -> None:
@@ -112,7 +115,181 @@ def test_pair_selection_is_deterministic_across_runs() -> None:
 
 
 
-def test_format_build_result_reports_chosen_runner_up_gap_and_attribution(tmp_path: Path) -> None:
+def test_select_deck_spells_fills_exact_23_with_structural_constraints() -> None:
+    selection = select_deck_spells(
+        pool_grp_ids=_constrained_pool_ids(),
+        card_database=_constrained_card_database(),
+        pair="WU",
+    )
+
+    assert selection.counts.total == DECK_BUILDER.target_spell_count
+    assert DECK_BUILDER.creature_floor <= selection.counts.creatures
+    assert selection.counts.creatures <= DECK_BUILDER.creature_ceiling
+    assert selection.counts.two_drops >= DECK_BUILDER.minimum_two_drops
+    assert selection.counts.expensive <= DECK_BUILDER.maximum_expensive_spells
+    assert selection.applied_relaxations == ()
+
+
+
+def test_near_tie_creature_preference_applies_while_floor_unmet() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=2,
+        creature_floor=1,
+        creature_ceiling=2,
+        minimum_two_drops=0,
+        maximum_expensive_spells=2,
+        bench_card_count=0,
+    )
+    database = CardDatabase(
+        cards={
+            31: _card(
+                grp_id=31,
+                name="Slightly Better Trick",
+                colors=("W",),
+                mana_value=3.0,
+                types=("Instant",),
+            ),
+            32: _card(
+                grp_id=32,
+                name="Near Tie Creature",
+                colors=("W",),
+                mana_value=3.0,
+                types=("Creature — Soldier",),
+            ),
+            33: _card(
+                grp_id=33,
+                name="Distant Trick",
+                colors=("U",),
+                mana_value=3.0,
+                types=("Instant",),
+            ),
+        }
+    )
+    ratings_data = _ratings_data_from_entries(
+        entries=(
+            (31, "Slightly Better Trick", "W", 0.560),
+            (32, "Near Tie Creature", "W", 0.559),
+            (33, "Distant Trick", "U", 0.500),
+        )
+    )
+
+    selection = select_deck_spells(
+        pool_grp_ids=(31, 32, 33),
+        card_database=database,
+        pair="WU",
+        ratings_data=ratings_data,
+        config=config,
+    )
+
+    assert [spell.card.grp_id for spell in selection.spells] == [32, 31]
+
+
+
+def test_spell_selection_lookahead_preserves_overlapping_quotas() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=5,
+        creature_floor=2,
+        creature_ceiling=2,
+        minimum_two_drops=2,
+        maximum_expensive_spells=5,
+        bench_card_count=0,
+    )
+    database = CardDatabase(
+        cards={
+            301: _card(
+                grp_id=301,
+                name="Three-Drop Creature A",
+                colors=("W",),
+                mana_value=3.0,
+            ),
+            302: _card(
+                grp_id=302,
+                name="Three-Drop Creature B",
+                colors=("U",),
+                mana_value=3.0,
+            ),
+            303: _card(
+                grp_id=303,
+                name="Two-Drop Creature A",
+                colors=("W",),
+                mana_value=2.0,
+            ),
+            304: _card(
+                grp_id=304,
+                name="Two-Drop Creature B",
+                colors=("U",),
+                mana_value=2.0,
+            ),
+            305: _card(
+                grp_id=305,
+                name="Noncreature A",
+                colors=("W",),
+                mana_value=3.0,
+                types=("Instant",),
+            ),
+            306: _card(
+                grp_id=306,
+                name="Noncreature B",
+                colors=("U",),
+                mana_value=3.0,
+                types=("Instant",),
+            ),
+            307: _card(
+                grp_id=307,
+                name="Noncreature C",
+                colors=("W",),
+                mana_value=3.0,
+                types=("Instant",),
+            ),
+        }
+    )
+
+    selection = select_deck_spells(
+        pool_grp_ids=(301, 302, 303, 304, 305, 306, 307),
+        card_database=database,
+        pair="WU",
+        config=config,
+    )
+
+    assert [spell.card.grp_id for spell in selection.spells[:2]] == [303, 304]
+    assert selection.counts.creatures == 2
+    assert selection.counts.two_drops == 2
+    assert selection.applied_relaxations == ()
+
+
+
+def test_spell_selection_reports_relaxed_two_drop_quota_when_pool_is_short() -> None:
+    config = replace(DECK_BUILDER, bench_card_count=0)
+    pool_ids = tuple(range(201, 224))
+    database = CardDatabase(
+        cards={
+            grp_id: _card(
+                grp_id=grp_id,
+                name=f"Fixture Spell {grp_id}",
+                colors=("W",) if grp_id % 2 == 0 else ("U",),
+                mana_value=2.0 if grp_id < 204 else 3.0,
+                types=("Creature — Fixture",) if grp_id < 216 else ("Instant",),
+            )
+            for grp_id in pool_ids
+        }
+    )
+
+    selection = select_deck_spells(
+        pool_grp_ids=pool_ids,
+        card_database=database,
+        pair="WU",
+        config=config,
+    )
+
+    assert selection.counts.total == DECK_BUILDER.target_spell_count
+    assert selection.counts.two_drops == 3
+    assert "minimum two-drop quota" in selection.applied_relaxations
+
+
+
+def test_format_build_result_reports_spell_selection_and_attribution(tmp_path: Path) -> None:
     config = replace(DECK_BUILDER, target_spell_count=4)
     pool = load_pool_file(path=_write_pool_file(tmp_path), set_code="TST")
     selection = select_color_pair(
@@ -121,14 +298,56 @@ def test_format_build_result_reports_chosen_runner_up_gap_and_attribution(tmp_pa
         ratings_data=_ratings_data(),
         config=config,
     )
+    spell_selection = select_deck_spells(
+        pool_grp_ids=pool.pool_grp_ids,
+        card_database=_card_database(),
+        pair=selection.chosen.pair,
+        ratings_data=_ratings_data(),
+        config=config,
+    )
 
-    output = format_build_result(pool=pool, selection=selection, config=config)
+    output = format_build_result(
+        pool=pool,
+        selection=selection,
+        spell_selection=spell_selection,
+        config=config,
+    )
 
     assert "Chosen pair:" in output
     assert "Runner-up:" in output
     assert "Score gap:" in output
     assert "Pair scores:" in output
+    assert "Spell selection:" in output
+    assert "Selected spells: 4/4" in output
+    assert "--allow-splash is inert in v1" in output
     assert "Card data from 17Lands" in output
+
+
+
+def test_constrained_build_output_matches_golden_fixture() -> None:
+    pool = load_pool_file(path=Path("tests/fixtures/deckbuilder-constrained-pool.json"))
+    database = build_card_database_from_bulk_file(
+        path=FIXTURES_DIR / "deckbuilder-constrained-bulk.jsonl"
+    )
+    selection = select_color_pair(
+        pool_grp_ids=pool.pool_grp_ids,
+        card_database=database,
+    )
+    spell_selection = select_deck_spells(
+        pool_grp_ids=pool.pool_grp_ids,
+        card_database=database,
+        pair=selection.chosen.pair,
+    )
+
+    output = format_build_result(
+        pool=pool,
+        selection=selection,
+        spell_selection=spell_selection,
+    )
+
+    assert output == (GOLDEN_DIR / "deckbuilder-constrained-build.txt").read_text(
+        encoding="utf-8"
+    )
 
 
 
@@ -194,6 +413,23 @@ def _write_pool_file(directory: Path) -> Path:
 
 
 def _ratings_data() -> SeventeenLandsData:
+    return _ratings_data_from_entries(
+        entries=(
+            (1, "White Bomb", "W", 0.65),
+            (2, "Blue Bomb", "U", 0.64),
+            (3, "White Playable", "W", 0.62),
+            (4, "Blue Playable", "U", 0.61),
+            (5, "Red Filler", "R", 0.52),
+            (6, "Black Filler", "B", 0.51),
+        )
+    )
+
+
+
+def _ratings_data_from_entries(
+    *,
+    entries: tuple[tuple[int, str, str, float], ...],
+) -> SeventeenLandsData:
     return SeventeenLandsData(
         set_code="TST",
         requested_format=QUICK_DRAFT_FORMAT,
@@ -202,12 +438,8 @@ def _ratings_data() -> SeventeenLandsData:
             event_format=QUICK_DRAFT_FORMAT,
             fetched_at=datetime(2026, 7, 3, 12, 0, tzinfo=UTC),
             card_ratings={
-                1: _stats(grp_id=1, name="White Bomb", color="W", gih=0.65),
-                2: _stats(grp_id=2, name="Blue Bomb", color="U", gih=0.64),
-                3: _stats(grp_id=3, name="White Playable", color="W", gih=0.62),
-                4: _stats(grp_id=4, name="Blue Playable", color="U", gih=0.61),
-                5: _stats(grp_id=5, name="Red Filler", color="R", gih=0.52),
-                6: _stats(grp_id=6, name="Black Filler", color="B", gih=0.51),
+                grp_id: _stats(grp_id=grp_id, name=name, color=color, gih=gih)
+                for grp_id, name, color, gih in entries
             },
             pair_win_rates={
                 "WU": ColorPairWinRate(pair="WU", wins=60, games=100, win_rate=0.6),
@@ -255,14 +487,68 @@ def _card_database() -> CardDatabase:
 
 
 
-def _card(*, grp_id: int, name: str, colors: tuple[str, ...]) -> CardInfo:
+def _constrained_pool_ids() -> tuple[int, ...]:
+    return tuple(range(101, 129))
+
+
+
+def _constrained_card_database() -> CardDatabase:
+    cards: dict[int, CardInfo] = {}
+    for grp_id in range(101, 106):
+        cards[grp_id] = _card(
+            grp_id=grp_id,
+            name=f"Two-Drop Creature {grp_id}",
+            colors=("W",) if grp_id % 2 == 0 else ("U",),
+            mana_value=2.0,
+            types=("Creature — Fixture",),
+        )
+
+    for grp_id in range(106, 115):
+        cards[grp_id] = _card(
+            grp_id=grp_id,
+            name=f"Mid Curve Creature {grp_id}",
+            colors=("W",) if grp_id % 2 == 0 else ("U",),
+            mana_value=3.0,
+            types=("Creature — Fixture",),
+        )
+
+    for grp_id in range(115, 119):
+        cards[grp_id] = _card(
+            grp_id=grp_id,
+            name=f"Expensive Creature {grp_id}",
+            colors=("W",) if grp_id % 2 == 0 else ("U",),
+            mana_value=6.0,
+            types=("Creature — Fixture",),
+        )
+
+    for grp_id in range(119, 129):
+        cards[grp_id] = _card(
+            grp_id=grp_id,
+            name=f"Noncreature Spell {grp_id}",
+            colors=("W",) if grp_id % 2 == 0 else ("U",),
+            mana_value=3.0,
+            types=("Instant",),
+        )
+
+    return CardDatabase(cards=cards)
+
+
+
+def _card(
+    *,
+    grp_id: int,
+    name: str,
+    colors: tuple[str, ...],
+    mana_value: float = 2.0,
+    types: tuple[str, ...] = ("Creature",),
+) -> CardInfo:
     return CardInfo(
         grp_id=grp_id,
         name=name,
         colors=colors,
-        mana_value=2.0,
+        mana_value=mana_value,
         rarity="common",
-        types=("Creature",),
+        types=types,
     )
 
 

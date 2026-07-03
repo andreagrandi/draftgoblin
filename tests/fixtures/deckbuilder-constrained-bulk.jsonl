@@ -1,0 +1,28 @@
+{"arena_id":101,"name":"Cloudkin Cadet","colors":["W"],"cmc":2,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":102,"name":"Harbor Recruit","colors":["U"],"cmc":2,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":103,"name":"Ledger Squire","colors":["W"],"cmc":2,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":104,"name":"Mistway Scout","colors":["U"],"cmc":2,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":105,"name":"River Patrol","colors":["W"],"cmc":2,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":106,"name":"Aerial Adept","colors":["U"],"cmc":3,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":107,"name":"Archive Guardian","colors":["W"],"cmc":3,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":108,"name":"Canal Bruiser","colors":["U"],"cmc":3,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":109,"name":"Glint Heron","colors":["W"],"cmc":3,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":110,"name":"Inkfathom Guide","colors":["U"],"cmc":3,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":111,"name":"Lantern Watch","colors":["W"],"cmc":3,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":112,"name":"Moonlit Vanguard","colors":["U"],"cmc":3,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":113,"name":"Omen Reader","colors":["W"],"cmc":3,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":114,"name":"Tide Scholar","colors":["U"],"cmc":3,"rarity":"common","type_line":"Creature — Fixture"}
+{"arena_id":115,"name":"Cloudtop Colossus","colors":["W"],"cmc":6,"rarity":"uncommon","type_line":"Creature — Fixture"}
+{"arena_id":116,"name":"Deepwater Leviathan","colors":["U"],"cmc":6,"rarity":"uncommon","type_line":"Creature — Fixture"}
+{"arena_id":117,"name":"Sanctum Behemoth","colors":["W"],"cmc":6,"rarity":"uncommon","type_line":"Creature — Fixture"}
+{"arena_id":118,"name":"Skyline Colossus","colors":["U"],"cmc":6,"rarity":"uncommon","type_line":"Creature — Fixture"}
+{"arena_id":119,"name":"Borrowed Time","colors":["W"],"cmc":3,"rarity":"common","type_line":"Instant"}
+{"arena_id":120,"name":"Cancel the Alarm","colors":["U"],"cmc":3,"rarity":"common","type_line":"Instant"}
+{"arena_id":121,"name":"Chart a Course","colors":["W"],"cmc":3,"rarity":"common","type_line":"Instant"}
+{"arena_id":122,"name":"Dazzling Denial","colors":["U"],"cmc":3,"rarity":"common","type_line":"Instant"}
+{"arena_id":123,"name":"Essence Scatter","colors":["W"],"cmc":3,"rarity":"common","type_line":"Instant"}
+{"arena_id":124,"name":"Frost Trick","colors":["U"],"cmc":3,"rarity":"common","type_line":"Instant"}
+{"arena_id":125,"name":"Guiding Light","colors":["W"],"cmc":3,"rarity":"common","type_line":"Instant"}
+{"arena_id":126,"name":"Hold Still","colors":["U"],"cmc":3,"rarity":"common","type_line":"Instant"}
+{"arena_id":127,"name":"Insightful Study","colors":["W"],"cmc":3,"rarity":"common","type_line":"Instant"}
+{"arena_id":128,"name":"Jury-Rig","colors":["U"],"cmc":3,"rarity":"common","type_line":"Instant"}
