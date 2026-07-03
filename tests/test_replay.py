@@ -16,7 +16,6 @@ from draftgoblin.seventeen import (
     SeventeenCardStats,
     SeventeenLandsData,
     SeventeenLandsFormatData,
-    save_17lands_format_data,
 )
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
@@ -29,19 +28,14 @@ GOLDEN_REPLAY_PATH = (
 
 
 def test_replay_fixture_matches_committed_golden_output(
-    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _cache_fixture_ratings(app_dir=tmp_path)
-
     exit_code = main(
         argv=[
             "replay",
             str(FIXTURE_LOG_PATH),
             "--bulk-file",
             str(SCRYFALL_BULK_SAMPLE_PATH),
-            "--app-dir",
-            str(tmp_path),
         ]
     )
 
@@ -55,20 +49,26 @@ def test_replay_fixture_matches_committed_golden_output(
 def test_replay_output_is_byte_identical_across_runs() -> None:
     database = build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
 
-    ratings_data = _fixture_ratings_data()
-    first_output = replay_log_file(
-        logfile=FIXTURE_LOG_PATH,
-        card_database=database,
-        ratings_data=ratings_data,
-    )
-    second_output = replay_log_file(
-        logfile=FIXTURE_LOG_PATH,
-        card_database=database,
-        ratings_data=ratings_data,
-    )
+    first_output = replay_log_file(logfile=FIXTURE_LOG_PATH, card_database=database)
+    second_output = replay_log_file(logfile=FIXTURE_LOG_PATH, card_database=database)
 
     assert first_output == second_output
     assert first_output == GOLDEN_REPLAY_PATH.read_text(encoding="utf-8")
+
+
+def test_replay_with_ratings_data_shows_fallback_sources() -> None:
+    database = build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+
+    output = replay_log_file(
+        logfile=FIXTURE_LOG_PATH,
+        card_database=database,
+        ratings_data=_fixture_ratings_data(),
+    )
+
+    assert "Data source: QuickDraft + Premier fallback + neutral prior" in output
+    assert "Fixture Split Card (grpId 104894)   WU          62.0%" in output
+    assert "Fixture Blue Card (grpId 105134)    U           58.0%" in output
+    assert "Premier" in output
 
 
 def test_replay_uses_cached_card_database_without_refreshing(
@@ -76,7 +76,6 @@ def test_replay_uses_cached_card_database_without_refreshing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     refresh_card_database(app_dir=tmp_path, bulk_file=SCRYFALL_BULK_SAMPLE_PATH)
-    _cache_fixture_ratings(app_dir=tmp_path)
 
     exit_code = main(
         argv=[
@@ -136,13 +135,6 @@ def test_replay_without_card_cache_returns_actionable_error(
     assert exit_code == 1
     assert captured.out == ""
     assert "Run refresh-data first" in captured.err
-
-
-def _cache_fixture_ratings(*, app_dir: Path) -> None:
-    ratings_data = _fixture_ratings_data()
-    save_17lands_format_data(ratings_data.primary, app_dir=app_dir)
-    if ratings_data.fallback is not None:
-        save_17lands_format_data(ratings_data.fallback, app_dir=app_dir)
 
 
 def _fixture_ratings_data() -> SeventeenLandsData:
