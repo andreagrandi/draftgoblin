@@ -120,14 +120,15 @@ class PlainLogWatcher:
                 card_database=self.card_database,
                 pick_engine=self._pick_engine_for_set(set_code=event.set_code),
             )
+            color_status = _color_status_from_pack_lines(lines=pack_lines)
             lines = [
                 "Status: "
                 f"active account {self._account_label(account_id=event.account_id)}, "
                 f"pick P{event.pack_number + 1}P{event.pick_number + 1}, "
-                f"pool {len(event.pool_grp_ids)}, "
+                f"{color_status}, "
                 f"data {_data_source_from_pack_lines(lines=pack_lines)}"
             ]
-            lines.extend(pack_lines)
+            lines.extend(_pack_lines_without_color_status(lines=pack_lines))
             return lines
 
         if isinstance(event, PickMadeEvent):
@@ -263,6 +264,18 @@ def _data_source_from_pack_lines(*, lines: list[str]) -> str:
             return line.removeprefix("Data source: ")
 
     return "unknown"
+
+
+def _color_status_from_pack_lines(*, lines: list[str]) -> str:
+    for line in lines:
+        if line.startswith("Status: inferred pair "):
+            return line.removeprefix("Status: ")
+
+    return "inferred pair open, commitment 0% (open), pool unknown"
+
+
+def _pack_lines_without_color_status(*, lines: list[str]) -> list[str]:
+    return [line for line in lines if not line.startswith("Status: inferred pair ")]
 
 
 def _format_account_label(*, client_id: str, screen_name: str | None) -> str:

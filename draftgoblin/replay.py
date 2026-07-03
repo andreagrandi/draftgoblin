@@ -13,6 +13,7 @@ from typing import TypeAlias
 
 from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.events import (
+    EXPECTED_PICKS_PER_PACK,
     AccountEvent,
     DraftCompletedEvent,
     DraftEvent,
@@ -21,7 +22,7 @@ from draftgoblin.events import (
     PickMadeEvent,
     parse_events,
 )
-from draftgoblin.pickengine import PickEngine, ScoredCard
+from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
 from draftgoblin.pool import DraftPoolStore
 from draftgoblin.seventeen import SEVENTEEN_LANDS_ATTRIBUTION, SeventeenLandsData
 
@@ -268,9 +269,12 @@ def _format_pack(
     scored_pack = engine.score_pack(
         offered_grp_ids=event.offered_grp_ids,
         card_database=card_database,
+        pool_grp_ids=event.pool_grp_ids,
+        pick_index=_draft_pick_index(event=event),
     )
     lines = [
         f"Pack {event.pack_number + 1} Pick {event.pick_number + 1}",
+        _format_pack_status(scored_pack=scored_pack),
         f"Data source: {scored_pack.source_summary}",
         "Offered cards:",
     ]
@@ -281,6 +285,22 @@ def _format_pack(
     return lines
 
 
+def _draft_pick_index(*, event: PackOfferedEvent) -> int:
+    return (event.pack_number * EXPECTED_PICKS_PER_PACK) + event.pick_number + 1
+
+
+def _format_pack_status(*, scored_pack: ScoredPack) -> str:
+    commitment = scored_pack.commitment
+    pair = commitment.inferred_pair if commitment.inferred_pair is not None else "open"
+    percent = int(round(commitment.level * 100))
+    return (
+        "Status: "
+        f"inferred pair {pair}, "
+        f"commitment {percent}% ({commitment.phase}), "
+        f"pool {commitment.pool_size}"
+    )
+
+
 def _format_scored_cards(*, cards: tuple[ScoredCard, ...]) -> list[str]:
     if not cards:
         return []
@@ -289,7 +309,7 @@ def _format_scored_cards(*, cards: tuple[ScoredCard, ...]) -> list[str]:
     lines = [
         "  #   Score  "
         f"{'Card':<{card_width}}  "
-        "Colors     GIH WR   ALSA    MV  Source"
+        "Colors     Fit    GIH WR   ALSA    MV  Source"
     ]
     for rank, scored_card in enumerate(cards, start=1):
         lines.append(
@@ -298,6 +318,7 @@ def _format_scored_cards(*, cards: tuple[ScoredCard, ...]) -> list[str]:
             f"{scored_card.score:>5}  "
             f"{_format_scored_card_name(scored_card):<{card_width}}  "
             f"{_format_card_colors(scored_card.card):<9}  "
+            f"{_format_color_fit(scored_card):<5}  "
             f"{_format_win_rate(scored_card):>6}  "
             f"{_format_alsa(scored_card):>5}  "
             f"{_format_mana_value(scored_card.card):>4}  "
@@ -323,6 +344,22 @@ def _format_alsa(card: ScoredCard) -> str:
         return "—"
 
     return f"{card.rating.average_last_seen_at:.2f}"
+
+
+def _format_color_fit(card: ScoredCard) -> str:
+    if card.color_fit == "on-color":
+        return "On"
+
+    if card.color_fit == "off-color":
+        return "Off!"
+
+    if card.color_fit == "colorless":
+        return "Any"
+
+    if card.color_fit == "unknown":
+        return "?"
+
+    return "Open"
 
 
 def _format_mana_value(card: CardInfo) -> str:

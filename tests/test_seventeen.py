@@ -16,6 +16,7 @@ from draftgoblin.seventeen import (
     load_or_refresh_17lands_data,
     load_or_refresh_17lands_format_data,
     seventeen_lands_cache_path,
+    seventeen_lands_pair_card_cache_path,
 )
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -38,12 +39,16 @@ class RecordingFetcher:
         self.urls: list[str] = []
         self.quick_card_ratings = _load_json(path=QUICK_CARD_RATINGS_PATH)
         self.premier_card_ratings = _load_json(path=PREMIER_CARD_RATINGS_PATH)
+        self.pair_card_ratings = [_pair_card_rating_row()]
         self.color_ratings = _load_json(path=COLOR_RATINGS_PATH)
 
     def __call__(self, url: str, timeout_seconds: int) -> Any:
         self.urls.append(url)
         if self.fail:
             raise SeventeenLandsError("network unavailable")
+
+        if "/card_ratings/data" in url and "colors=WU" in url:
+            return self.pair_card_ratings
 
         if "/card_ratings/data" in url and "event_type=PremierDraft" in url:
             return self.premier_card_ratings
@@ -181,5 +186,57 @@ def test_pair_win_rates_are_available_for_all_ten_pairs(tmp_path: Path) -> None:
     assert dataset.attribution == SEVENTEEN_LANDS_ATTRIBUTION
 
 
+def test_pair_filtered_card_ratings_are_loaded_lazily_and_cached(
+    tmp_path: Path,
+) -> None:
+    fetcher = RecordingFetcher()
+    data = load_or_refresh_17lands_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC)),
+        fetch_json=fetcher,
+        thin_sample_minimum=500,
+    )
+
+    assert len(fetcher.urls) == 4
+
+    pair_rating = data.pair_rating_for(grp_id=1002, pair="WU")
+    second_pair_rating = data.pair_rating_for(grp_id=1002, pair="WU")
+    cached_data = load_cached_17lands_data(set_code="TST", app_dir=tmp_path)
+    cached_pair_rating = cached_data.pair_rating_for(grp_id=1002, pair="WU")
+
+    assert pair_rating.gih_win_rate == 0.66
+    assert second_pair_rating.gih_win_rate == 0.66
+    assert cached_pair_rating.gih_win_rate == 0.66
+    assert "WU" in data.pair_card_ratings
+    assert len(fetcher.urls) == 5
+    assert any("colors=WU" in url for url in fetcher.urls)
+    assert seventeen_lands_pair_card_cache_path(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        pair="WU",
+        app_dir=tmp_path,
+    ).exists()
+
+
 def _load_json(*, path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _pair_card_rating_row() -> dict[str, object]:
+    return {
+        "name": "Fixture Pair Filtered Card",
+        "mtga_id": 1002,
+        "color": "U",
+        "rarity": "uncommon",
+        "avg_seen": 3.25,
+        "seen_count": 900,
+        "pick_count": 600,
+        "game_count": 700,
+        "opening_hand_game_count": 180,
+        "opening_hand_win_rate": 0.64,
+        "ever_drawn_game_count": 650,
+        "ever_drawn_win_rate": 0.66,
+        "drawn_improvement_win_rate": 0.04,
+    }

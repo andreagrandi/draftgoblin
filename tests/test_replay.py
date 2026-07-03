@@ -66,8 +66,8 @@ def test_replay_with_ratings_data_shows_fallback_sources() -> None:
     )
 
     assert "Data source: QuickDraft + Premier fallback + neutral prior" in output
-    assert "Fixture Split Card (grpId 104894)   WU          62.0%" in output
-    assert "Fixture Blue Card (grpId 105134)    U           58.0%" in output
+    assert "Fixture Split Card (grpId 104894)   WU         Open    62.0%" in output
+    assert "Fixture Blue Card (grpId 105134)    U          Open    58.0%" in output
     assert "Premier" in output
 
 
