@@ -1,0 +1,86 @@
+[
+  {
+    "is_summary": true,
+    "short_name": "All",
+    "color_name": "All Decks",
+    "wins": 1000,
+    "games": 2000
+  },
+  {
+    "is_summary": false,
+    "short_name": "WU",
+    "color_name": "Azorius (WU)",
+    "wins": 60,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "WB",
+    "color_name": "Orzhov (WB)",
+    "wins": 51,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "WR",
+    "color_name": "Boros (WR)",
+    "wins": 49,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "WG",
+    "color_name": "Selesnya (WG)",
+    "wins": 55,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "UB",
+    "color_name": "Dimir (UB)",
+    "wins": 52,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "UR",
+    "color_name": "Izzet (UR)",
+    "wins": 47,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "UG",
+    "color_name": "Simic (UG)",
+    "wins": 53,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "BR",
+    "color_name": "Rakdos (BR)",
+    "wins": 57,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "BG",
+    "color_name": "Golgari (BG)",
+    "wins": 50,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "RG",
+    "color_name": "Gruul (RG)",
+    "wins": 54,
+    "games": 100
+  },
+  {
+    "is_summary": false,
+    "short_name": "WU+",
+    "color_name": "Azorius Splashing (WU+)",
+    "wins": 5,
+    "games": 10
+  }
+]
