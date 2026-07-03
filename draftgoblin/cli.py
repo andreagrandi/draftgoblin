@@ -10,12 +10,13 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from draftgoblin import DISCLAIMER, __version__
-from draftgoblin.config import COLOR_PAIRS
-from draftgoblin.paths import (
-    UnsupportedPlatformError,
-    app_data_dir,
-    resolve_player_log_path,
+from draftgoblin.carddb import (
+    CardDatabaseError,
+    card_database_cache_path,
+    refresh_card_database,
 )
+from draftgoblin.config import COLOR_PAIRS
+from draftgoblin.paths import UnsupportedPlatformError, resolve_player_log_path
 
 CommandHandler = Callable[[argparse.Namespace], int]
 
@@ -102,8 +103,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     refresh_parser = subparsers.add_parser(
         name="refresh-data",
-        help="Refresh cached Scryfall and 17lands data.",
-        description="Stub for manual static-data cache refreshes.",
+        help="Refresh cached Scryfall card metadata.",
+        description="Refresh the local Arena grpId card metadata cache from Scryfall.",
+    )
+    refresh_parser.add_argument(
+        "--bulk-file",
+        type=Path,
+        default=None,
+        help=(
+            "Build the card metadata cache from a local Scryfall JSONL(.gz) "
+            "file instead of downloading."
+        ),
+    )
+    refresh_parser.add_argument(
+        "--app-dir",
+        type=Path,
+        default=None,
+        help=argparse.SUPPRESS,
     )
     refresh_parser.set_defaults(handler=handle_refresh_data)
 
@@ -157,12 +173,21 @@ def handle_build(args: argparse.Namespace) -> int:
 
 
 def handle_refresh_data(args: argparse.Namespace) -> int:
-    """Handle the refresh-data command stub.
-    Show the cache root that later data refreshes will use.
+    """Handle the refresh-data command.
+    Build the local Scryfall-backed grpId metadata cache.
     """
 
-    del args
-    print(f"refresh-data stub: would refresh caches under {app_data_dir()}.")
+    try:
+        database = refresh_card_database(
+            app_dir=args.app_dir,
+            bulk_file=args.bulk_file,
+        )
+    except CardDatabaseError as error:
+        print(f"refresh-data failed: {error}", file=sys.stderr)
+        return 1
+
+    cache_path = card_database_cache_path(app_dir=args.app_dir)
+    print(f"refreshed {len(database)} card records at {cache_path}.")
     return 0
 
 
