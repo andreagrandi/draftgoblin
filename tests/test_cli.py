@@ -24,11 +24,17 @@ def test_version_output_includes_required_disclaimer(
 
 
 @pytest.mark.parametrize(
-    "command",
-    ["watch", "replay", "build", "refresh-data"],
+    ("command", "expected_help"),
+    [
+        ("watch", "Stub"),
+        ("replay", "Stub"),
+        ("build", "Stub"),
+        ("refresh-data", "Scryfall"),
+    ],
 )
 def test_subcommands_are_registered_with_help_text(
     command: str,
+    expected_help: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     parser = build_parser()
@@ -40,7 +46,7 @@ def test_subcommands_are_registered_with_help_text(
 
     assert error.value.code == 0
     assert command in captured.out
-    assert "Stub" in captured.out or "stub" in captured.out
+    assert expected_help in captured.out
 
 
 def test_watch_stub_honors_log_path_override(capsys: pytest.CaptureFixture[str]) -> None:
