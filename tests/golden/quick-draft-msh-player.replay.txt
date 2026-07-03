@@ -3,488 +3,615 @@ Account: FixturePlayer (FIXTURECLIENTID1234567890)
 Set: MSH
 Event: QuickDraft_MSH_20260702
 Draft: 00000000-0000-4000-8000-000000000004
+Attribution: Card data from 17Lands (17lands.com)
 
 Pack 1 Pick 1
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Split Card [WU] (grpId 104894)
-  02. Fixture Card 104976 [Colorless] (grpId 104976)
-  03. Fixture Card 105080 [Colorless] (grpId 105080)
-  04. Fixture Card 104995 [Colorless] (grpId 104995)
-  05. Fixture Card 105027 [Colorless] (grpId 105027)
-  06. Fixture Card 105030 [Colorless] (grpId 105030)
-  07. Fixture Card 105170 [Colorless] (grpId 105170)
-  08. Fixture Card 104932 [Colorless] (grpId 104932)
-  09. Fixture Card 104893 [Colorless] (grpId 104893)
-  10. Fixture Card 105091 [Colorless] (grpId 105091)
-  11. Fixture Card 104969 [Colorless] (grpId 104969)
-  12. Fixture Spider [G] (grpId 105097)
-  13. Fixture Card 104979 [Colorless] (grpId 104979)
-  14. Fixture Card 105164 [Colorless] (grpId 105164)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01    100  Fixture Split Card (grpId 104894)   WU          62.0%   1.20     3  Quick
+  02     88  Fixture Spider (grpId 105097)       G           60.0%   2.10     4  Quick
+  03     50  Fixture Card 104976 (grpId 104976)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105080 (grpId 105080)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 104995 (grpId 104995)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105027 (grpId 105027)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105030 (grpId 105030)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105170 (grpId 105170)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 104932 (grpId 104932)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 104893 (grpId 104893)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 105091 (grpId 105091)  Colorless       —      —     2  Prior*
+  12     50  Fixture Card 104969 (grpId 104969)  Colorless       —      —     2  Prior*
+  13     50  Fixture Card 104979 (grpId 104979)  Colorless       —      —     2  Prior*
+  14     50  Fixture Card 105164 (grpId 105164)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Spider [G] (grpId 105097)
 
 Pack 1 Pick 2
+Data source: QuickDraft + Premier fallback + neutral prior
 Offered cards:
-  01. Fixture Card 104933 [Colorless] (grpId 104933)
-  02. Fixture Card 105063 [Colorless] (grpId 105063)
-  03. Fixture Card 104949 [Colorless] (grpId 104949)
-  04. Fixture Card 105020 [Colorless] (grpId 105020)
-  05. Fixture Card 105036 [Colorless] (grpId 105036)
-  06. Fixture Card 105003 [Colorless] (grpId 105003)
-  07. Fixture Card 104989 [Colorless] (grpId 104989)
-  08. Fixture Card 104948 [Colorless] (grpId 104948)
-  09. Fixture Card 104971 [Colorless] (grpId 104971)
-  10. Fixture Blue Card [U] (grpId 105134)
-  11. Fixture Card 105086 [Colorless] (grpId 105086)
-  12. Fixture Card 105007 [Colorless] (grpId 105007)
-  13. Fixture Card 105166 [Colorless] (grpId 105166)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     73  Fixture Blue Card (grpId 105134)    U           58.0%   3.60     3  Premier
+  02     65  Fixture Card 104989 (grpId 104989)  Colorless   57.0%   4.20     2  Premier
+  03     50  Fixture Card 104933 (grpId 104933)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105063 (grpId 105063)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 104949 (grpId 104949)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105020 (grpId 105020)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105036 (grpId 105036)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 104948 (grpId 104948)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 104971 (grpId 104971)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 105086 (grpId 105086)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 105007 (grpId 105007)  Colorless       —      —     2  Prior*
+  12     50  Fixture Card 105166 (grpId 105166)  Colorless       —      —     2  Prior*
+  13     19  Fixture Card 105003 (grpId 105003)  Colorless   51.0%   6.20     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Blue Card [U] (grpId 105134)
 
 Pack 1 Pick 3
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Card 104905 [Colorless] (grpId 104905)
-  02. Fixture Card 105032 [Colorless] (grpId 105032)
-  03. Fixture Card 105003 [Colorless] (grpId 105003)
-  04. Fixture Card 105142 [Colorless] (grpId 105142)
-  05. Fixture Card 105054 [Colorless] (grpId 105054)
-  06. Fixture Card 105076 [Colorless] (grpId 105076)
-  07. Fixture Card 105143 [Colorless] (grpId 105143)
-  08. Fixture Card 104938 [Colorless] (grpId 104938)
-  09. Fixture Card 105111 [Colorless] (grpId 105111)
-  10. Fixture Card 105087 [Colorless] (grpId 105087)
-  11. Fixture Card 105011 [Colorless] (grpId 105011)
-  12. Fixture Final Pick [R] (grpId 105182)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104905 (grpId 104905)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105032 (grpId 105032)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105142 (grpId 105142)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105076 (grpId 105076)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105143 (grpId 105143)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 104938 (grpId 104938)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105111 (grpId 105111)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105087 (grpId 105087)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 105011 (grpId 105011)  Colorless       —      —     2  Prior*
+  10     27  Fixture Final Pick (grpId 105182)   R               —   8.00     1  Prior*
+  11     19  Fixture Card 105003 (grpId 105003)  Colorless   51.0%   6.20     2  Quick
+  12     12  Fixture Card 105054 (grpId 105054)  Colorless   50.0%   6.80     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105003 [Colorless] (grpId 105003)
 
 Pack 1 Pick 4
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104911 [Colorless] (grpId 104911)
-  02. Fixture Card 105037 [Colorless] (grpId 105037)
-  03. Fixture Card 104933 [Colorless] (grpId 104933)
-  04. Fixture Card 104972 [Colorless] (grpId 104972)
-  05. Fixture Card 105021 [Colorless] (grpId 105021)
-  06. Fixture Card 105070 [Colorless] (grpId 105070)
-  07. Fixture Card 105130 [Colorless] (grpId 105130)
-  08. Fixture Card 105059 [Colorless] (grpId 105059)
-  09. Fixture Card 104925 [Colorless] (grpId 104925)
-  10. Fixture Card 104971 [Colorless] (grpId 104971)
-  11. Fixture Card 105174 [Colorless] (grpId 105174)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104911 (grpId 104911)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105037 (grpId 105037)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104933 (grpId 104933)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104972 (grpId 104972)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105021 (grpId 105021)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105070 (grpId 105070)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105130 (grpId 105130)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105059 (grpId 105059)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 104925 (grpId 104925)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 104971 (grpId 104971)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 105174 (grpId 105174)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105037 [Colorless] (grpId 105037)
 
 Pack 1 Pick 5
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Card 105021 [Colorless] (grpId 105021)
-  02. Fixture Card 105003 [Colorless] (grpId 105003)
-  03. Fixture Card 104967 [Colorless] (grpId 104967)
-  04. Fixture Card 105090 [Colorless] (grpId 105090)
-  05. Fixture Card 105054 [Colorless] (grpId 105054)
-  06. Fixture Card 104905 [Colorless] (grpId 104905)
-  07. Fixture Card 105009 [Colorless] (grpId 105009)
-  08. Fixture Card 104965 [Colorless] (grpId 104965)
-  09. Fixture Card 105117 [Colorless] (grpId 105117)
-  10. Fixture Card 105180 [Colorless] (grpId 105180)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105021 (grpId 105021)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104967 (grpId 104967)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105090 (grpId 105090)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104905 (grpId 104905)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105009 (grpId 105009)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 104965 (grpId 104965)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105117 (grpId 105117)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105180 (grpId 105180)  Colorless       —      —     2  Prior*
+  09     19  Fixture Card 105003 (grpId 105003)  Colorless   51.0%   6.20     2  Quick
+  10     12  Fixture Card 105054 (grpId 105054)  Colorless   50.0%   6.80     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105117 [Colorless] (grpId 105117)
 
 Pack 1 Pick 6
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105009 [Colorless] (grpId 105009)
-  02. Fixture Card 105149 [Colorless] (grpId 105149)
-  03. Fixture Card 105039 [Colorless] (grpId 105039)
-  04. Fixture Card 105049 [Colorless] (grpId 105049)
-  05. Fixture Card 105014 [Colorless] (grpId 105014)
-  06. Fixture Card 105084 [Colorless] (grpId 105084)
-  07. Fixture Card 104908 [Colorless] (grpId 104908)
-  08. Fixture Card 105023 [Colorless] (grpId 105023)
-  09. Fixture Card 104947 [Colorless] (grpId 104947)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105009 (grpId 105009)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105149 (grpId 105149)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105039 (grpId 105039)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105049 (grpId 105049)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105014 (grpId 105014)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105084 (grpId 105084)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 104908 (grpId 104908)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105023 (grpId 105023)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 104947 (grpId 104947)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105014 [Colorless] (grpId 105014)
 
 Pack 1 Pick 7
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105029 [Colorless] (grpId 105029)
-  02. Fixture Card 105056 [Colorless] (grpId 105056)
-  03. Fixture Card 104997 [Colorless] (grpId 104997)
-  04. Fixture Card 104939 [Colorless] (grpId 104939)
-  05. Fixture Card 105045 [Colorless] (grpId 105045)
-  06. Fixture Card 105081 [Colorless] (grpId 105081)
-  07. Fixture Card 105034 [Colorless] (grpId 105034)
-  08. Fixture Card 105178 [Colorless] (grpId 105178)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105029 (grpId 105029)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105056 (grpId 105056)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104997 (grpId 104997)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104939 (grpId 104939)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105045 (grpId 105045)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105081 (grpId 105081)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105034 (grpId 105034)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105178 (grpId 105178)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105034 [Colorless] (grpId 105034)
 
 Pack 1 Pick 8
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105064 [Colorless] (grpId 105064)
-  02. Fixture Card 104938 [Colorless] (grpId 104938)
-  03. Fixture Card 105062 [Colorless] (grpId 105062)
-  04. Fixture Card 104997 [Colorless] (grpId 104997)
-  05. Fixture Card 105035 [Colorless] (grpId 105035)
-  06. Fixture Card 105042 [Colorless] (grpId 105042)
-  07. Fixture Card 105173 [Colorless] (grpId 105173)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105064 (grpId 105064)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104938 (grpId 104938)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105062 (grpId 105062)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104997 (grpId 104997)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105035 (grpId 105035)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105042 (grpId 105042)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105173 (grpId 105173)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104997 [Colorless] (grpId 104997)
 
 Pack 1 Pick 9
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104995 [Colorless] (grpId 104995)
-  02. Fixture Card 105027 [Colorless] (grpId 105027)
-  03. Fixture Card 105030 [Colorless] (grpId 105030)
-  04. Fixture Card 105170 [Colorless] (grpId 105170)
-  05. Fixture Card 104932 [Colorless] (grpId 104932)
-  06. Fixture Card 104969 [Colorless] (grpId 104969)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104995 (grpId 104995)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105027 (grpId 105027)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105030 (grpId 105030)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105170 (grpId 105170)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 104932 (grpId 104932)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 104969 (grpId 104969)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105030 [Colorless] (grpId 105030)
 
 Pack 1 Pick 10
+Data source: QuickDraft + Premier fallback + neutral prior
 Offered cards:
-  01. Fixture Card 105003 [Colorless] (grpId 105003)
-  02. Fixture Card 104989 [Colorless] (grpId 104989)
-  03. Fixture Card 104971 [Colorless] (grpId 104971)
-  04. Fixture Card 105086 [Colorless] (grpId 105086)
-  05. Fixture Card 105166 [Colorless] (grpId 105166)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     65  Fixture Card 104989 (grpId 104989)  Colorless   57.0%   4.20     2  Premier
+  02     50  Fixture Card 104971 (grpId 104971)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105086 (grpId 105086)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105166 (grpId 105166)  Colorless       —      —     2  Prior*
+  05     19  Fixture Card 105003 (grpId 105003)  Colorless   51.0%   6.20     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104989 [Colorless] (grpId 104989)
 
 Pack 1 Pick 11
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Card 105032 [Colorless] (grpId 105032)
-  02. Fixture Card 105054 [Colorless] (grpId 105054)
-  03. Fixture Card 105076 [Colorless] (grpId 105076)
-  04. Fixture Final Pick [R] (grpId 105182)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105032 (grpId 105032)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105076 (grpId 105076)  Colorless       —      —     2  Prior*
+  03     27  Fixture Final Pick (grpId 105182)   R               —   8.00     1  Prior*
+  04     12  Fixture Card 105054 (grpId 105054)  Colorless   50.0%   6.80     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105054 [Colorless] (grpId 105054)
 
 Pack 1 Pick 12
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104972 [Colorless] (grpId 104972)
-  02. Fixture Card 105070 [Colorless] (grpId 105070)
-  03. Fixture Card 105174 [Colorless] (grpId 105174)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104972 (grpId 104972)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105070 (grpId 105070)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105174 (grpId 105174)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105070 [Colorless] (grpId 105070)
 
 Pack 1 Pick 13
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Card 105054 [Colorless] (grpId 105054)
-  02. Fixture Card 105180 [Colorless] (grpId 105180)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105180 (grpId 105180)  Colorless       —      —     2  Prior*
+  02     12  Fixture Card 105054 (grpId 105054)  Colorless   50.0%   6.80     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105054 [Colorless] (grpId 105054)
 
 Pack 1 Pick 14
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105084 [Colorless] (grpId 105084)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105084 (grpId 105084)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105084 [Colorless] (grpId 105084)
 
 Pack 2 Pick 1
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104929 [Colorless] (grpId 104929)
-  02. Fixture Card 104938 [Colorless] (grpId 104938)
-  03. Fixture Card 105074 [Colorless] (grpId 105074)
-  04. Fixture Card 105017 [Colorless] (grpId 105017)
-  05. Fixture Card 105090 [Colorless] (grpId 105090)
-  06. Fixture Card 105037 [Colorless] (grpId 105037)
-  07. Fixture Card 104907 [Colorless] (grpId 104907)
-  08. Fixture Card 105102 [Colorless] (grpId 105102)
-  09. Fixture Card 105006 [Colorless] (grpId 105006)
-  10. Fixture Card 105123 [Colorless] (grpId 105123)
-  11. Fixture Card 105028 [Colorless] (grpId 105028)
-  12. Fixture Card 105068 [Colorless] (grpId 105068)
-  13. Fixture Card 105137 [Colorless] (grpId 105137)
-  14. Fixture Card 105161 [Colorless] (grpId 105161)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104929 (grpId 104929)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104938 (grpId 104938)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105074 (grpId 105074)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105017 (grpId 105017)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105090 (grpId 105090)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105037 (grpId 105037)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 104907 (grpId 104907)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105102 (grpId 105102)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 105006 (grpId 105006)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 105123 (grpId 105123)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 105028 (grpId 105028)  Colorless       —      —     2  Prior*
+  12     50  Fixture Card 105068 (grpId 105068)  Colorless       —      —     2  Prior*
+  13     50  Fixture Card 105137 (grpId 105137)  Colorless       —      —     2  Prior*
+  14     50  Fixture Card 105161 (grpId 105161)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105037 [Colorless] (grpId 105037)
 
 Pack 2 Pick 2
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Card 105027 [Colorless] (grpId 105027)
-  02. Fixture Card 105081 [Colorless] (grpId 105081)
-  03. Fixture Card 104905 [Colorless] (grpId 104905)
-  04. Fixture Card 104952 [Colorless] (grpId 104952)
-  05. Fixture Card 105056 [Colorless] (grpId 105056)
-  06. Fixture Card 105003 [Colorless] (grpId 105003)
-  07. Fixture Card 105036 [Colorless] (grpId 105036)
-  08. Fixture Card 105170 [Colorless] (grpId 105170)
-  09. Fixture Card 105142 [Colorless] (grpId 105142)
-  10. Fixture Card 104998 [Colorless] (grpId 104998)
-  11. Fixture Card 105033 [Colorless] (grpId 105033)
-  12. Fixture Card 105124 [Colorless] (grpId 105124)
-  13. Fixture Card 105155 [Colorless] (grpId 105155)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105027 (grpId 105027)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105081 (grpId 105081)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104905 (grpId 104905)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104952 (grpId 104952)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105056 (grpId 105056)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105036 (grpId 105036)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105170 (grpId 105170)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105142 (grpId 105142)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 104998 (grpId 104998)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 105033 (grpId 105033)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 105124 (grpId 105124)  Colorless       —      —     2  Prior*
+  12     50  Fixture Card 105155 (grpId 105155)  Colorless       —      —     2  Prior*
+  13     19  Fixture Card 105003 (grpId 105003)  Colorless   51.0%   6.20     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104998 [Colorless] (grpId 104998)
 
 Pack 2 Pick 3
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105027 [Colorless] (grpId 105027)
-  02. Fixture Card 104907 [Colorless] (grpId 104907)
-  03. Fixture Card 104911 [Colorless] (grpId 104911)
-  04. Fixture Card 104951 [Colorless] (grpId 104951)
-  05. Fixture Card 105080 [Colorless] (grpId 105080)
-  06. Fixture Card 104952 [Colorless] (grpId 104952)
-  07. Fixture Card 105005 [Colorless] (grpId 105005)
-  08. Fixture Card 104947 [Colorless] (grpId 104947)
-  09. Fixture Card 104908 [Colorless] (grpId 104908)
-  10. Fixture Card 105013 [Colorless] (grpId 105013)
-  11. Fixture Card 105065 [Colorless] (grpId 105065)
-  12. Fixture Card 105175 [Colorless] (grpId 105175)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105027 (grpId 105027)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104907 (grpId 104907)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104911 (grpId 104911)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104951 (grpId 104951)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105080 (grpId 105080)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 104952 (grpId 104952)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105005 (grpId 105005)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 104947 (grpId 104947)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 104908 (grpId 104908)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 105013 (grpId 105013)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 105065 (grpId 105065)  Colorless       —      —     2  Prior*
+  12     50  Fixture Card 105175 (grpId 105175)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105005 [Colorless] (grpId 105005)
 
 Pack 2 Pick 4
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Card 105062 [Colorless] (grpId 105062)
-  02. Fixture Card 105045 [Colorless] (grpId 105045)
-  03. Fixture Card 104933 [Colorless] (grpId 104933)
-  04. Fixture Card 104939 [Colorless] (grpId 104939)
-  05. Fixture Card 105049 [Colorless] (grpId 105049)
-  06. Fixture Card 105003 [Colorless] (grpId 105003)
-  07. Fixture Card 105057 [Colorless] (grpId 105057)
-  08. Fixture Card 104925 [Colorless] (grpId 104925)
-  09. Fixture Card 104983 [Colorless] (grpId 104983)
-  10. Fixture Card 105096 [Colorless] (grpId 105096)
-  11. Fixture Card 105158 [Colorless] (grpId 105158)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105062 (grpId 105062)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105045 (grpId 105045)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104933 (grpId 104933)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104939 (grpId 104939)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105049 (grpId 105049)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105057 (grpId 105057)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 104925 (grpId 104925)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 104983 (grpId 104983)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 105096 (grpId 105096)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 105158 (grpId 105158)  Colorless       —      —     2  Prior*
+  11     19  Fixture Card 105003 (grpId 105003)  Colorless   51.0%   6.20     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104983 [Colorless] (grpId 104983)
 
 Pack 2 Pick 5
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105074 [Colorless] (grpId 105074)
-  02. Fixture Card 105017 [Colorless] (grpId 105017)
-  03. Fixture Card 104905 [Colorless] (grpId 104905)
-  04. Fixture Card 105049 [Colorless] (grpId 105049)
-  05. Fixture Card 105064 [Colorless] (grpId 105064)
-  06. Fixture Card 104972 [Colorless] (grpId 104972)
-  07. Fixture Card 105143 [Colorless] (grpId 105143)
-  08. Fixture Card 104940 [Colorless] (grpId 104940)
-  09. Fixture Card 105102 [Colorless] (grpId 105102)
-  10. Fixture Card 105161 [Colorless] (grpId 105161)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105074 (grpId 105074)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105017 (grpId 105017)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104905 (grpId 104905)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105049 (grpId 105049)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105064 (grpId 105064)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 104972 (grpId 104972)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105143 (grpId 105143)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 104940 (grpId 104940)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 105102 (grpId 105102)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 105161 (grpId 105161)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105017 [Colorless] (grpId 105017)
 
 Pack 2 Pick 6
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Card 105032 [Colorless] (grpId 105032)
-  02. Fixture Card 104995 [Colorless] (grpId 104995)
-  03. Fixture Card 104932 [Colorless] (grpId 104932)
-  04. Fixture Card 105064 [Colorless] (grpId 105064)
-  05. Fixture Card 105080 [Colorless] (grpId 105080)
-  06. Fixture Card 105003 [Colorless] (grpId 105003)
-  07. Fixture Card 105109 [Colorless] (grpId 105109)
-  08. Fixture Card 105065 [Colorless] (grpId 105065)
-  09. Fixture Card 105154 [Colorless] (grpId 105154)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105032 (grpId 105032)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104995 (grpId 104995)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104932 (grpId 104932)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105064 (grpId 105064)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105080 (grpId 105080)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105109 (grpId 105109)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105065 (grpId 105065)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105154 (grpId 105154)  Colorless       —      —     2  Prior*
+  09     19  Fixture Card 105003 (grpId 105003)  Colorless   51.0%   6.20     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105003 [Colorless] (grpId 105003)
 
 Pack 2 Pick 7
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104995 [Colorless] (grpId 104995)
-  02. Fixture Card 105080 [Colorless] (grpId 105080)
-  03. Fixture Card 104951 [Colorless] (grpId 104951)
-  04. Fixture Card 105053 [Colorless] (grpId 105053)
-  05. Fixture Card 105078 [Colorless] (grpId 105078)
-  06. Fixture Card 105047 [Colorless] (grpId 105047)
-  07. Fixture Card 104964 [Colorless] (grpId 104964)
-  08. Fixture Card 105167 [Colorless] (grpId 105167)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104995 (grpId 104995)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105080 (grpId 105080)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104951 (grpId 104951)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105053 (grpId 105053)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105078 (grpId 105078)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105047 (grpId 105047)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 104964 (grpId 104964)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105167 (grpId 105167)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105047 [Colorless] (grpId 105047)
 
 Pack 2 Pick 8
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105138 [Colorless] (grpId 105138)
-  02. Fixture Card 104996 [Colorless] (grpId 104996)
-  03. Fixture Card 105074 [Colorless] (grpId 105074)
-  04. Fixture Card 105036 [Colorless] (grpId 105036)
-  05. Fixture Card 104945 [Colorless] (grpId 104945)
-  06. Fixture Card 105022 [Colorless] (grpId 105022)
-  07. Fixture Card 105177 [Colorless] (grpId 105177)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105138 (grpId 105138)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104996 (grpId 104996)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105074 (grpId 105074)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105036 (grpId 105036)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 104945 (grpId 104945)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105022 (grpId 105022)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105177 (grpId 105177)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104996 [Colorless] (grpId 104996)
 
 Pack 2 Pick 9
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104929 [Colorless] (grpId 104929)
-  02. Fixture Card 104938 [Colorless] (grpId 104938)
-  03. Fixture Card 105074 [Colorless] (grpId 105074)
-  04. Fixture Card 105090 [Colorless] (grpId 105090)
-  05. Fixture Card 105006 [Colorless] (grpId 105006)
-  06. Fixture Card 105028 [Colorless] (grpId 105028)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104929 (grpId 104929)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104938 (grpId 104938)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105074 (grpId 105074)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105090 (grpId 105090)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105006 (grpId 105006)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105028 (grpId 105028)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105006 [Colorless] (grpId 105006)
 
 Pack 2 Pick 10
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Card 105027 [Colorless] (grpId 105027)
-  02. Fixture Card 104952 [Colorless] (grpId 104952)
-  03. Fixture Card 105003 [Colorless] (grpId 105003)
-  04. Fixture Card 105142 [Colorless] (grpId 105142)
-  05. Fixture Card 105033 [Colorless] (grpId 105033)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105027 (grpId 105027)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104952 (grpId 104952)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105142 (grpId 105142)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105033 (grpId 105033)  Colorless       —      —     2  Prior*
+  05     19  Fixture Card 105003 (grpId 105003)  Colorless   51.0%   6.20     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105033 [Colorless] (grpId 105033)
 
 Pack 2 Pick 11
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104951 [Colorless] (grpId 104951)
-  02. Fixture Card 104952 [Colorless] (grpId 104952)
-  03. Fixture Card 105013 [Colorless] (grpId 105013)
-  04. Fixture Card 105175 [Colorless] (grpId 105175)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104951 (grpId 104951)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104952 (grpId 104952)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105013 (grpId 105013)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105175 (grpId 105175)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105013 [Colorless] (grpId 105013)
 
 Pack 2 Pick 12
+Data source: QuickDraft + neutral prior
 Offered cards:
-  01. Fixture Card 105062 [Colorless] (grpId 105062)
-  02. Fixture Card 105049 [Colorless] (grpId 105049)
-  03. Fixture Card 105003 [Colorless] (grpId 105003)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105062 (grpId 105062)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105049 (grpId 105049)  Colorless       —      —     2  Prior*
+  03     19  Fixture Card 105003 (grpId 105003)  Colorless   51.0%   6.20     2  Quick
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105003 [Colorless] (grpId 105003)
 
 Pack 2 Pick 13
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105074 [Colorless] (grpId 105074)
-  02. Fixture Card 105049 [Colorless] (grpId 105049)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105074 (grpId 105074)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105049 (grpId 105049)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105049 [Colorless] (grpId 105049)
 
 Pack 2 Pick 14
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105032 [Colorless] (grpId 105032)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105032 (grpId 105032)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105032 [Colorless] (grpId 105032)
 
 Pack 3 Pick 1
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104907 [Colorless] (grpId 104907)
-  02. Fixture Card 105074 [Colorless] (grpId 105074)
-  03. Fixture Card 105029 [Colorless] (grpId 105029)
-  04. Fixture Card 104936 [Colorless] (grpId 104936)
-  05. Fixture Card 104932 [Colorless] (grpId 104932)
-  06. Fixture Card 104987 [Colorless] (grpId 104987)
-  07. Fixture Card 105150 [Colorless] (grpId 105150)
-  08. Fixture Card 105000 [Colorless] (grpId 105000)
-  09. Fixture Card 105055 [Colorless] (grpId 105055)
-  10. Fixture Card 105086 [Colorless] (grpId 105086)
-  11. Fixture Card 105031 [Colorless] (grpId 105031)
-  12. Fixture Card 104908 [Colorless] (grpId 104908)
-  13. Fixture Card 104979 [Colorless] (grpId 104979)
-  14. Fixture Card 105166 [Colorless] (grpId 105166)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104907 (grpId 104907)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105074 (grpId 105074)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105029 (grpId 105029)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104936 (grpId 104936)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 104932 (grpId 104932)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 104987 (grpId 104987)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105150 (grpId 105150)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105000 (grpId 105000)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 105055 (grpId 105055)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 105086 (grpId 105086)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 105031 (grpId 105031)  Colorless       —      —     2  Prior*
+  12     50  Fixture Card 104908 (grpId 104908)  Colorless       —      —     2  Prior*
+  13     50  Fixture Card 104979 (grpId 104979)  Colorless       —      —     2  Prior*
+  14     50  Fixture Card 105166 (grpId 105166)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105000 [Colorless] (grpId 105000)
 
 Pack 3 Pick 2
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104938 [Colorless] (grpId 104938)
-  02. Fixture Card 105074 [Colorless] (grpId 105074)
-  03. Fixture Card 104922 [Colorless] (grpId 104922)
-  04. Fixture Card 104995 [Colorless] (grpId 104995)
-  05. Fixture Card 105037 [Colorless] (grpId 105037)
-  06. Fixture Card 105045 [Colorless] (grpId 105045)
-  07. Fixture Card 104893 [Colorless] (grpId 104893)
-  08. Fixture Card 105123 [Colorless] (grpId 105123)
-  09. Fixture Card 105022 [Colorless] (grpId 105022)
-  10. Fixture Card 104993 [Colorless] (grpId 104993)
-  11. Fixture Card 104986 [Colorless] (grpId 104986)
-  12. Fixture Card 105121 [Colorless] (grpId 105121)
-  13. Fixture Card 105179 [Colorless] (grpId 105179)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104938 (grpId 104938)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105074 (grpId 105074)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104922 (grpId 104922)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104995 (grpId 104995)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105037 (grpId 105037)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105045 (grpId 105045)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 104893 (grpId 104893)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105123 (grpId 105123)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 105022 (grpId 105022)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 104993 (grpId 104993)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 104986 (grpId 104986)  Colorless       —      —     2  Prior*
+  12     50  Fixture Card 105121 (grpId 105121)  Colorless       —      —     2  Prior*
+  13     50  Fixture Card 105179 (grpId 105179)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104986 [Colorless] (grpId 104986)
 
 Pack 3 Pick 3
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105142 [Colorless] (grpId 105142)
-  02. Fixture Card 105004 [Colorless] (grpId 105004)
-  03. Fixture Card 104950 [Colorless] (grpId 104950)
-  04. Fixture Card 105063 [Colorless] (grpId 105063)
-  05. Fixture Card 105021 [Colorless] (grpId 105021)
-  06. Fixture Card 104899 [Colorless] (grpId 104899)
-  07. Fixture Card 105008 [Colorless] (grpId 105008)
-  08. Fixture Card 104939 [Colorless] (grpId 104939)
-  09. Fixture Card 104925 [Colorless] (grpId 104925)
-  10. Fixture Card 104965 [Colorless] (grpId 104965)
-  11. Fixture Card 105071 [Colorless] (grpId 105071)
-  12. Fixture Card 105164 [Colorless] (grpId 105164)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105142 (grpId 105142)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105004 (grpId 105004)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104950 (grpId 104950)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105063 (grpId 105063)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105021 (grpId 105021)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 104899 (grpId 104899)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105008 (grpId 105008)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 104939 (grpId 104939)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 104925 (grpId 104925)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 104965 (grpId 104965)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 105071 (grpId 105071)  Colorless       —      —     2  Prior*
+  12     50  Fixture Card 105164 (grpId 105164)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105164 [Colorless] (grpId 105164)
 
 Pack 3 Pick 4
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105005 [Colorless] (grpId 105005)
-  02. Fixture Card 105056 [Colorless] (grpId 105056)
-  03. Fixture Card 104933 [Colorless] (grpId 104933)
-  04. Fixture Card 104967 [Colorless] (grpId 104967)
-  05. Fixture Card 104995 [Colorless] (grpId 104995)
-  06. Fixture Card 105150 [Colorless] (grpId 105150)
-  07. Fixture Card 105143 [Colorless] (grpId 105143)
-  08. Fixture Card 105145 [Colorless] (grpId 105145)
-  09. Fixture Card 105069 [Colorless] (grpId 105069)
-  10. Fixture Card 105006 [Colorless] (grpId 105006)
-  11. Fixture Card 105169 [Colorless] (grpId 105169)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105005 (grpId 105005)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105056 (grpId 105056)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104933 (grpId 104933)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104967 (grpId 104967)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 104995 (grpId 104995)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105150 (grpId 105150)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105143 (grpId 105143)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105145 (grpId 105145)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 105069 (grpId 105069)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 105006 (grpId 105006)  Colorless       —      —     2  Prior*
+  11     50  Fixture Card 105169 (grpId 105169)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105005 [Colorless] (grpId 105005)
 
 Pack 3 Pick 5
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104939 [Colorless] (grpId 104939)
-  02. Fixture Card 104911 [Colorless] (grpId 104911)
-  03. Fixture Card 105035 [Colorless] (grpId 105035)
-  04. Fixture Card 104977 [Colorless] (grpId 104977)
-  05. Fixture Card 105090 [Colorless] (grpId 105090)
-  06. Fixture Card 105056 [Colorless] (grpId 105056)
-  07. Fixture Card 105068 [Colorless] (grpId 105068)
-  08. Fixture Card 104960 [Colorless] (grpId 104960)
-  09. Fixture Card 105117 [Colorless] (grpId 105117)
-  10. Fixture Card 105168 [Colorless] (grpId 105168)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104939 (grpId 104939)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104911 (grpId 104911)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105035 (grpId 105035)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104977 (grpId 104977)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105090 (grpId 105090)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105056 (grpId 105056)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105068 (grpId 105068)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 104960 (grpId 104960)  Colorless       —      —     2  Prior*
+  09     50  Fixture Card 105117 (grpId 105117)  Colorless       —      —     2  Prior*
+  10     50  Fixture Card 105168 (grpId 105168)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105117 [Colorless] (grpId 105117)
 
 Pack 3 Pick 6
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105056 [Colorless] (grpId 105056)
-  02. Fixture Card 105053 [Colorless] (grpId 105053)
-  03. Fixture Card 105021 [Colorless] (grpId 105021)
-  04. Fixture Card 104977 [Colorless] (grpId 104977)
-  05. Fixture Card 105086 [Colorless] (grpId 105086)
-  06. Fixture Card 105059 [Colorless] (grpId 105059)
-  07. Fixture Card 105112 [Colorless] (grpId 105112)
-  08. Fixture Card 104965 [Colorless] (grpId 104965)
-  09. Fixture Final Pick [R] (grpId 105182)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105056 (grpId 105056)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105053 (grpId 105053)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105021 (grpId 105021)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104977 (grpId 104977)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105086 (grpId 105086)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105059 (grpId 105059)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105112 (grpId 105112)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 104965 (grpId 104965)  Colorless       —      —     2  Prior*
+  09     27  Fixture Final Pick (grpId 105182)   R               —   8.00     1  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105053 [Colorless] (grpId 105053)
 
 Pack 3 Pick 7
+Data source: Premier fallback + neutral prior
 Offered cards:
-  01. Fixture Card 105039 [Colorless] (grpId 105039)
-  02. Fixture Card 105090 [Colorless] (grpId 105090)
-  03. Fixture Card 104989 [Colorless] (grpId 104989)
-  04. Fixture Card 105138 [Colorless] (grpId 105138)
-  05. Fixture Card 104977 [Colorless] (grpId 104977)
-  06. Fixture Card 105112 [Colorless] (grpId 105112)
-  07. Fixture Card 105022 [Colorless] (grpId 105022)
-  08. Fixture Card 105167 [Colorless] (grpId 105167)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     65  Fixture Card 104989 (grpId 104989)  Colorless   57.0%   4.20     2  Premier
+  02     50  Fixture Card 105039 (grpId 105039)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105090 (grpId 105090)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105138 (grpId 105138)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 104977 (grpId 104977)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105112 (grpId 105112)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105022 (grpId 105022)  Colorless       —      —     2  Prior*
+  08     50  Fixture Card 105167 (grpId 105167)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104989 [Colorless] (grpId 104989)
 
 Pack 3 Pick 8
+Data source: Premier fallback + neutral prior
 Offered cards:
-  01. Fixture Card 105035 [Colorless] (grpId 105035)
-  02. Fixture Card 104989 [Colorless] (grpId 104989)
-  03. Fixture Card 105090 [Colorless] (grpId 105090)
-  04. Fixture Card 104997 [Colorless] (grpId 104997)
-  05. Fixture Card 105021 [Colorless] (grpId 105021)
-  06. Fixture Card 105002 [Colorless] (grpId 105002)
-  07. Fixture Card 105153 [Colorless] (grpId 105153)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     65  Fixture Card 104989 (grpId 104989)  Colorless   57.0%   4.20     2  Premier
+  02     50  Fixture Card 105035 (grpId 105035)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105090 (grpId 105090)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104997 (grpId 104997)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105021 (grpId 105021)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 105002 (grpId 105002)  Colorless       —      —     2  Prior*
+  07     50  Fixture Card 105153 (grpId 105153)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105002 [Colorless] (grpId 105002)
 
 Pack 3 Pick 9
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105074 [Colorless] (grpId 105074)
-  02. Fixture Card 105029 [Colorless] (grpId 105029)
-  03. Fixture Card 104936 [Colorless] (grpId 104936)
-  04. Fixture Card 105086 [Colorless] (grpId 105086)
-  05. Fixture Card 105031 [Colorless] (grpId 105031)
-  06. Fixture Card 104908 [Colorless] (grpId 104908)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105074 (grpId 105074)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105029 (grpId 105029)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104936 (grpId 104936)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105086 (grpId 105086)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105031 (grpId 105031)  Colorless       —      —     2  Prior*
+  06     50  Fixture Card 104908 (grpId 104908)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105031 [Colorless] (grpId 105031)
 
 Pack 3 Pick 10
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104938 [Colorless] (grpId 104938)
-  02. Fixture Card 105074 [Colorless] (grpId 105074)
-  03. Fixture Card 104995 [Colorless] (grpId 104995)
-  04. Fixture Card 105022 [Colorless] (grpId 105022)
-  05. Fixture Card 105179 [Colorless] (grpId 105179)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104938 (grpId 104938)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105074 (grpId 105074)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104995 (grpId 104995)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 105022 (grpId 105022)  Colorless       —      —     2  Prior*
+  05     50  Fixture Card 105179 (grpId 105179)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104995 [Colorless] (grpId 104995)
 
 Pack 3 Pick 11
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 105142 [Colorless] (grpId 105142)
-  02. Fixture Card 105004 [Colorless] (grpId 105004)
-  03. Fixture Card 104950 [Colorless] (grpId 104950)
-  04. Fixture Card 104965 [Colorless] (grpId 104965)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 105142 (grpId 105142)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105004 (grpId 105004)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 104950 (grpId 104950)  Colorless       —      —     2  Prior*
+  04     50  Fixture Card 104965 (grpId 104965)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 105004 [Colorless] (grpId 105004)
 
 Pack 3 Pick 12
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104995 [Colorless] (grpId 104995)
-  02. Fixture Card 105150 [Colorless] (grpId 105150)
-  03. Fixture Card 105145 [Colorless] (grpId 105145)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104995 (grpId 104995)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 105150 (grpId 105150)  Colorless       —      —     2  Prior*
+  03     50  Fixture Card 105145 (grpId 105145)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104995 [Colorless] (grpId 104995)
 
 Pack 3 Pick 13
+Data source: neutral prior
 Offered cards:
-  01. Fixture Card 104911 [Colorless] (grpId 104911)
-  02. Fixture Card 104960 [Colorless] (grpId 104960)
+  #   Score  Card                                Colors     GIH WR   ALSA    MV  Source
+  01     50  Fixture Card 104911 (grpId 104911)  Colorless       —      —     2  Prior*
+  02     50  Fixture Card 104960 (grpId 104960)  Colorless       —      —     2  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Card 104911 [Colorless] (grpId 104911)
 
 Pack 3 Pick 14
+Data source: neutral prior
 Offered cards:
-  01. Fixture Final Pick [R] (grpId 105182)
+  #   Score  Card                               Colors     GIH WR   ALSA    MV  Source
+  01     27  Fixture Final Pick (grpId 105182)  R               —   8.00     1  Prior*
+  * Prior uses neutral prior adjusted by ALSA when available.
 Chosen card: Fixture Final Pick [R] (grpId 105182)
 
 Draft complete: 42 cards (explicit completion)

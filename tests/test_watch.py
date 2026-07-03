@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import NoReturn
 
 from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
 from draftgoblin.pool import load_draft_state
+from draftgoblin.seventeen import SeventeenLandsError
 from draftgoblin.watch import PlainLogWatcher
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
@@ -35,8 +37,9 @@ def test_plain_watch_processes_appended_lines_incrementally(tmp_path: Path) -> N
     assert "Active account: FixturePlayer (FIXTURECLIENTID1234567890)" in pack_output
     assert "Draft started: QuickDraft_MSH_20260702" in pack_output
     assert "Status: active account FixturePlayer" in pack_output
+    assert "data neutral prior" in pack_output
     assert "Pack 1 Pick 1" in pack_output
-    assert "Fixture Spider [G] (grpId 105097)" in pack_output
+    assert "Fixture Spider (grpId 105097)" in pack_output
     assert "Chosen card:" not in pack_output
 
     _append_lines(path=log_path, lines=fixture_lines[7:8])
@@ -44,6 +47,26 @@ def test_plain_watch_processes_appended_lines_incrementally(tmp_path: Path) -> N
 
     assert pick_output == "Chosen card: Fixture Spider [G] (grpId 105097)\n\n"
     assert watcher.poll_once() == ""
+
+
+def test_plain_watch_degrades_to_neutral_when_ratings_loader_fails(
+    tmp_path: Path,
+) -> None:
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    watcher = PlainLogWatcher(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        poll_interval=0.01,
+        ratings_loader=_failing_ratings_loader,
+    )
+
+    output = watcher.process_lines(lines=fixture_lines[:7])
+
+    assert "Status: active account FixturePlayer" in output
+    assert "data neutral prior" in output
+    assert "Fixture Spider (grpId 105097)" in output
+    assert "Prior*" in output
 
 
 def test_plain_watch_recovers_rotation_tail_without_loss_or_duplication(
@@ -118,6 +141,10 @@ def test_plain_watch_account_switch_announces_and_separates_state(
 
 def _fixture_card_database() -> CardDatabase:
     return build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+
+
+def _failing_ratings_loader(set_code: str) -> NoReturn:
+    raise SeventeenLandsError(f"ratings unavailable for {set_code}")
 
 
 def _small_card_database() -> CardDatabase:

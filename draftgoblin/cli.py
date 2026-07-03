@@ -24,6 +24,11 @@ from draftgoblin.logfollow import LogFollowError
 from draftgoblin.paths import UnsupportedPlatformError, resolve_player_log_path
 from draftgoblin.pool import DraftPoolError
 from draftgoblin.replay import ReplayError, replay_log_file
+from draftgoblin.seventeen import (
+    SeventeenLandsError,
+    load_cached_17lands_data,
+    load_or_refresh_17lands_data,
+)
 from draftgoblin.watch import run_plain_watch
 
 CommandHandler = Callable[[argparse.Namespace], int]
@@ -219,6 +224,10 @@ def handle_watch(args: argparse.Namespace) -> int:
             poll_interval=args.poll_interval,
             once=args.once,
             startup_scan=args.startup_scan,
+            ratings_loader=lambda set_code: load_or_refresh_17lands_data(
+                set_code=set_code,
+                app_dir=args.app_dir,
+            ),
         )
     except KeyboardInterrupt:
         return 130
@@ -227,6 +236,7 @@ def handle_watch(args: argparse.Namespace) -> int:
         DraftLogParseError,
         DraftPoolError,
         LogFollowError,
+        SeventeenLandsError,
     ) as error:
         print(f"watch failed: {error}", file=sys.stderr)
         return 1
@@ -247,8 +257,21 @@ def handle_replay(args: argparse.Namespace) -> int:
 
     try:
         database = _load_replay_card_database(args=args)
-        output = replay_log_file(logfile=args.logfile, card_database=database)
-    except (CardDatabaseError, DraftLogParseError, DraftPoolError, ReplayError) as error:
+        output = replay_log_file(
+            logfile=args.logfile,
+            card_database=database,
+            ratings_loader=lambda set_code: load_cached_17lands_data(
+                set_code=set_code,
+                app_dir=args.app_dir,
+            ),
+        )
+    except (
+        CardDatabaseError,
+        DraftLogParseError,
+        DraftPoolError,
+        ReplayError,
+        SeventeenLandsError,
+    ) as error:
         print(f"replay failed: {error}", file=sys.stderr)
         return 1
 

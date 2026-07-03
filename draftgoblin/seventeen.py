@@ -556,6 +556,40 @@ def load_or_refresh_17lands_data(
     )
 
 
+def load_cached_17lands_data(
+    *,
+    set_code: str,
+    event_format: str = QUICK_DRAFT_FORMAT,
+    app_dir: PathInput | None = None,
+    thin_sample_minimum: int = PICK_ENGINE.thin_sample_minimum,
+    premier_fallback_enabled: bool = PICK_ENGINE.premier_fallback_enabled,
+) -> SeventeenLandsData:
+    """Load cached 17Lands data without network access.
+    Missing primary data becomes an empty neutral-prior dataset.
+    """
+
+    primary = _load_cached_or_empty_format_data(
+        set_code=set_code,
+        event_format=event_format,
+        app_dir=app_dir,
+    )
+    fallback = None
+    if premier_fallback_enabled and event_format != PREMIER_DRAFT_FORMAT:
+        fallback = _load_optional_cached_format_data(
+            set_code=set_code,
+            event_format=PREMIER_DRAFT_FORMAT,
+            app_dir=app_dir,
+        )
+
+    return SeventeenLandsData(
+        set_code=set_code.upper(),
+        requested_format=event_format,
+        primary=primary,
+        fallback=fallback,
+        thin_sample_minimum=thin_sample_minimum,
+    )
+
+
 def load_or_refresh_17lands_format_data(
     *,
     set_code: str,
@@ -781,6 +815,45 @@ def _load_existing_format_data(
         return None
 
 
+def _load_cached_or_empty_format_data(
+    *,
+    set_code: str,
+    event_format: str,
+    app_dir: PathInput | None,
+) -> SeventeenLandsFormatData:
+    cached = _load_optional_cached_format_data(
+        set_code=set_code,
+        event_format=event_format,
+        app_dir=app_dir,
+    )
+    if cached is not None:
+        return cached
+
+    return SeventeenLandsFormatData(
+        set_code=set_code.upper(),
+        event_format=event_format,
+        fetched_at=datetime.now(tz=UTC),
+        card_ratings={},
+        pair_win_rates={},
+    )
+
+
+def _load_optional_cached_format_data(
+    *,
+    set_code: str,
+    event_format: str,
+    app_dir: PathInput | None,
+) -> SeventeenLandsFormatData | None:
+    try:
+        return load_17lands_format_data(
+            set_code=set_code,
+            event_format=event_format,
+            app_dir=app_dir,
+        )
+    except SeventeenLandsCacheMissingError:
+        return None
+
+
 def _parse_card_ratings(*, payload: Any) -> dict[int, SeventeenCardStats]:
     if not isinstance(payload, list):
         raise SeventeenLandsError("17Lands card ratings payload is not a list.")
@@ -807,7 +880,7 @@ def _card_stats_from_endpoint_row(
     return SeventeenCardStats(
         grp_id=grp_id,
         name=_required_str(row.get("name"), field_name=f"card {grp_id}.name"),
-        color=_optional_str(row.get("color"), field_name=f"card {grp_id}.color") or "C",
+        color=_card_color(row.get("color")),
         rarity=_required_str(row.get("rarity"), field_name=f"card {grp_id}.rarity"),
         average_last_seen_at=_optional_float(
             row.get("avg_seen"),
@@ -850,6 +923,13 @@ def _card_stats_from_endpoint_row(
             or 0,
         ),
     )
+
+
+def _card_color(value: Any) -> str:
+    if value is None or value == "":
+        return "C"
+
+    return _required_str(value, field_name="card.color")
 
 
 def _parse_pair_win_rates(*, payload: Any) -> dict[str, ColorPairWinRate]:
