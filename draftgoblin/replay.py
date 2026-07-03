@@ -81,19 +81,22 @@ def render_replay_events(
 
     for event in event_tuple:
         if isinstance(event, PackOfferedEvent):
-            lines.extend(_format_pack(event=event, card_database=card_database))
+            lines.extend(
+                format_pack_offered_event(
+                    event=event,
+                    card_database=card_database,
+                )
+            )
         elif isinstance(event, PickMadeEvent):
-            lines.append(
-                "Chosen card: "
-                f"{_format_card(card_database.lookup(grp_id=event.chosen_grp_id))}"
+            lines.extend(
+                format_pick_made_event(
+                    event=event,
+                    card_database=card_database,
+                )
             )
             lines.append("")
         elif isinstance(event, DraftCompletedEvent):
-            completion_type = "inferred" if event.inferred else "explicit"
-            lines.append(
-                "Draft complete: "
-                f"{len(event.picked_grp_ids)} cards ({completion_type} completion)"
-            )
+            lines.extend(format_draft_completed_event(event=event))
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -142,6 +145,53 @@ def _header_from_events(*, events: tuple[DraftEvent, ...]) -> _ReplayHeader:
         set_code=set_code,
         draft_id=draft_id,
     )
+
+
+def format_pack_offered_event(
+    *,
+    event: PackOfferedEvent,
+    card_database: CardDatabase,
+) -> list[str]:
+    """Format a pack offer with the same plain text replay uses.
+    Live watch mode calls this so pack rendering stays byte-compatible.
+    """
+
+    return _format_pack(event=event, card_database=card_database)
+
+
+def format_pick_made_event(
+    *,
+    event: PickMadeEvent,
+    card_database: CardDatabase,
+) -> list[str]:
+    """Format a chosen-card event with replay-compatible text.
+    The caller decides whether to add a separating blank line.
+    """
+
+    return [
+        "Chosen card: "
+        f"{format_card_info(card_database.lookup(grp_id=event.chosen_grp_id))}"
+    ]
+
+
+def format_draft_completed_event(*, event: DraftCompletedEvent) -> list[str]:
+    """Format draft completion with replay-compatible text.
+    Completion type records whether Arena emitted an explicit status.
+    """
+
+    completion_type = "inferred" if event.inferred else "explicit"
+    return [
+        "Draft complete: "
+        f"{len(event.picked_grp_ids)} cards ({completion_type} completion)"
+    ]
+
+
+def format_card_info(card: CardInfo) -> str:
+    """Format one card for plain CLI output.
+    Unknown cards are displayed explicitly instead of failing lookups.
+    """
+
+    return _format_card(card)
 
 
 def _format_header(*, header: _ReplayHeader) -> list[str]:

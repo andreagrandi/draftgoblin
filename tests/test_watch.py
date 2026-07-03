@@ -1,0 +1,321 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
+from draftgoblin.pool import load_draft_state
+from draftgoblin.watch import PlainLogWatcher
+
+FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
+SCRYFALL_BULK_SAMPLE_PATH = (
+    Path(__file__).parent / "fixtures" / "scryfall-default-cards-sample.jsonl"
+)
+FIXTURE_ACCOUNT_ID = "FIXTURECLIENTID1234567890"
+FIXTURE_DRAFT_ID = "00000000-0000-4000-8000-000000000004"
+
+
+def test_plain_watch_processes_appended_lines_incrementally(tmp_path: Path) -> None:
+    app_dir = tmp_path / "app"
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+    watcher = PlainLogWatcher(
+        log_path=log_path,
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+        poll_interval=0.01,
+    )
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+
+    assert watcher.poll_once() == ""
+
+    _append_lines(path=log_path, lines=fixture_lines[:7])
+    pack_output = watcher.poll_once()
+
+    assert "Active account: FixturePlayer (FIXTURECLIENTID1234567890)" in pack_output
+    assert "Draft started: QuickDraft_MSH_20260702" in pack_output
+    assert "Status: active account FixturePlayer" in pack_output
+    assert "Pack 1 Pick 1" in pack_output
+    assert "Fixture Spider [G] (grpId 105097)" in pack_output
+    assert "Chosen card:" not in pack_output
+
+    _append_lines(path=log_path, lines=fixture_lines[7:8])
+    pick_output = watcher.poll_once()
+
+    assert pick_output == "Chosen card: Fixture Spider [G] (grpId 105097)\n\n"
+    assert watcher.poll_once() == ""
+
+
+def test_plain_watch_recovers_rotation_tail_without_loss_or_duplication(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    log_path = tmp_path / "Player.log"
+    previous_log_path = tmp_path / "Player-prev.log"
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    watcher = PlainLogWatcher(
+        log_path=log_path,
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+        poll_interval=0.01,
+    )
+
+    _write_lines(path=log_path, lines=fixture_lines[:8])
+    output = watcher.poll_once()
+    _append_lines(path=log_path, lines=fixture_lines[8:20])
+    log_path.rename(previous_log_path)
+    _write_lines(path=log_path, lines=fixture_lines[20:])
+
+    output += watcher.poll_once()
+    output += watcher.poll_once()
+
+    assert _line_count(output=output, prefix="Pack ") == 42
+    assert output.count("Chosen card:") == 42
+    assert output.count("Draft complete: 42 cards (explicit completion)") == 1
+
+    state = load_draft_state(
+        account_id=FIXTURE_ACCOUNT_ID,
+        draft_id=FIXTURE_DRAFT_ID,
+        app_dir=app_dir,
+    )
+    assert state.completed is True
+    assert state.chosen_pick_count == 42
+    assert len(state.pool_grp_ids) == 42
+
+
+def test_plain_watch_account_switch_announces_and_separates_state(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    watcher = PlainLogWatcher(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_small_card_database(),
+        poll_interval=0.01,
+    )
+
+    output = watcher.process_lines(lines=_two_account_log_lines())
+
+    assert "Active account: First (ACCOUNT-A)" in output
+    assert "Account switched: First (ACCOUNT-A) -> Second (ACCOUNT-B)" in output
+    assert "Status: active account Second (ACCOUNT-B), pick P1P1, pool 0" in output
+
+    first_state = load_draft_state(
+        account_id="ACCOUNT-A",
+        draft_id="draft-a",
+        app_dir=app_dir,
+    )
+    second_state = load_draft_state(
+        account_id="ACCOUNT-B",
+        draft_id="draft-b",
+        app_dir=app_dir,
+    )
+    assert first_state.pool_grp_ids == (101,)
+    assert second_state.pool_grp_ids == (201,)
+    assert first_state.completed is True
+    assert second_state.completed is True
+
+
+def _fixture_card_database() -> CardDatabase:
+    return build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+
+
+def _small_card_database() -> CardDatabase:
+    return CardDatabase(
+        cards={
+            101: CardInfo(
+                grp_id=101,
+                name="First Account Pick",
+                colors=("G",),
+                mana_value=2.0,
+                rarity="common",
+                types=("Creature",),
+            ),
+            102: CardInfo(
+                grp_id=102,
+                name="First Account Other",
+                colors=("U",),
+                mana_value=3.0,
+                rarity="common",
+                types=("Instant",),
+            ),
+            201: CardInfo(
+                grp_id=201,
+                name="Second Account Pick",
+                colors=("R",),
+                mana_value=2.0,
+                rarity="common",
+                types=("Creature",),
+            ),
+            202: CardInfo(
+                grp_id=202,
+                name="Second Account Other",
+                colors=("W",),
+                mana_value=3.0,
+                rarity="common",
+                types=("Sorcery",),
+            ),
+        }
+    )
+
+
+def _two_account_log_lines() -> list[str]:
+    return [
+        _auth_line(client_id="ACCOUNT-A", screen_name="First"),
+        _course_line(
+            event_name="QuickDraft_ABC_20260703",
+            course_id="draft-a",
+        ),
+        _pack_line(
+            event_name="QuickDraft_ABC_20260703",
+            pack_number=0,
+            pick_number=0,
+            draft_pack=(101, 102),
+            picked_cards=(),
+        ),
+        _pick_request_line(
+            event_name="QuickDraft_ABC_20260703",
+            request_id="pick-a",
+            card_id=101,
+            pack_number=0,
+            pick_number=0,
+        ),
+        _completed_line(
+            event_name="QuickDraft_ABC_20260703",
+            pack_number=0,
+            pick_number=0,
+            picked_cards=(101,),
+        ),
+        _auth_line(client_id="ACCOUNT-B", screen_name="Second"),
+        _course_line(
+            event_name="QuickDraft_DEF_20260703",
+            course_id="draft-b",
+        ),
+        _pack_line(
+            event_name="QuickDraft_DEF_20260703",
+            pack_number=0,
+            pick_number=0,
+            draft_pack=(201, 202),
+            picked_cards=(),
+        ),
+        _pick_request_line(
+            event_name="QuickDraft_DEF_20260703",
+            request_id="pick-b",
+            card_id=201,
+            pack_number=0,
+            pick_number=0,
+        ),
+        _completed_line(
+            event_name="QuickDraft_DEF_20260703",
+            pack_number=0,
+            pick_number=0,
+            picked_cards=(201,),
+        ),
+    ]
+
+
+def _auth_line(*, client_id: str, screen_name: str) -> str:
+    return json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": client_id,
+                "screenName": screen_name,
+            },
+        }
+    )
+
+
+def _course_line(*, event_name: str, course_id: str) -> str:
+    return json.dumps(
+        {
+            "Course": {
+                "CourseId": course_id,
+                "InternalEventName": event_name,
+                "CurrentModule": "BotDraft",
+            },
+        }
+    )
+
+
+def _pack_line(
+    *,
+    event_name: str,
+    pack_number: int,
+    pick_number: int,
+    draft_pack: tuple[int, ...],
+    picked_cards: tuple[int, ...],
+) -> str:
+    return _payload_line(
+        module="BotDraft",
+        payload={
+            "Result": "Success",
+            "EventName": event_name,
+            "DraftStatus": "PickNext",
+            "PackNumber": pack_number,
+            "PickNumber": pick_number,
+            "NumCardsToPick": 1,
+            "DraftPack": [str(grp_id) for grp_id in draft_pack],
+            "PickedCards": [str(grp_id) for grp_id in picked_cards],
+        },
+    )
+
+
+def _pick_request_line(
+    *,
+    event_name: str,
+    request_id: str,
+    card_id: int,
+    pack_number: int,
+    pick_number: int,
+) -> str:
+    request = {
+        "EventName": event_name,
+        "PickInfo": {
+            "EventName": event_name,
+            "CardIds": [str(card_id)],
+            "PackNumber": pack_number,
+            "PickNumber": pick_number,
+        },
+    }
+    envelope = {"id": request_id, "request": json.dumps(request)}
+    return f"[UnityCrossThreadLogger]==> BotDraftDraftPick {json.dumps(envelope)}"
+
+
+def _completed_line(
+    *,
+    event_name: str,
+    pack_number: int,
+    pick_number: int,
+    picked_cards: tuple[int, ...],
+) -> str:
+    return _payload_line(
+        module="DeckSelect",
+        payload={
+            "Result": "Success",
+            "EventName": event_name,
+            "DraftStatus": "Completed",
+            "PackNumber": pack_number,
+            "PickNumber": pick_number,
+            "NumCardsToPick": 1,
+            "DraftPack": [],
+            "PickedCards": [str(grp_id) for grp_id in picked_cards],
+        },
+    )
+
+
+def _payload_line(*, module: str, payload: dict[str, object]) -> str:
+    return json.dumps({"CurrentModule": module, "Payload": json.dumps(payload)})
+
+
+def _append_lines(*, path: Path, lines: list[str]) -> None:
+    with path.open("a", encoding="utf-8") as log_file:
+        for line in lines:
+            log_file.write(f"{line}\n")
+
+
+def _write_lines(*, path: Path, lines: list[str]) -> None:
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+
+
+def _line_count(*, output: str, prefix: str) -> int:
+    return sum(1 for line in output.splitlines() if line.startswith(prefix))

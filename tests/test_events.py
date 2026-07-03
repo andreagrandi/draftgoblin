@@ -171,6 +171,15 @@ def test_parser_emits_account_change_when_authenticate_response_changes() -> Non
     ]
 
 
+def test_parser_ignores_draft_stack_trace_lines() -> None:
+    lines = [
+        "Wotc.Mtga.Network.ServiceWrappers.AwsEventServiceWrapper:GetBotDraftStatus(String)",
+        "Wotc.Mtga.Wrapper.Draft.<GetDraftStatus>d__60:MoveNext()",
+    ]
+
+    assert list(parse_events(lines=lines)) == []
+
+
 def test_parser_infers_completion_from_final_empty_pack_without_completed_status() -> None:
     picked_cards = [str(grp_id) for grp_id in range(1, 43)]
     payload = {

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from draftgoblin import __version__
 from draftgoblin import config
 from draftgoblin.cli import build_parser, main
+
+SCRYFALL_BULK_SAMPLE_PATH = (
+    Path(__file__).parent / "fixtures" / "scryfall-default-cards-sample.jsonl"
+)
 
 
 def test_version_output_includes_required_disclaimer(
@@ -26,7 +32,7 @@ def test_version_output_includes_required_disclaimer(
 @pytest.mark.parametrize(
     ("command", "expected_help"),
     [
-        ("watch", "Stub"),
+        ("watch", "Live"),
         ("replay", "Deterministic"),
         ("build", "Stub"),
         ("refresh-data", "Scryfall"),
@@ -49,14 +55,33 @@ def test_subcommands_are_registered_with_help_text(
     assert expected_help in captured.out
 
 
-def test_watch_stub_honors_log_path_override(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = main(argv=["watch", "--log-path", "/tmp/Player.log", "--plain"])
+def test_watch_plain_once_honors_log_path_override(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+
+    exit_code = main(
+        argv=[
+            "watch",
+            "--log-path",
+            str(log_path),
+            "--plain",
+            "--bulk-file",
+            str(SCRYFALL_BULK_SAMPLE_PATH),
+            "--app-dir",
+            str(tmp_path / "app"),
+            "--once",
+        ]
+    )
 
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "/tmp/Player.log" in captured.out
-    assert "plain-text" in captured.out
+    assert str(log_path) in captured.out
+    assert "Mode: plain-text" in captured.out
+    assert captured.err == ""
 
 
 def test_config_exposes_documented_tunables() -> None:
