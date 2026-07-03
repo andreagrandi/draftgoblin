@@ -65,6 +65,21 @@ def test_recreated_log_resets_offset_without_replaying_old_lines(tmp_path: Path)
     assert follower.poll() == ()
 
 
+def test_rewritten_same_size_log_resets_offset(tmp_path: Path) -> None:
+    app_dir = tmp_path / "app"
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("old\n", encoding="utf-8")
+    follower = LogFollower(log_path=log_path, app_dir=app_dir)
+
+    assert follower.poll() == ("old",)
+
+    with log_path.open("r+b") as log_file:
+        log_file.write(b"new\n")
+
+    assert follower.poll() == ("new",)
+    assert follower.poll() == ()
+
+
 def test_rotation_to_player_prev_recovers_unread_tail_once(tmp_path: Path) -> None:
     app_dir = tmp_path / "app"
     log_path = tmp_path / "Player.log"

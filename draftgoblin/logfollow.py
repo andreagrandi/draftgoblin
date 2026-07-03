@@ -23,6 +23,7 @@ PathInput: TypeAlias = str | PathLike[str]
 OFFSET_DIRECTORY_NAME = "logfollow"
 OFFSET_SCHEMA_VERSION = 1
 STATE_HASH_LENGTH = 16
+FINGERPRINT_SAMPLE_BYTES = 4096
 
 
 class LogFollowError(RuntimeError):
@@ -68,6 +69,7 @@ class OffsetState:
     log_path: str
     offset: int
     file_identity: FileIdentity
+    content_fingerprint: str | None
 
     def to_json(self) -> dict[str, object]:
         """Convert the state to persisted JSON.
@@ -79,6 +81,7 @@ class OffsetState:
             "log_path": self.log_path,
             "offset": self.offset,
             "file_identity": self.file_identity.to_json(),
+            "content_fingerprint": self.content_fingerprint,
         }
 
     @classmethod
@@ -109,6 +112,10 @@ class OffsetState:
             log_path=_required_str(data.get("log_path"), field_name="log_path"),
             offset=offset,
             file_identity=FileIdentity.from_json(data=identity_value),
+            content_fingerprint=_optional_str(
+                data.get("content_fingerprint"),
+                field_name="content_fingerprint",
+            ),
         )
 
 
@@ -181,6 +188,9 @@ class LogFollower:
             if opened.size < state.offset:
                 return self._read_current(opened=opened, offset=0)
 
+            if not _emitted_prefix_matches(handle=opened.handle, state=state):
+                return self._read_current(opened=opened, offset=0)
+
             return self._read_current(opened=opened, offset=state.offset)
         finally:
             opened.handle.close()
@@ -224,6 +234,10 @@ class LogFollower:
                     log_path=str(self.log_path),
                     offset=current_result.next_offset,
                     file_identity=current_opened.identity,
+                    content_fingerprint=_content_fingerprint(
+                        handle=current_opened.handle,
+                        offset=current_result.next_offset,
+                    ),
                 )
             )
         finally:
@@ -238,6 +252,10 @@ class LogFollower:
                 log_path=str(self.log_path),
                 offset=result.next_offset,
                 file_identity=opened.identity,
+                content_fingerprint=_content_fingerprint(
+                    handle=opened.handle,
+                    offset=result.next_offset,
+                ),
             )
         )
         return result.lines
@@ -353,6 +371,32 @@ def _read_complete_lines(*, handle: BinaryIO, offset: int) -> _ReadResult:
     )
 
 
+def _emitted_prefix_matches(*, handle: BinaryIO, state: OffsetState) -> bool:
+    if state.content_fingerprint is None:
+        return True
+
+    return (
+        _content_fingerprint(handle=handle, offset=state.offset)
+        == state.content_fingerprint
+    )
+
+
+def _content_fingerprint(*, handle: BinaryIO, offset: int) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(str(offset).encode("ascii"))
+    hasher.update(b"\0")
+    if offset <= FINGERPRINT_SAMPLE_BYTES * 2:
+        handle.seek(0)
+        hasher.update(handle.read(offset))
+        return hasher.hexdigest()
+
+    handle.seek(0)
+    hasher.update(handle.read(FINGERPRINT_SAMPLE_BYTES))
+    handle.seek(offset - FINGERPRINT_SAMPLE_BYTES)
+    hasher.update(handle.read(FINGERPRINT_SAMPLE_BYTES))
+    return hasher.hexdigest()
+
+
 def _default_previous_log_path(
     *,
     log_path: Path,
@@ -372,6 +416,13 @@ def _required_str(value: Any, *, field_name: str) -> str:
         raise LogFollowError(f"Missing or invalid {field_name}; expected non-empty string.")
 
     return value
+
+
+def _optional_str(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+
+    return _required_str(value, field_name=field_name)
 
 
 def _required_int(value: Any, *, field_name: str) -> int:
