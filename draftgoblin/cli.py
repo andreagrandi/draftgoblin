@@ -20,9 +20,11 @@ from draftgoblin.carddb import (
 )
 from draftgoblin.config import COLOR_PAIRS
 from draftgoblin.events import DraftLogParseError
+from draftgoblin.logfollow import LogFollowError
 from draftgoblin.paths import UnsupportedPlatformError, resolve_player_log_path
 from draftgoblin.pool import DraftPoolError
 from draftgoblin.replay import ReplayError, replay_log_file
+from draftgoblin.watch import run_plain_watch
 
 CommandHandler = Callable[[argparse.Namespace], int]
 
@@ -51,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser = subparsers.add_parser(
         name="watch",
         help="Watch Player.log and show live draft recommendations.",
-        description="Stub for the future live log watcher and TUI entry point.",
+        description="Live log watcher. Plain mode streams replay-compatible text.",
     )
     watch_parser.add_argument(
         "--log-path",
@@ -63,6 +65,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--plain",
         action="store_true",
         help="Use plain-text output instead of the future TUI.",
+    )
+    watch_parser.add_argument(
+        "--bulk-file",
+        type=Path,
+        default=None,
+        help=(
+            "Resolve card names from a local Scryfall JSONL(.gz) bulk file "
+            "instead of the cached card database."
+        ),
+    )
+    watch_parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between Player.log polls in watch mode.",
+    )
+    watch_parser.add_argument(
+        "--startup-scan",
+        action="store_true",
+        help="Scan Player-prev.log and Player.log at startup before tailing.",
+    )
+    watch_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Process one poll cycle and exit.",
+    )
+    watch_parser.add_argument(
+        "--app-dir",
+        type=Path,
+        default=None,
+        help=argparse.SUPPRESS,
     )
     watch_parser.set_defaults(handler=handle_watch)
 
@@ -156,19 +189,55 @@ def format_version() -> str:
 
 
 def handle_watch(args: argparse.Namespace) -> int:
-    """Handle the watch command stub.
-    Resolve Player.log now so --log-path wiring is covered by tests.
+    """Handle live Player.log watching.
+    Plain mode follows the log and renders replay-compatible pack output.
     """
 
     try:
         log_path = resolve_player_log_path(log_path=args.log_path)
     except UnsupportedPlatformError as error:
-        print(f"watch stub: {error}", file=sys.stderr)
+        print(f"watch failed: {error}", file=sys.stderr)
         return 2
 
-    mode = "plain-text" if args.plain else "TUI"
-    print(f"watch stub: would monitor {log_path} in {mode} mode.")
-    return 0
+    if not args.plain:
+        print(
+            "watch TUI is not implemented yet; rerun with --plain for live text output.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.poll_interval <= 0:
+        print("watch failed: --poll-interval must be greater than zero.", file=sys.stderr)
+        return 2
+
+    try:
+        database = _load_watch_card_database(args=args)
+        return run_plain_watch(
+            log_path=log_path,
+            card_database=database,
+            app_dir=args.app_dir,
+            poll_interval=args.poll_interval,
+            once=args.once,
+            startup_scan=args.startup_scan,
+        )
+    except KeyboardInterrupt:
+        return 130
+    except (
+        CardDatabaseError,
+        DraftLogParseError,
+        DraftPoolError,
+        LogFollowError,
+    ) as error:
+        print(f"watch failed: {error}", file=sys.stderr)
+        return 1
+
+
+def _load_watch_card_database(*, args: argparse.Namespace) -> CardDatabase:
+    """Load watch card metadata without implicit network access.
+    Users can run refresh-data first or pass a local bulk file for tests.
+    """
+
+    return _load_replay_card_database(args=args)
 
 
 def handle_replay(args: argparse.Namespace) -> int:

@@ -112,15 +112,31 @@ class _ParserState:
     account_id: str | None = None
 
 
+class DraftLogParser:
+    """Incrementally parse Quick Draft log lines.
+    Parser state preserves the active account across live polling batches.
+    """
+
+    def __init__(self) -> None:
+        self._state = _ParserState()
+
+    def parse_lines(self, *, lines: Iterable[str]) -> Iterator[DraftEvent]:
+        """Yield typed Quick Draft events from complete log lines.
+        The function consumes strings only and performs no I/O.
+        """
+
+        for raw_line in lines:
+            line = raw_line.rstrip("\r\n")
+            yield from _parse_line(line=line, state=self._state)
+
+
 def parse_events(lines: Iterable[str]) -> Iterator[DraftEvent]:
     """Yield typed Quick Draft events from log lines.
     The function consumes strings only and performs no I/O.
     """
 
-    state = _ParserState()
-    for raw_line in lines:
-        line = raw_line.rstrip("\r\n")
-        yield from _parse_line(line=line, state=state)
+    parser = DraftLogParser()
+    yield from parser.parse_lines(lines=lines)
 
 
 def _parse_line(line: str, state: _ParserState) -> tuple[DraftEvent, ...]:
@@ -628,14 +644,16 @@ def _mapping_contains_draft_shape(data: dict[str, Any]) -> bool:
 
 
 def _contains_unparsed_draft_shape(line: str) -> bool:
+    if "BotDraft_Draft" in line:
+        return True
+
     return any(
         token in line
         for token in (
-            "BotDraftDraft",
-            QUICK_DRAFT_PREFIX,
-            "DraftPack",
-            "PickInfo",
-            "DraftStatus",
+            "\"BotDraftDraft",
+            "\"DraftPack\"",
+            "\"PickInfo\"",
+            "\"DraftStatus\"",
         )
     )
 
