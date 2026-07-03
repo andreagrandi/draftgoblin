@@ -27,11 +27,19 @@ class DeckBuilderConfig:
 @dataclass(frozen=True)
 class PickEngineConfig:
     """Pick-engine scoring defaults.
-    Tune these as fixture replay and 17lands data integration mature.
+    Scores stay integer-only for scan-friendly draft tables.
     """
 
     neutral_prior_score: float = 50.0
+    neutral_prior_win_rate: float = 0.55
     thin_sample_minimum: int = 500
+    alsa_adjustment_max: float = 0.03
+    alsa_early_pick: float = 1.0
+    alsa_late_pick: float = 8.0
+    normalization_lower_percentile: float = 5.0
+    normalization_upper_percentile: float = 95.0
+    normalization_min_half_span: float = 0.05
+    score_decimal_places: int = 0
     open_pick_count: int = 5
     commitment_start_pick: int = 6
     locked_pick_index: int = 16

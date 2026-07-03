@@ -4,7 +4,9 @@ An unofficial Quick Draft assistant for MTG Arena.
 
 ## Status
 
-Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with parser-backed `replay` and `watch --plain` commands, a `refresh-data` command, and a stub `build` subcommand so scoring, deck building, and TUI work can land incrementally.
+Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with parser-backed `replay` and `watch --plain` commands, score-sorted pick tables, a `refresh-data` command, and a stub `build` subcommand so deck building and TUI work can land incrementally.
+
+See [docs/pick-scoring.md](docs/pick-scoring.md) for the initial 0–100 scoring model and integer tie-display decision.
 
 ## Usage
 

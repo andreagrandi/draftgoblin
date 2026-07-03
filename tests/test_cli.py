@@ -88,6 +88,8 @@ def test_config_exposes_documented_tunables() -> None:
     assert config.DECK_BUILDER.target_spell_count == 23
     assert config.DECK_BUILDER.default_land_count == 17
     assert config.PICK_ENGINE.thin_sample_minimum == 500
+    assert config.PICK_ENGINE.neutral_prior_win_rate == 0.55
+    assert config.PICK_ENGINE.score_decimal_places == 0
     assert config.POLL_INTERVAL_SECONDS == 1.0
     assert "WU" in config.COLOR_PAIRS
 

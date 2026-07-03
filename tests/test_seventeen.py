@@ -12,6 +12,7 @@ from draftgoblin.seventeen import (
     QUICK_DRAFT_FORMAT,
     SEVENTEEN_LANDS_ATTRIBUTION,
     SeventeenLandsError,
+    load_cached_17lands_data,
     load_or_refresh_17lands_data,
     load_or_refresh_17lands_format_data,
     seventeen_lands_cache_path,
@@ -149,6 +150,19 @@ def test_quickdraft_ratings_fall_back_to_premier_then_neutral_prior(
     assert neutral.metadata.fallback_reason == "fallback-missing"
     assert neutral.neutral_prior_score == PICK_ENGINE.neutral_prior_score
     assert data.attribution == SEVENTEEN_LANDS_ATTRIBUTION
+
+
+def test_cached_17lands_data_uses_empty_primary_when_cache_is_missing(
+    tmp_path: Path,
+) -> None:
+    data = load_cached_17lands_data(set_code="TST", app_dir=tmp_path)
+
+    rating = data.rating_for(grp_id=9999)
+
+    assert data.primary.card_ratings == {}
+    assert data.fallback is None
+    assert rating.neutral_prior is True
+    assert rating.metadata.source == NEUTRAL_PRIOR_SOURCE
 
 
 def test_pair_win_rates_are_available_for_all_ten_pairs(tmp_path: Path) -> None:

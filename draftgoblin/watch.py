@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from os import PathLike
 from pathlib import Path
 from typing import TextIO, TypeAlias
@@ -23,14 +23,17 @@ from draftgoblin.events import (
     PickMadeEvent,
 )
 from draftgoblin.logfollow import LogFollower
+from draftgoblin.pickengine import PickEngine
 from draftgoblin.pool import DraftPoolStore
 from draftgoblin.replay import (
     format_draft_completed_event,
     format_pack_offered_event,
     format_pick_made_event,
 )
+from draftgoblin.seventeen import SeventeenLandsData, SeventeenLandsError
 
 PathInput: TypeAlias = str | PathLike[str]
+RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
 
 
 class PlainLogWatcher:
@@ -46,6 +49,7 @@ class PlainLogWatcher:
         app_dir: PathInput | None = None,
         poll_interval: float = POLL_INTERVAL_SECONDS,
         previous_log_path: PathInput | None = None,
+        ratings_loader: RatingsLoader | None = None,
     ) -> None:
         self.log_path = Path(log_path).expanduser().resolve(strict=False)
         self.card_database = card_database
@@ -57,6 +61,8 @@ class PlainLogWatcher:
         )
         self.parser = DraftLogParser()
         self.store = DraftPoolStore(app_dir=app_dir)
+        self.ratings_loader = ratings_loader
+        self._pick_engines_by_set: dict[str, PickEngine] = {}
         self._account_labels: dict[str, str] = {}
         self._active_account_id: str | None = None
 
@@ -109,18 +115,19 @@ class PlainLogWatcher:
 
         if isinstance(event, PackOfferedEvent):
             self._active_account_id = event.account_id or self._active_account_id
+            pack_lines = format_pack_offered_event(
+                event=event,
+                card_database=self.card_database,
+                pick_engine=self._pick_engine_for_set(set_code=event.set_code),
+            )
             lines = [
                 "Status: "
                 f"active account {self._account_label(account_id=event.account_id)}, "
                 f"pick P{event.pack_number + 1}P{event.pick_number + 1}, "
-                f"pool {len(event.pool_grp_ids)}"
+                f"pool {len(event.pool_grp_ids)}, "
+                f"data {_data_source_from_pack_lines(lines=pack_lines)}"
             ]
-            lines.extend(
-                format_pack_offered_event(
-                    event=event,
-                    card_database=self.card_database,
-                )
-            )
+            lines.extend(pack_lines)
             return lines
 
         if isinstance(event, PickMadeEvent):
@@ -172,6 +179,22 @@ class PlainLogWatcher:
     def _known_account_label(self, client_id: str) -> str:
         return self._account_labels.get(client_id, client_id)
 
+    def _pick_engine_for_set(self, *, set_code: str) -> PickEngine:
+        engine = self._pick_engines_by_set.get(set_code)
+        if engine is not None:
+            return engine
+
+        ratings_data = None
+        if self.ratings_loader is not None:
+            try:
+                ratings_data = self.ratings_loader(set_code)
+            except SeventeenLandsError:
+                ratings_data = None
+
+        engine = PickEngine(ratings_data=ratings_data)
+        self._pick_engines_by_set[set_code] = engine
+        return engine
+
 
 def run_plain_watch(
     *,
@@ -183,6 +206,7 @@ def run_plain_watch(
     once: bool = False,
     startup_scan: bool = False,
     stop_after_empty_polls: int | None = None,
+    ratings_loader: RatingsLoader | None = None,
 ) -> int:
     """Run watch --plain until interrupted or a test stop condition fires.
     The process returns zero unless a caller catches and maps an exception.
@@ -196,6 +220,7 @@ def run_plain_watch(
         card_database=card_database,
         app_dir=app_dir,
         poll_interval=poll_interval,
+        ratings_loader=ratings_loader,
     )
     output.write("Draftgoblin watch\n")
     output.write(f"Watching: {watcher.log_path}\n")
@@ -230,6 +255,14 @@ def _write_if_present(*, output: TextIO, text: str) -> None:
 
     output.write(text)
     output.flush()
+
+
+def _data_source_from_pack_lines(*, lines: list[str]) -> str:
+    for line in lines:
+        if line.startswith("Data source: "):
+            return line.removeprefix("Data source: ")
+
+    return "unknown"
 
 
 def _format_account_label(*, client_id: str, screen_name: str | None) -> str:
