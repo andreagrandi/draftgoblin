@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
@@ -23,6 +24,7 @@ from draftgoblin.seventeen import (
 )
 
 PathInput: TypeAlias = str | PathLike[str]
+CardQuantityKey: TypeAlias = tuple[str, str]
 SPELL_TYPE_MARKERS = (
     "Creature",
     "Artifact",
@@ -326,10 +328,17 @@ def select_color_pair(
         pool_grp_ids=(),
         pick_index=1,
     )
+    scored_cards = _limit_cards_to_pool_quantities(
+        cards=scored_pool.cards,
+        available_quantities=_pool_card_quantities(
+            pool_grp_ids=pool_grp_ids,
+            card_database=card_database,
+        ),
+    )
     scores = tuple(
         _score_pair(
             pair=pair,
-            scored_cards=scored_pool.cards,
+            scored_cards=scored_cards,
             ratings_data=ratings_data,
             config=config,
         )
@@ -410,16 +419,23 @@ def select_deck_spells(
         pool_grp_ids=(),
         pick_index=1,
     )
-    candidates = tuple(
-        card
-        for card in scored_pool.cards
-        if _is_eligible_spell_for_pair(
-            card=card,
-            pair=resolved_pair,
-            allow_splash=allow_splash,
-            splash_fixing_counts=splash_fixing_counts,
-            config=effective_config,
-        )
+    available_quantities = _pool_card_quantities(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+    )
+    candidates = _limit_cards_to_pool_quantities(
+        cards=tuple(
+            card
+            for card in scored_pool.cards
+            if _is_eligible_spell_for_pair(
+                card=card,
+                pair=resolved_pair,
+                allow_splash=allow_splash,
+                splash_fixing_counts=splash_fixing_counts,
+                config=effective_config,
+            )
+        ),
+        available_quantities=available_quantities,
     )
     _validate_spell_candidates(
         candidates=candidates,
@@ -439,6 +455,7 @@ def select_deck_spells(
         )
         selected = _select_with_constraints(
             candidates=candidates,
+            available_quantities=available_quantities,
             pair=resolved_pair,
             constraints=constraints,
             config=effective_config,
@@ -1310,6 +1327,7 @@ def _constraint_plans() -> tuple[_ConstraintPlan, ...]:
 def _select_with_constraints(
     *,
     candidates: tuple[ScoredCard, ...],
+    available_quantities: Counter[CardQuantityKey],
     pair: str,
     constraints: SpellConstraints,
     config: DeckBuilderConfig,
@@ -1331,6 +1349,7 @@ def _select_with_constraints(
             ordered_indices=tuple(ordered_indices),
             selected=tuple(selected),
             remaining=tuple(remaining),
+            available_quantities=available_quantities,
             constraints=constraints,
             pair=pair,
             config=config,
@@ -1344,6 +1363,9 @@ def _select_with_constraints(
     if _counts_satisfy_constraints(
         counts=_spell_counts(cards=result, pair=pair, config=config),
         constraints=constraints,
+    ) and not _exceeds_available_card_quantities(
+        cards=result,
+        available_quantities=available_quantities,
     ):
         return result
 
@@ -1356,6 +1378,7 @@ def _first_feasible_index(
     ordered_indices: tuple[int, ...],
     selected: tuple[ScoredCard, ...],
     remaining: tuple[ScoredCard, ...],
+    available_quantities: Counter[CardQuantityKey],
     constraints: SpellConstraints,
     pair: str,
     config: DeckBuilderConfig,
@@ -1368,6 +1391,7 @@ def _first_feasible_index(
             candidate=remaining[index],
             selected=selected,
             remaining_after=remaining_after,
+            available_quantities=available_quantities,
             constraints=constraints,
             pair=pair,
             config=config,
@@ -1383,6 +1407,7 @@ def _can_add_spell(
     candidate: ScoredCard,
     selected: tuple[ScoredCard, ...],
     remaining_after: tuple[ScoredCard, ...],
+    available_quantities: Counter[CardQuantityKey],
     constraints: SpellConstraints,
     pair: str,
     config: DeckBuilderConfig,
@@ -1399,6 +1424,12 @@ def _can_add_spell(
         return False
 
     if counts.splashes > constraints.maximum_splash_spells:
+        return False
+
+    if _exceeds_available_card_quantities(
+        cards=next_selected,
+        available_quantities=available_quantities,
+    ):
         return False
 
     return _can_complete_selection(
@@ -1500,6 +1531,60 @@ def _candidate_selection_sort_key(
         -card.base_rating,
         card.original_index,
     )
+
+
+
+def _pool_card_quantities(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+) -> Counter[CardQuantityKey]:
+    return Counter(
+        _card_quantity_key(card=card_database.lookup(grp_id=grp_id))
+        for grp_id in pool_grp_ids
+    )
+
+
+
+def _limit_cards_to_pool_quantities(
+    *,
+    cards: tuple[ScoredCard, ...],
+    available_quantities: Counter[CardQuantityKey],
+) -> tuple[ScoredCard, ...]:
+    used_quantities: Counter[CardQuantityKey] = Counter()
+    limited_cards: list[ScoredCard] = []
+    for card in cards:
+        quantity_key = _card_quantity_key(card=card.card)
+        if used_quantities[quantity_key] >= available_quantities[quantity_key]:
+            continue
+
+        used_quantities[quantity_key] += 1
+        limited_cards.append(card)
+
+    return tuple(limited_cards)
+
+
+
+def _exceeds_available_card_quantities(
+    *,
+    cards: tuple[ScoredCard, ...],
+    available_quantities: Counter[CardQuantityKey],
+) -> bool:
+    selected_quantities: Counter[CardQuantityKey] = Counter(
+        _card_quantity_key(card=card.card) for card in cards
+    )
+    return any(
+        count > available_quantities[quantity_key]
+        for quantity_key, count in selected_quantities.items()
+    )
+
+
+
+def _card_quantity_key(*, card: CardInfo) -> CardQuantityKey:
+    if card.unknown:
+        return ("unknown", str(card.grp_id))
+
+    return ("name", " ".join(card.name.casefold().split()))
 
 
 

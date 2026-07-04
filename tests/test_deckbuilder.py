@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -21,6 +22,7 @@ from draftgoblin.deckbuilder import (
     select_deck_spells,
     select_mana_base,
 )
+from draftgoblin.pickengine import PickEngine, ScoredPack
 from draftgoblin.pool import DraftState, save_draft_state
 from draftgoblin.seventeen import (
     QUICK_DRAFT_FORMAT,
@@ -179,6 +181,64 @@ def test_select_deck_spells_fills_exact_23_with_structural_constraints() -> None
     assert selection.counts.two_drops >= DECK_BUILDER.minimum_two_drops
     assert selection.counts.expensive <= DECK_BUILDER.maximum_expensive_spells
     assert selection.applied_relaxations == ()
+
+
+
+def test_spell_selection_ignores_scored_duplicates_beyond_pool_quantity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+        bench_card_count=0,
+    )
+    original_score_pack = PickEngine.score_pack
+
+    def duplicated_score_pack(self: PickEngine, **kwargs: Any) -> ScoredPack:
+        scored_pack = original_score_pack(self, **kwargs)
+        return replace(scored_pack, cards=(scored_pack.cards[0], *scored_pack.cards))
+
+    monkeypatch.setattr(PickEngine, "score_pack", duplicated_score_pack)
+
+    selection = select_deck_spells(
+        pool_grp_ids=(1, 2, 3, 4),
+        card_database=_card_database(),
+        pair="WU",
+        ratings_data=_ratings_data(),
+        config=config,
+    )
+
+    selected_grp_ids = [spell.card.grp_id for spell in selection.spells]
+    assert selected_grp_ids.count(1) == 1
+    assert selection.eligible_count == 4
+    assert selection.counts.total == 4
+
+
+
+def test_spell_selection_allows_duplicate_cards_when_pool_has_multiple_copies() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=2,
+        creature_floor=0,
+        creature_ceiling=2,
+        minimum_two_drops=0,
+        maximum_expensive_spells=2,
+        bench_card_count=0,
+    )
+
+    selection = select_deck_spells(
+        pool_grp_ids=(1, 1, 2),
+        card_database=_card_database(),
+        pair="WU",
+        ratings_data=_ratings_data(),
+        config=config,
+    )
+
+    assert [spell.card.grp_id for spell in selection.spells] == [1, 1]
 
 
 
