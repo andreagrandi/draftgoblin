@@ -96,6 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use plain-text output instead of the default TUI.",
     )
     watch_parser.add_argument(
+        "--mana-icons",
+        action="store_true",
+        help="Opt in to Mana font icons in the Textual TUI.",
+    )
+    watch_parser.add_argument(
         "--bulk-file",
         type=Path,
         default=None,
@@ -387,6 +392,7 @@ def handle_watch(args: argparse.Namespace) -> int:
             once=args.once,
             startup_scan=args.startup_scan,
             ratings_loader=ratings_loader,
+            mana_icons_enabled=args.mana_icons,
         )
     except KeyboardInterrupt:
         return 130

@@ -120,6 +120,38 @@ def test_watch_tui_once_is_default_mode(
     assert captured.err == ""
 
 
+def test_watch_mana_icons_flag_is_explicit_tui_opt_in(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_tui_watch(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "run_tui_watch", fake_run_tui_watch)
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+
+    exit_code = main(
+        argv=[
+            "watch",
+            "--log-path",
+            str(log_path),
+            "--mana-icons",
+            "--bulk-file",
+            str(SCRYFALL_BULK_SAMPLE_PATH),
+            "--once",
+        ]
+    )
+
+    default_args = build_parser().parse_args(args=["watch"])
+
+    assert exit_code == 0
+    assert default_args.mana_icons is False
+    assert captured["mana_icons_enabled"] is True
+
 
 def test_build_pool_file_selects_pair_offline(
     tmp_path: Path,
