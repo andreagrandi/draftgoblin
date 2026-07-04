@@ -533,6 +533,25 @@ class DraftgoblinTuiApp(App[None]):
         self._account_labels[event.client_id] = label
         self._active_account_id = event.client_id
         self._active_account_label = label
+        self._recover_latest_account_state(account_id=event.client_id)
+
+    def _recover_latest_account_state(self, *, account_id: str) -> None:
+        if (
+            self._draft_id is not None
+            or self._current_pack_event is not None
+            or self._pool_grp_ids
+        ):
+            return
+
+        states = tuple(
+            state
+            for state in self._available_draft_states()
+            if state.account_id == account_id and state.pool_grp_ids
+        )
+        if not states:
+            return
+
+        self._select_draft_state(state=max(states, key=_latest_draft_state_sort_key))
 
     def _consume_started_event(self, *, event: DraftStartedEvent) -> None:
         self._active_account_id = event.account_id or self._active_account_id
@@ -646,6 +665,17 @@ class DraftgoblinTuiApp(App[None]):
 
     def _remember_draft_state(self, *, state: DraftState) -> None:
         self._draft_states_by_key[(state.account_id, state.draft_id)] = state
+        self._remember_account_label(state=state)
+
+    def _remember_account_label(self, *, state: DraftState) -> None:
+        if state.account_screen_name is not None:
+            self._account_labels.setdefault(
+                state.account_id,
+                _format_account_label(
+                    client_id=state.account_id,
+                    screen_name=state.account_screen_name,
+                ),
+            )
 
     def _available_draft_states(self) -> tuple[DraftState, ...]:
         states = {
@@ -656,6 +686,9 @@ class DraftgoblinTuiApp(App[None]):
         values = tuple(states.values())
         if not values:
             return ()
+
+        for state in values:
+            self._remember_account_label(state=state)
 
         matching_event = tuple(
             state
@@ -1370,6 +1403,10 @@ def _row_cells(
 
 def _draft_pick_index(*, event: PackOfferedEvent) -> int:
     return (event.pack_number * EXPECTED_PICKS_PER_PACK) + event.pick_number + 1
+
+
+def _latest_draft_state_sort_key(state: DraftState) -> tuple[str, str, str]:
+    return (state.updated_at, state.account_id, state.draft_id)
 
 
 def _format_account_label(*, client_id: str, screen_name: str | None) -> str:

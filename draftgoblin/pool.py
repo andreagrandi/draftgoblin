@@ -111,6 +111,7 @@ class DraftState:
     completed: bool
     picks: tuple[DraftPick, ...]
     pool_grp_ids: tuple[int, ...]
+    account_screen_name: str | None = None
 
     @property
     def chosen_pick_count(self) -> int:
@@ -139,6 +140,7 @@ class DraftState:
         return {
             "schema_version": STATE_SCHEMA_VERSION,
             "account_id": self.account_id,
+            "account_screen_name": self.account_screen_name,
             "draft_id": self.draft_id,
             "event_name": self.event_name,
             "set_code": self.set_code,
@@ -179,6 +181,10 @@ class DraftState:
         )
         return cls(
             account_id=_required_str(data.get("account_id"), field_name="account_id"),
+            account_screen_name=_optional_str(
+                data.get("account_screen_name"),
+                field_name="account_screen_name",
+            ),
             draft_id=_required_str(data.get("draft_id"), field_name="draft_id"),
             event_name=_required_str(data.get("event_name"), field_name="event_name"),
             set_code=_required_str(data.get("set_code"), field_name="set_code"),
@@ -294,6 +300,7 @@ class DraftPoolStore:
         self.root = draft_state_root(app_dir=app_dir)
         self._clock = _system_clock if clock is None else clock
         self._active_account_id: str | None = None
+        self._account_screen_names: dict[str, str] = {}
         self._draft_ids_by_event: dict[tuple[str, str], str] = {}
 
     def consume_all(self, *, events: Iterable[DraftEvent]) -> tuple[DraftState, ...]:
@@ -355,6 +362,9 @@ class DraftPoolStore:
 
     def _consume_account(self, *, event: AccountEvent) -> None:
         self._active_account_id = event.client_id
+        if event.screen_name is not None:
+            self._account_screen_names[event.client_id] = event.screen_name
+
         return None
 
     def _consume_started(self, *, event: DraftStartedEvent) -> DraftState:
@@ -388,6 +398,7 @@ class DraftPoolStore:
             completed=False,
             picks=(),
             pool_grp_ids=(),
+            account_screen_name=self._account_screen_name(account_id=account_id),
         )
         save_draft_state(state=state, app_dir=self.app_dir)
         return state
@@ -565,6 +576,7 @@ class DraftPoolStore:
             completed=False,
             picks=(),
             pool_grp_ids=(),
+            account_screen_name=self._account_screen_name(account_id=account_id),
         )
         save_draft_state(state=state, app_dir=self.app_dir)
         return state
@@ -587,7 +599,7 @@ class DraftPoolStore:
         ]
         active_matches = [state for state in matches if not state.completed]
         if len(active_matches) == 1:
-            return active_matches[0]
+            return self._with_current_account_metadata(state=active_matches[0])
 
         if len(active_matches) > 1:
             raise DraftPoolError(
@@ -595,7 +607,7 @@ class DraftPoolStore:
             )
 
         if len(matches) == 1:
-            return matches[0]
+            return self._with_current_account_metadata(state=matches[0])
 
         if len(matches) > 1:
             raise DraftPoolError(
@@ -613,7 +625,23 @@ class DraftPoolStore:
         if not path.exists():
             return None
 
-        return _load_state_file(path=path)
+        state = _load_state_file(path=path)
+        return self._with_current_account_metadata(state=state)
+
+    def _account_screen_name(self, *, account_id: str) -> str | None:
+        return self._account_screen_names.get(account_id)
+
+    def _with_current_account_metadata(self, *, state: DraftState) -> DraftState:
+        account_screen_name = self._account_screen_name(account_id=state.account_id)
+        if (
+            account_screen_name is None
+            or state.account_screen_name == account_screen_name
+        ):
+            return state
+
+        updated = replace(state, account_screen_name=account_screen_name)
+        save_draft_state(state=updated, app_dir=self.app_dir)
+        return updated
 
     def _remember_draft(self, *, account_id: str, event_name: str, draft_id: str) -> None:
         self._draft_ids_by_event[(account_id, event_name)] = draft_id
