@@ -16,6 +16,11 @@ from draftgoblin.backtest import (
     generate_backtest_report,
     load_persisted_backtest_state,
 )
+from draftgoblin.benchmark import (
+    PickBenchmarkError,
+    format_pick_benchmark_report,
+    generate_pick_benchmark_report,
+)
 from draftgoblin.carddb import (
     CardDatabase,
     CardDatabaseError,
@@ -43,6 +48,7 @@ from draftgoblin.pool import DraftPoolError
 from draftgoblin.ranking import DEFAULT_RANKING_MODE, RANKING_MODES
 from draftgoblin.replay import ReplayError, replay_log_file
 from draftgoblin.seventeen import (
+    PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
     ResolvedCardRating,
     SeventeenLandsData,
@@ -247,7 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ranking",
         choices=RANKING_MODES,
         default=DEFAULT_RANKING_MODE,
-        help="Ranking used for recommendations (default: 17L WR).",
+        help="Ranking used for recommendations (default: DG Score).",
     )
     backtest_parser.add_argument(
         "--bulk-file",
@@ -265,6 +271,71 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
     backtest_parser.set_defaults(handler=handle_backtest)
+
+    benchmark_parser = subparsers.add_parser(
+        name="benchmark-picks",
+        help="Benchmark pick rankings against 17Lands public trophy drafts.",
+        description=(
+            "Offline benchmark for 17Lands WR vs DG Score using a local "
+            "17Lands public draft-data CSV(.gz) dump."
+        ),
+    )
+    benchmark_parser.add_argument(
+        "--set-code",
+        required=True,
+        help="Set code for the public draft data dump.",
+    )
+    benchmark_parser.add_argument(
+        "--format",
+        default=PREMIER_DRAFT_FORMAT,
+        help=f"17Lands event format (default: {PREMIER_DRAFT_FORMAT}).",
+    )
+    benchmark_parser.add_argument(
+        "--draft-data-file",
+        type=Path,
+        required=True,
+        help="Local 17Lands public draft-data CSV(.gz) or tar.gz file to analyze.",
+    )
+    benchmark_parser.add_argument(
+        "--max-drafts",
+        type=int,
+        default=None,
+        help="Optional cap on matching trophy drafts for quick smoke runs.",
+    )
+    benchmark_parser.set_defaults(trophy_only=True)
+    benchmark_parser.add_argument(
+        "--trophy-only",
+        dest="trophy_only",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    benchmark_parser.add_argument(
+        "--include-non-trophy",
+        dest="trophy_only",
+        action="store_false",
+        help="Benchmark all matching drafts instead of only trophy drafts.",
+    )
+    benchmark_parser.add_argument(
+        "--refresh-ratings",
+        action="store_true",
+        help="Refresh 17Lands ratings before running instead of using cache only.",
+    )
+    benchmark_parser.add_argument(
+        "--bulk-file",
+        type=Path,
+        default=None,
+        help=(
+            "Resolve card names from a local Scryfall JSONL(.gz) bulk file "
+            "instead of the cached card database."
+        ),
+    )
+    benchmark_parser.add_argument(
+        "--app-dir",
+        type=Path,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    benchmark_parser.set_defaults(handler=handle_benchmark_picks)
 
     refresh_parser = subparsers.add_parser(
         name="refresh-data",
@@ -593,6 +664,88 @@ def _load_optional_backtest_ratings_data(
     return ratings_data
 
 
+def handle_benchmark_picks(args: argparse.Namespace) -> int:
+    """Handle public-data recommendation calibration benchmarks.
+    The benchmark reads local draft data and cached ratings by default.
+    """
+
+    try:
+        _print_benchmark_progress("loading 17Lands ratings")
+        ratings_data = _load_benchmark_ratings_data(args=args)
+        _print_benchmark_progress("loading optional cached card metadata")
+        database = _load_benchmark_card_database(args=args)
+        _print_benchmark_progress(
+            "scoring public draft rows; full 17Lands dumps can take a few minutes"
+        )
+        report = generate_pick_benchmark_report(
+            set_code=args.set_code,
+            event_format=args.format,
+            draft_data_file=args.draft_data_file,
+            card_database=database,
+            ratings_data=ratings_data,
+            max_drafts=args.max_drafts,
+            trophy_only=args.trophy_only,
+        )
+    except (
+        CardDatabaseError,
+        OSError,
+        PickBenchmarkError,
+        SeventeenLandsError,
+    ) as error:
+        print(f"benchmark-picks failed: {error}", file=sys.stderr)
+        return 1
+
+    _print_benchmark_progress("done")
+    print(format_pick_benchmark_report(report), end="")
+    return 0
+
+
+def _print_benchmark_progress(message: str) -> None:
+    print(f"benchmark-picks: {message}...", file=sys.stderr, flush=True)
+
+
+def _load_benchmark_card_database(*, args: argparse.Namespace) -> CardDatabase:
+    """Load optional card metadata without starting large downloads.
+    17Lands ratings provide the names/colors needed by the benchmark.
+    """
+
+    if args.bulk_file is not None:
+        return build_card_database_from_bulk_file(path=args.bulk_file)
+
+    try:
+        return load_card_database(app_dir=args.app_dir)
+    except CardDatabaseError:
+        return CardDatabase(cards={})
+
+
+def _load_benchmark_ratings_data(*, args: argparse.Namespace) -> SeventeenLandsData:
+    """Load 17Lands ratings for the benchmarked set and format.
+    Cached data keeps the default path offline; a flag refreshes explicitly.
+    """
+
+    if args.refresh_ratings:
+        ratings_data = load_or_refresh_17lands_data(
+            set_code=args.set_code,
+            event_format=args.format,
+            app_dir=args.app_dir,
+            refresh=True,
+        )
+    else:
+        ratings_data = load_cached_17lands_data(
+            set_code=args.set_code,
+            event_format=args.format,
+            app_dir=args.app_dir,
+        )
+
+    if not ratings_data.ratings:
+        raise PickBenchmarkError(
+            "No cached 17Lands ratings found for this set/format; "
+            "rerun with --refresh-ratings."
+        )
+
+    return ratings_data
+
+
 def _metadata_augmenting_ratings_loader(
     *,
     args: argparse.Namespace,
@@ -673,7 +826,6 @@ def _rating_colors(*, color: str | None) -> tuple[str, ...]:
         return ()
 
     return tuple(symbol for symbol in "WUBRG" if symbol in color)
-
 
 
 def handle_refresh_data(args: argparse.Namespace) -> int:

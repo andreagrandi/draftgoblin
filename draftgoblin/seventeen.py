@@ -831,6 +831,14 @@ def public_draft_data_url(*, set_code: str, event_format: str) -> str:
     )
 
 
+def iter_17lands_draft_data_rows(*, path: PathInput) -> Iterable[Mapping[str, str]]:
+    """Iterate rows from a public 17Lands draft-data dump.
+    CSV, CSV gzip, and tar archives use the same reader path.
+    """
+
+    return _iter_draft_data_rows(path=path)
+
+
 def card_ratings_url(
     *,
     set_code: str,

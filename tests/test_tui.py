@@ -93,6 +93,27 @@ async def _assert_pack_rows_show_17lands_stats(tmp_path: Path) -> None:
         assert str(split_card_row[score_index]).isdigit()
 
 
+def test_tui_status_shows_close_pick_confidence(tmp_path: Path) -> None:
+    asyncio.run(_assert_status_shows_close_pick_confidence(tmp_path=tmp_path))
+
+
+async def _assert_status_shows_close_pick_confidence(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path, ratings_loader=_close_pick_ratings_data)
+
+    async with app.run_test(size=(150, 24)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if "MSH" not in app.loading_rating_sets:
+                break
+
+        status = _status_text(app=app)
+
+        assert "Ranking: DG Score" in status
+        assert "Confidence: early/open close pick" in status
+        assert "DG points" in status
+
+
 def test_tui_warns_when_card_metadata_is_incomplete(tmp_path: Path) -> None:
     asyncio.run(_assert_tui_warns_when_card_metadata_is_incomplete(tmp_path=tmp_path))
 
@@ -181,12 +202,12 @@ async def _assert_keybindings_toggle_columns_and_sort(tmp_path: Path) -> None:
             "colors",
         )
 
-        assert app.sort_mode == "win_rate"
-        assert "Ranking: 17L WR" in _status_text(app=app)
-
-        await pilot.press("s")
         assert app.sort_mode == "score"
         assert "Ranking: DG Score" in _status_text(app=app)
+
+        await pilot.press("s")
+        assert app.sort_mode == "win_rate"
+        assert "Ranking: 17L WR" in _status_text(app=app)
 
         await pilot.press("s")
         assert app.sort_mode == "alsa"
@@ -606,13 +627,13 @@ async def _assert_backtest_keybinding_opens_report(tmp_path: Path) -> None:
         build_scroll = app.query_one("#build-scroll", VerticalScroll)
         pool_summary = app.query_one("#pool-summary", Static)
 
-        assert str(title.render()).startswith("Backtest view — 17L WR recommendations")
+        assert str(title.render()).startswith("Backtest view — DG Score recommendations")
         assert table.display is False
         assert build_scroll.display is True
         assert pool_summary.display is False
         assert app.focused == build_scroll
         assert app.backtest_view_text.startswith("Draftgoblin backtest\n")
-        assert "Ranking: 17L WR" in app.backtest_view_text
+        assert "Ranking: DG Score" in app.backtest_view_text
         assert "Picks: 42 chosen, 42 compared, 0 skipped" in app.backtest_view_text
         assert "Pack  Pick  Pool  17L WR  DG" in app.backtest_view_text
         assert "Recommended" in app.backtest_view_text
@@ -621,7 +642,7 @@ async def _assert_backtest_keybinding_opens_report(tmp_path: Path) -> None:
         assert "Fixture Spider [G] (grpId 105097)" in app.backtest_view_text
         assert "Summary:" in app.backtest_view_text
         assert "View: backtest" in _status_text(app=app)
-        assert "Backtest action: rebuilt 17L WR recommendation comparison" in _status_text(
+        assert "Backtest action: rebuilt DG Score recommendation comparison" in _status_text(
             app=app,
         )
         assert state_path.read_text(encoding="utf-8") == before
@@ -901,7 +922,7 @@ async def _assert_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
             assert "MSH" in app.loading_rating_sets
 
             await pilot.press("s")
-            assert app.sort_mode == "score"
+            assert app.sort_mode == "win_rate"
 
             release.set()
             for _ in range(10):
@@ -1005,6 +1026,40 @@ def _card_image_preview_text(*, app: DraftgoblinTuiApp) -> str:
 
 def _card_cells(*, rows: list[list[object]]) -> list[str]:
     return [str(row[4]) for row in rows]
+
+
+def _close_pick_ratings_data(set_code: str) -> SeventeenLandsData:
+    primary = SeventeenLandsFormatData(
+        set_code=set_code,
+        event_format=QUICK_DRAFT_FORMAT,
+        fetched_at=datetime(2999, 1, 1, tzinfo=UTC),
+        card_ratings={
+            104894: _stats(
+                grp_id=104894,
+                name="Fixture Split Card",
+                color="WU",
+                gih=0.605,
+                games_in_hand=900,
+                alsa=1.2,
+            ),
+            105097: _stats(
+                grp_id=105097,
+                name="Fixture Spider",
+                color="G",
+                gih=0.604,
+                games_in_hand=900,
+                alsa=2.1,
+            ),
+        },
+        pair_win_rates={},
+    )
+    return SeventeenLandsData(
+        set_code=set_code,
+        requested_format=QUICK_DRAFT_FORMAT,
+        primary=primary,
+        fallback=None,
+        thin_sample_minimum=500,
+    )
 
 
 def _graded_ratings_data(set_code: str) -> SeventeenLandsData:
