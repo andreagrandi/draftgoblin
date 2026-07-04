@@ -1,8 +1,8 @@
 # Pick scoring
 
-Draftgoblin turns each offered card into one integer score from 0 to 100.
+Draftgoblin keeps the raw 17Lands GIH win rate visible for every card with a strong games-in-hand sample. It also keeps a Draftgoblin `DG` score from 0 to 100 for sorting, color commitment, and deck-builder decisions.
 
-The base rating is 17Lands GIH WR when the card has enough games-in-hand samples. If QuickDraft data is missing or thin, the resolver falls back to PremierDraft. If neither format has a strong GIH sample, the card uses a neutral prior, adjusted by ALSA when ALSA is available: earlier ALSA raises the prior, later ALSA lowers it.
+The base rating for `DG` is 17Lands GIH WR when the card has enough games-in-hand samples. If QuickDraft data is missing or thin, the resolver falls back to PremierDraft. If neither format has a strong GIH sample, the card uses a neutral prior, adjusted by ALSA when ALSA is available: earlier ALSA raises the prior, later ALSA lowers it.
 
 Scores are normalized against the set rating distribution and centered so the neutral prior displays as 50 before color logic. Color commitment then multiplies the normalized score: on-color cards rise gradually, off-color cards are penalized gradually, and colorless cards stay neutral.
 
@@ -19,6 +19,8 @@ Commitment is controlled by documented defaults in `config.py`:
 
 Rows show a `Fit` marker: `On` for cards inside the inferred pair, `Off!` for off-color cards, `Any` for colorless cards, and `Open` before the ramp starts or before a pair is available. Once locked, pair-filtered 17Lands ratings are used when present with adequate samples; otherwise all-decks ratings remain the fallback.
 
-Displayed scores are whole-number integers. We do not show one decimal for ties because the plain draft table should stay easy to scan; ties are resolved deterministically by raw score, base rating, and original pack order.
+The TUI pack table shows `17L WR` and `17L Grade` as primary columns. `17L WR` is the raw Games-in-Hand win rate from the resolved 17Lands source. `17L Grade` follows the methodology published on the 17Lands Card Data page for the Grades view: grades are centered at `C` on the selected win-rate metric distribution, and each grade step is a deterministic `0.33` standard-deviation band. Draftgoblin computes those grades from the cached 17Lands GIH distribution for the same source and format/filter context the row uses (QuickDraft for Quick Drafts, PremierDraft when the row is a Premier fallback, or pair-filtered data when used); cards without a strong GIH sample show `—`.
+
+Displayed `DG` scores are whole-number integers. We do not show one decimal for ties because the plain draft table should stay easy to scan; ties are resolved deterministically by raw score, base rating, and original pack order.
 
 Rows marked `Prior*` did not have a strong GIH sample. The `Source` column shows whether a row used QuickDraft, Premier fallback, or the prior.

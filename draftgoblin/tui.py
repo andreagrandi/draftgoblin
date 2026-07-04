@@ -50,8 +50,8 @@ PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
 BuildSignature: TypeAlias = tuple[str, tuple[int, ...], str | None]
 
-PRIMARY_COLUMN_KEYS = ("rank", "score", "card", "colors")
-SECONDARY_COLUMN_KEYS = ("fit", "gih", "alsa", "mv", "source")
+PRIMARY_COLUMN_KEYS = ("rank", "win_rate", "grade", "score", "card", "colors")
+SECONDARY_COLUMN_KEYS = ("fit", "alsa", "mv", "source")
 SORT_MODES = ("score", "alsa", "mv")
 BUILD_SPELL_SORT_MODES = ("curve", "score", "name")
 SECONDARY_COLUMN_MIN_WIDTH = 88
@@ -72,7 +72,9 @@ COLOR_STYLES = {
 
 COLUMN_LABELS = {
     "rank": "#",
-    "score": "Score",
+    "win_rate": "17L WR",
+    "grade": "17L Grade",
+    "score": "DG",
     "card": "Card",
     "colors": "Colors",
     "fit": "Fit",
@@ -84,7 +86,9 @@ COLUMN_LABELS = {
 
 COLUMN_WIDTHS = {
     "rank": 3,
-    "score": 7,
+    "win_rate": 8,
+    "grade": 9,
+    "score": 5,
     "card": None,
     "colors": 10,
     "fit": 6,
@@ -95,7 +99,7 @@ COLUMN_WIDTHS = {
 }
 
 SORT_LABELS = {
-    "score": "Score",
+    "score": "DG Score",
     "alsa": "ALSA",
     "mv": "MV",
 }
@@ -1164,6 +1168,10 @@ def _format_tui_build_result(
         f"Mana pips: {_format_plain_color_counts(mana_base.pip_counts)}",
         f"Mana sources: {_format_plain_color_counts(mana_base.source_counts)}",
         (
+            "Ratings: 17Lands WR and 17Lands-style grade use each row's "
+            "source format; DG is Draftgoblin's color-adjusted score."
+        ),
+        (
             "Keys: b checks build status; ↑/↓ or j/k scroll; PgUp/PgDn page; "
             "s changes spell sort; c shows details/pool; p changes pair"
         ),
@@ -1428,7 +1436,9 @@ def _format_tui_bench(*, selection: SpellSelection, width: int) -> list[str]:
 def _format_tui_spell_card(*, card: ScoredCard) -> str:
     marker = "C" if _is_creature_card(card=card.card) else "N"
     return (
-        f"{card.score:>2} {marker} "
+        f"{_format_win_rate(scored_card=card):>6} "
+        f"{_format_letter_grade(scored_card=card):>2} "
+        f"DG {card.score:>2} {marker} "
         f"{card.card.name} ({_format_plain_colors(card.card.colors)})"
     )
 
@@ -1533,6 +1543,8 @@ def _row_cells(
 ) -> tuple[object, ...]:
     values = {
         "rank": f"{rank:02d}",
+        "win_rate": _format_win_rate(scored_card=scored_card),
+        "grade": _format_letter_grade(scored_card=scored_card),
         "score": str(scored_card.score),
         "card": _format_card_name(card=scored_card.card),
         "colors": _styled_colors(card=scored_card.card),
@@ -1601,6 +1613,10 @@ def _format_win_rate(*, scored_card: ScoredCard) -> str:
         return "—"
 
     return f"{scored_card.rating.gih_win_rate:.1%}"
+
+
+def _format_letter_grade(*, scored_card: ScoredCard) -> str:
+    return scored_card.rating.letter_grade or "—"
 
 
 def _format_alsa(*, scored_card: ScoredCard) -> str:

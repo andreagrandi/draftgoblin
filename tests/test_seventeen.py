@@ -144,14 +144,17 @@ def test_quickdraft_ratings_fall_back_to_premier_then_neutral_prior(
     neutral = data.rating_for(grp_id=9999)
 
     assert quick_rating.gih_win_rate == 0.61
+    assert quick_rating.letter_grade == "C"
     assert quick_rating.metadata.source_format == QUICK_DRAFT_FORMAT
     assert quick_rating.metadata.fallback_reason is None
 
     assert thin_fallback.gih_win_rate == 0.55
+    assert thin_fallback.letter_grade == "D"
     assert thin_fallback.metadata.source_format == PREMIER_DRAFT_FORMAT
     assert thin_fallback.metadata.fallback_reason == "primary-thin"
 
     assert missing_fallback.name == "Fixture Premier Only Card"
+    assert missing_fallback.letter_grade == "B"
     assert missing_fallback.metadata.source_format == PREMIER_DRAFT_FORMAT
     assert missing_fallback.metadata.fallback_reason == "primary-missing"
 

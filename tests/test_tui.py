@@ -52,6 +52,37 @@ async def _assert_fixture_stream_updates_pack_panel(tmp_path: Path) -> None:
         assert "Card data from 17Lands (17lands.com)" in status
 
 
+def test_tui_pack_rows_show_17lands_win_rate_grade_and_dg_score(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_pack_rows_show_17lands_stats(tmp_path=tmp_path))
+
+
+async def _assert_pack_rows_show_17lands_stats(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path, ratings_loader=_graded_ratings_data)
+
+    async with app.run_test(size=(140, 24)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if "MSH" not in app.loading_rating_sets:
+                break
+
+        table = app.query_one("#pack-table", DataTable)
+        rows = [table.get_row_at(index) for index in range(table.row_count)]
+        card_index = app.visible_column_keys.index("card")
+        win_rate_index = app.visible_column_keys.index("win_rate")
+        grade_index = app.visible_column_keys.index("grade")
+        score_index = app.visible_column_keys.index("score")
+        split_card_row = next(
+            row for row in rows if str(row[card_index]) == "Fixture Split Card"
+        )
+
+        assert str(split_card_row[win_rate_index]) == "62.0%"
+        assert str(split_card_row[grade_index]) == "B+"
+        assert str(split_card_row[score_index]).isdigit()
+
+
 def test_tui_warns_when_card_metadata_is_incomplete(tmp_path: Path) -> None:
     asyncio.run(_assert_tui_warns_when_card_metadata_is_incomplete(tmp_path=tmp_path))
 
@@ -112,18 +143,26 @@ async def _assert_keybindings_toggle_columns_and_sort(tmp_path: Path) -> None:
 
         assert app.visible_column_keys == (
             "rank",
+            "win_rate",
+            "grade",
             "score",
             "card",
             "colors",
             "fit",
-            "gih",
             "alsa",
             "mv",
             "source",
         )
 
         await pilot.press("c")
-        assert app.visible_column_keys == ("rank", "score", "card", "colors")
+        assert app.visible_column_keys == (
+            "rank",
+            "win_rate",
+            "grade",
+            "score",
+            "card",
+            "colors",
+        )
 
         await pilot.press("s")
         assert app.sort_mode == "alsa"
@@ -355,7 +394,14 @@ async def _assert_narrow_width_hides_secondary_columns(tmp_path: Path) -> None:
         app.process_lines(lines=_first_pack_lines())
         await pilot.pause()
 
-        assert app.visible_column_keys == ("rank", "score", "card", "colors")
+        assert app.visible_column_keys == (
+            "rank",
+            "win_rate",
+            "grade",
+            "score",
+            "card",
+            "colors",
+        )
 
 
 def test_tui_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
@@ -476,7 +522,65 @@ def _last_picks_text(*, app: DraftgoblinTuiApp) -> str:
 
 
 def _card_cells(*, rows: list[list[object]]) -> list[str]:
-    return [str(row[2]) for row in rows]
+    return [str(row[4]) for row in rows]
+
+
+def _graded_ratings_data(set_code: str) -> SeventeenLandsData:
+    primary = SeventeenLandsFormatData(
+        set_code=set_code,
+        event_format=QUICK_DRAFT_FORMAT,
+        fetched_at=datetime(2999, 1, 1, tzinfo=UTC),
+        card_ratings={
+            104894: _stats(
+                grp_id=104894,
+                name="Fixture Split Card",
+                color="WU",
+                gih=0.62,
+                games_in_hand=900,
+                alsa=1.2,
+            ),
+            105097: _stats(
+                grp_id=105097,
+                name="Fixture Spider",
+                color="G",
+                gih=0.60,
+                games_in_hand=900,
+                alsa=2.1,
+            ),
+            104976: _stats(
+                grp_id=104976,
+                name="Fixture Red Card",
+                color="R",
+                gih=0.56,
+                games_in_hand=900,
+                alsa=4.0,
+            ),
+            105080: _stats(
+                grp_id=105080,
+                name="Fixture Black Card",
+                color="B",
+                gih=0.54,
+                games_in_hand=900,
+                alsa=5.0,
+            ),
+            104995: _stats(
+                grp_id=104995,
+                name="Fixture Filler Card",
+                color="C",
+                gih=0.52,
+                games_in_hand=900,
+                alsa=6.0,
+            ),
+        },
+        pair_win_rates={},
+    )
+    return SeventeenLandsData(
+        set_code=set_code,
+        requested_format=QUICK_DRAFT_FORMAT,
+        primary=primary,
+        fallback=None,
+        thin_sample_minimum=500,
+    )
 
 
 def _ratings_data(*, set_code: str) -> SeventeenLandsData:

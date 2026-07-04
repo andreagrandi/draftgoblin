@@ -474,6 +474,7 @@ def _neutral_rating(*, grp_id: int, config: PickEngineConfig) -> ResolvedCardRat
             opening_hand=0,
             games_in_hand=0,
         ),
+        letter_grade=None,
         neutral_prior_score=config.neutral_prior_score,
         metadata=RatingSourceMetadata(
             requested_format=QUICK_DRAFT_FORMAT,

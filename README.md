@@ -4,9 +4,9 @@ An unofficial Quick Draft assistant for MTG Arena.
 
 ## Status
 
-Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with parser-backed `replay`, default Textual `watch`, and `watch --plain` commands, score-sorted pick tables, a `refresh-data` command, and a `build` subcommand with pair selection, constrained spells, mana base, and bench output. Draft completion in replay and plain watch automatically prints the build sheet.
+Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with parser-backed `replay`, default Textual `watch`, and `watch --plain` commands, 17Lands win-rate and grade pick tables, a `refresh-data` command, and a `build` subcommand with pair selection, constrained spells, mana base, and bench output. Draft completion in replay and plain watch automatically prints the build sheet.
 
-See [docs/pick-scoring.md](docs/pick-scoring.md) for the initial 0–100 scoring model and integer tie-display decision. The Textual watch view uses `q` to quit, `c` to toggle secondary columns, and `s` to cycle score/ALSA/mana-value sorting. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, 17Lands structure targets, mana-base defaults, relaxation order, and `--allow-splash`.
+See [docs/pick-scoring.md](docs/pick-scoring.md) for the 17Lands WR/grade display, the 0–100 Draftgoblin scoring model, and integer tie-display decision. The Textual watch view uses `q` to quit, `c` to toggle secondary columns, and `s` to cycle score/ALSA/mana-value sorting. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, 17Lands structure targets, mana-base defaults, relaxation order, and `--allow-splash`.
 
 Card metadata comes from the cached Scryfall bulk data and is automatically overlaid with MTG Arena's local `data_cards`/`data_loc` files when available, so newly released Arena grpIds can resolve before Scryfall publishes `arena_id` mappings.
 
