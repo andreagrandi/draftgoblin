@@ -134,6 +134,12 @@ def test_tui_keybindings_toggle_columns_and_cycle_sort(tmp_path: Path) -> None:
     asyncio.run(_assert_keybindings_toggle_columns_and_sort(tmp_path=tmp_path))
 
 
+def test_tui_pack_navigation_preserves_focus_and_updates_details(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_pack_navigation_preserves_focus_and_details(tmp_path=tmp_path))
+
+
 async def _assert_keybindings_toggle_columns_and_sort(tmp_path: Path) -> None:
     app = _tui_app(tmp_path=tmp_path)
 
@@ -173,6 +179,58 @@ async def _assert_keybindings_toggle_columns_and_sort(tmp_path: Path) -> None:
         assert "Sort: MV" in _status_text(app=app)
 
         await pilot.press("q")
+
+
+async def _assert_pack_navigation_preserves_focus_and_details(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        await pilot.pause()
+
+        table = app.query_one("#pack-table", DataTable)
+        card_index = app.visible_column_keys.index("card")
+        second_card_name = str(table.get_row_at(1)[card_index])
+
+        assert app.focused == table
+        assert table.cursor_type == "row"
+        assert "Focused card details" in _focused_card_text(app=app)
+
+        await pilot.press("down")
+        await pilot.pause()
+
+        assert table.cursor_coordinate.row == 1
+        assert second_card_name in _focused_card_text(app=app)
+
+        app.process_lines(lines=[])
+        await pilot.pause()
+
+        assert app.focused == table
+        assert table.cursor_coordinate.row == 1
+        assert second_card_name in _focused_card_text(app=app)
+
+        await pilot.press("tab")
+        await pilot.pause()
+
+        assert app.focused == table
+
+        await pilot.press("right")
+        await pilot.pause()
+
+        assert app.focused == table
+        assert table.cursor_coordinate.row == 2
+
+        await pilot.press("left")
+        await pilot.pause()
+
+        assert table.cursor_coordinate.row == 1
+
+        await pilot.press("up")
+        await pilot.pause()
+
+        assert table.cursor_coordinate.row == 0
 
 
 def test_tui_sidebar_updates_pool_distribution_curve_and_last_picks(
@@ -361,6 +419,25 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         assert "Color pair: WU (automatic" in app.build_view_text
         assert "Average mana value:" in app.build_view_text
         assert "Mana curve: 0:" in app.build_view_text
+        assert "▶" in app.build_view_text
+        assert "Selected card 1/" in _focused_card_text(app=app)
+
+        await pilot.press("down")
+        await pilot.pause()
+
+        assert app.focused == build_scroll
+        assert "Selected card 2/" in _focused_card_text(app=app)
+
+        await pilot.press("tab")
+        await pilot.pause()
+
+        assert app.focused == build_scroll
+
+        await pilot.press("right")
+        await pilot.pause()
+
+        assert app.focused == build_scroll
+        assert "Selected card 3/" in _focused_card_text(app=app)
 
         await pilot.press("s")
         await pilot.pause()
@@ -580,6 +657,11 @@ def _pool_summary_text(*, app: DraftgoblinTuiApp) -> str:
 def _last_picks_text(*, app: DraftgoblinTuiApp) -> str:
     last_picks = app.query_one("#last-picks", Static)
     return str(last_picks.render())
+
+
+def _focused_card_text(*, app: DraftgoblinTuiApp) -> str:
+    focused_card = app.query_one("#focused-card", Static)
+    return str(focused_card.render())
 
 
 def _card_cells(*, rows: list[list[object]]) -> list[str]:
