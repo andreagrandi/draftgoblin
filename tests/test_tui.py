@@ -87,6 +87,82 @@ async def _assert_keybindings_toggle_columns_and_sort(tmp_path: Path) -> None:
         await pilot.press("q")
 
 
+def test_tui_sidebar_updates_pool_distribution_curve_and_last_picks(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_sidebar_updates_pool_summary(tmp_path=tmp_path))
+
+
+async def _assert_sidebar_updates_pool_summary(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.process_lines(lines=_first_pick_lines())
+        await pilot.pause()
+
+        summary = _pool_summary_text(app=app)
+        last_picks = _last_picks_text(app=app)
+
+        assert "Pool size: 1" in summary
+        assert "Colors:" in summary
+        assert "G █████ 1" in summary
+        assert "Curve:" in summary
+        assert "4█1" in summary
+        assert "Fixture Spider" in last_picks
+
+
+def test_tui_build_keybinding_opens_build_view_on_demand(tmp_path: Path) -> None:
+    asyncio.run(_assert_build_keybinding_opens_build_view(tmp_path=tmp_path))
+
+
+async def _assert_build_keybinding_opens_build_view(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.process_lines(lines=_first_pick_lines())
+        await pilot.pause()
+
+        await pilot.press("b")
+        await pilot.pause()
+
+        title = app.query_one("#pack-title", Static)
+        assert str(title.render()).startswith("Build view — pair")
+        assert "Pool size: 1 cards" in app.build_view_text
+        assert "Build sheet:" in app.build_view_text
+
+
+def test_tui_completion_switches_to_build_view_and_pair_override_keybinding(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_completion_build_view_and_pair_override(tmp_path=tmp_path))
+
+
+async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_full_fixture_lines())
+        await pilot.pause()
+
+        title = app.query_one("#pack-title", Static)
+        table = app.query_one("#pack-table", DataTable)
+        build_view = app.query_one("#build-view", Static)
+
+        assert str(title.render()) == "Build view — pair WU (automatic)"
+        assert table.display is False
+        assert build_view.display is True
+        assert "Build sheet:" in app.build_view_text
+        assert "Bench:" in app.build_view_text
+        assert "Chosen pair: WU (automatic" in app.build_view_text
+
+        await pilot.press("p")
+        await pilot.pause()
+
+        assert str(title.render()) == "Build view — pair WB (forced WB)"
+        assert "Chosen pair: WB (forced" in app.build_view_text
+        assert "Override: WB" in _status_text(app=app)
+
+
 def test_tui_narrow_width_hides_secondary_columns_first(tmp_path: Path) -> None:
     asyncio.run(_assert_narrow_width_hides_secondary_columns(tmp_path=tmp_path))
 
@@ -163,9 +239,27 @@ def _first_pack_lines() -> list[str]:
     return FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()[:7]
 
 
+def _first_pick_lines() -> list[str]:
+    return FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()[:10]
+
+
+def _full_fixture_lines() -> list[str]:
+    return FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+
+
 def _status_text(*, app: DraftgoblinTuiApp) -> str:
     status = app.query_one("#status-bar", Static)
     return str(status.render())
+
+
+def _pool_summary_text(*, app: DraftgoblinTuiApp) -> str:
+    summary = app.query_one("#pool-summary", Static)
+    return str(summary.render())
+
+
+def _last_picks_text(*, app: DraftgoblinTuiApp) -> str:
+    last_picks = app.query_one("#last-picks", Static)
+    return str(last_picks.render())
 
 
 def _card_cells(*, rows: list[list[object]]) -> list[str]:
