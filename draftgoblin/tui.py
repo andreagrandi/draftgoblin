@@ -17,6 +17,7 @@ from os import PathLike
 from pathlib import Path
 from typing import TypeAlias
 
+from rich.align import Align
 from rich.console import Group
 from rich.text import Text
 from textual import events, work
@@ -141,6 +142,8 @@ class DraftgoblinTuiApp(App[None]):
     The app can tail a real log or accept fixture lines in tests.
     """
 
+    TITLE = "Draft Goblin"
+
     CSS = """
     Screen {
         layout: vertical;
@@ -198,6 +201,12 @@ class DraftgoblinTuiApp(App[None]):
     #card-image-preview {
         height: auto;
         margin-bottom: 1;
+    }
+
+    #card-image-preview {
+        content-align: center top;
+        margin-top: 1;
+        text-align: center;
     }
 
     #status-bar {
@@ -1196,9 +1205,9 @@ class DraftgoblinTuiApp(App[None]):
             f"17L WR: {_format_win_rate(scored_card=scored_card)}\n"
             f"17L Grade: {_format_letter_grade(scored_card=scored_card)}\n"
             f"DG Score: {scored_card.score}\n"
-            f"Fit: {_format_color_fit(scored_card=scored_card)}\n"
-            f"ALSA: {_format_alsa(scored_card=scored_card)}\n"
-            f"Source: {scored_card.source_label}"
+            f"Color fit: {_format_color_fit(scored_card=scored_card)}\n"
+            f"ALSA (avg last seen): {_format_alsa(scored_card=scored_card)}\n"
+            f"Data source: {_format_tui_source_label(scored_card=scored_card)}"
         )
 
     def _render_card_image_preview(self, *, card: CardInfo | None) -> None:
@@ -1325,7 +1334,13 @@ class DraftgoblinTuiApp(App[None]):
             )
             return
 
-        image_panel.update(Group(f"Preview: {_format_card_name(card=card)}", preview))
+        image_panel.update(
+            Group(
+                Align.center(Text(f"Preview: {_format_card_name(card=card)}")),
+                "",
+                Align.center(preview),
+            )
+        )
 
     @work(thread=True, group="card-images")
     def _fetch_card_image_worker(self, image_uri: str) -> None:
@@ -1816,7 +1831,8 @@ def _format_tui_build_result(
     chosen_label = "forced" if selection.forced_pair is not None else "automatic"
     counts = spell_selection.counts
     lines = [
-        "Suggested deck",
+        "[bold]Suggested deck[/bold]",
+        "",
         f"Set: {format_set_label(set_code=pool.set_code)}",
         f"Color pair: {selection.chosen.pair} ({chosen_label})",
         (
@@ -1828,19 +1844,6 @@ def _format_tui_build_result(
             f"Creatures: {counts.creatures}; "
             f"Noncreatures: {counts.noncreatures}; Lands: {mana_base.land_count}"
         ),
-        _format_tui_curve_summary(spells=spell_selection.spells),
-        f"Pool: {pool.source_label}",
-        f"Pool size: {selection.pool_size} cards",
-    ]
-    if pool.account_id is not None:
-        lines.append(f"Account: {pool.account_id}")
-
-    if pool.draft_id is not None:
-        lines.append(f"Draft: {pool.draft_id}")
-
-    lines.extend([
-        f"Mana pips: {_format_plain_color_counts(mana_base.pip_counts)}",
-        f"Mana sources: {_format_plain_color_counts(mana_base.source_counts)}",
         (
             "Ratings: rows show 17Lands WR and 17Lands-style grade from "
             "each source format."
@@ -1850,7 +1853,7 @@ def _format_tui_build_result(
             "PgUp/PgDn page; s changes spell sort; c shows details/pool; p changes pair"
         ),
         "",
-    ])
+    ]
     lines.extend(
         _format_tui_selected_spells(
             spell_selection=spell_selection,
@@ -1862,6 +1865,15 @@ def _format_tui_build_result(
     lines.append("")
     lines.extend(_format_tui_lands(mana_base=mana_base))
     if show_details:
+        lines.append("")
+        lines.extend(
+            _format_tui_build_context(
+                pool=pool,
+                selection=selection,
+                spell_selection=spell_selection,
+                mana_base=mana_base,
+            )
+        )
         lines.append("")
         lines.extend(_format_tui_spell_counts(spell_selection=spell_selection))
         lines.append("")
@@ -1879,12 +1891,37 @@ def _format_tui_build_result(
     else:
         lines.append("")
         lines.append(
-            "Details hidden: press c for picked pool, color-pair reasoning, structure checks, and bench cuts."
+            "Details hidden: press c for build context, picked pool, "
+            "color-pair reasoning, structure checks, and bench cuts."
         )
 
-    lines.append("")
-    lines.append(selection.attribution)
     return "\n".join(lines) + "\n"
+
+
+def _format_tui_build_context(
+    *,
+    pool: BuildPool,
+    selection: PairSelection,
+    spell_selection: SpellSelection,
+    mana_base: ManaBase,
+) -> list[str]:
+    lines = [
+        "Build context",
+        _format_tui_curve_summary(spells=spell_selection.spells),
+        f"Pool: {pool.source_label}",
+        f"Pool size: {selection.pool_size} cards",
+    ]
+    if pool.account_id is not None:
+        lines.append(f"Account: {pool.account_id}")
+
+    if pool.draft_id is not None:
+        lines.append(f"Draft: {pool.draft_id}")
+
+    lines.extend([
+        f"Mana pips: {_format_plain_color_counts(mana_base.pip_counts)}",
+        f"Mana sources: {_format_plain_color_counts(mana_base.source_counts)}",
+    ])
+    return lines
 
 
 def _format_tui_build_error(
@@ -2449,6 +2486,15 @@ def _format_alsa(*, scored_card: ScoredCard) -> str:
         return "—"
 
     return f"{scored_card.rating.average_last_seen_at:.2f}"
+
+
+def _format_tui_source_label(*, scored_card: ScoredCard) -> str:
+    labels = {
+        "Quick": "Quick Draft",
+        "Premier": "Premier Draft fallback",
+        "Prior": "neutral prior",
+    }
+    return labels.get(scored_card.source_label, scored_card.source_label)
 
 
 def _format_mana_value(*, card: CardInfo) -> str:

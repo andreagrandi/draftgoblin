@@ -46,6 +46,7 @@ async def _assert_fixture_stream_updates_pack_panel(tmp_path: Path) -> None:
         status = _status_text(app=app)
 
         assert table.row_count == 14
+        assert DraftgoblinTuiApp.TITLE == "Draft Goblin"
         assert any("Fixture Spider" in row for row in _card_cells(rows=rows))
         assert "Account: FixturePlayer" in status
         assert "Pair: open" in status
@@ -316,11 +317,11 @@ async def _assert_build_keybinding_opens_build_view(tmp_path: Path) -> None:
 
         title = app.query_one("#pack-title", Static)
         assert str(title.render()).startswith("Build view — pair")
-        assert app.build_view_text.startswith("Suggested deck\n")
+        assert app.build_view_text.startswith("[bold]Suggested deck[/bold]\n\n")
         assert "Set: MSH — Marvel Super Heroes" in app.build_view_text
-        assert "Pool size: 1 cards" in app.build_view_text
+        assert "Pool size: 1 cards" not in app.build_view_text
         assert "Average mana value:" in app.build_view_text
-        assert "Mana curve: 0:" in app.build_view_text
+        assert "Mana curve: 0:" not in app.build_view_text
         assert "Selected spells by mana value" in app.build_view_text
         assert "Picked pool" not in app.build_view_text
         assert "Color-pair reasoning" not in app.build_view_text
@@ -331,6 +332,9 @@ async def _assert_build_keybinding_opens_build_view(tmp_path: Path) -> None:
         await pilot.press("c")
         await pilot.pause()
 
+        assert "Build context" in app.build_view_text
+        assert "Pool size: 1 cards" in app.build_view_text
+        assert "Mana curve: 0:" in app.build_view_text
         assert "Picked pool (1)" in app.build_view_text
         assert "01. Fixture Spider | Colors G | MV 4" in app.build_view_text
 
@@ -425,11 +429,11 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         assert table.display is False
         assert build_scroll.display is True
         assert pool_summary.display is False
-        assert app.build_view_text.startswith("Suggested deck\n")
+        assert app.build_view_text.startswith("[bold]Suggested deck[/bold]\n\n")
         assert "Selected spells by mana value" in app.build_view_text
         assert "Color pair: WU (automatic" in app.build_view_text
         assert "Average mana value:" in app.build_view_text
-        assert "Mana curve: 0:" in app.build_view_text
+        assert "Mana curve: 0:" not in app.build_view_text
         assert "▶" in app.build_view_text
         assert "Selected card 1/" in _focused_card_text(app=app)
 
@@ -679,7 +683,7 @@ async def _assert_build_image_fetch_failure_stays_nonblocking(tmp_path: Path) ->
         assert "Image preview unavailable" in _card_image_preview_text(app=app)
         assert "network down" in _card_image_preview_text(app=app)
         assert "Error:" not in _status_text(app=app)
-        assert app.build_view_text.startswith("Suggested deck\n")
+        assert app.build_view_text.startswith("[bold]Suggested deck[/bold]\n\n")
 
 
 def test_tui_account_event_recovers_latest_persisted_state(tmp_path: Path) -> None:
@@ -703,6 +707,12 @@ async def _assert_account_event_recovers_latest_persisted_state(tmp_path: Path) 
         await pilot.pause()
 
         assert "Account: FixturePlayer" in _status_text(app=app)
+        assert "Draft: recovered-draft" not in app.build_view_text
+        assert "Pool size: 2 cards" not in app.build_view_text
+
+        await pilot.press("c")
+        await pilot.pause()
+
         assert "Draft: recovered-draft" in app.build_view_text
         assert "Pool size: 2 cards" in app.build_view_text
 
@@ -734,6 +744,12 @@ async def _assert_account_key_cycles_recovered_drafts(tmp_path: Path) -> None:
         await pilot.pause()
 
         assert "Account: TestUser (test-account)" in _status_text(app=app)
+        assert "Draft: test-draft" not in app.build_view_text
+        assert "Pool size: 2 cards" not in app.build_view_text
+
+        await pilot.press("c")
+        await pilot.pause()
+
         assert "Draft: test-draft" in app.build_view_text
         assert "Pool size: 2 cards" in app.build_view_text
 
