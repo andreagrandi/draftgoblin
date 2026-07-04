@@ -107,6 +107,12 @@ SORT_LABELS = {
 }
 
 
+class CardDetailsPanel(Static, can_focus=False):
+    """Sidebar panel for the highlighted card.
+    Keep focus styling ready for future actions, but do not enter it with Tab yet.
+    """
+
+
 class DraftgoblinTuiApp(App[None]):
     """Textual app for live Quick Draft recommendations.
     The app can tail a real log or accept fixture lines in tests.
@@ -139,6 +145,18 @@ class DraftgoblinTuiApp(App[None]):
         text-style: bold;
     }
 
+    #pack-table,
+    #build-scroll,
+    #focused-card {
+        border: blank $surface;
+    }
+
+    #pack-table:focus,
+    #build-scroll:focus,
+    #focused-card:focus {
+        border: solid $accent;
+    }
+
     #pack-table {
         height: 1fr;
     }
@@ -153,7 +171,8 @@ class DraftgoblinTuiApp(App[None]):
     }
 
     #pool-summary,
-    #last-picks {
+    #last-picks,
+    #focused-card {
         height: auto;
         margin-bottom: 1;
     }
@@ -173,14 +192,16 @@ class DraftgoblinTuiApp(App[None]):
         Binding("b", "open_build_view", "Build", show=True),
         Binding("a", "cycle_account", "Account", show=True),
         Binding("p", "rebuild_with_pair_override", "Pair", show=True),
-        Binding("up", "scroll_build_up", "Scroll", show=False),
-        Binding("down", "scroll_build_down", "Scroll", show=False),
-        Binding("k", "scroll_build_up", "Scroll", show=False),
-        Binding("j", "scroll_build_down", "Scroll", show=False),
-        Binding("pageup", "scroll_build_page_up", "Page", show=False),
-        Binding("pagedown", "scroll_build_page_down", "Page", show=False),
-        Binding("home", "scroll_build_home", "Home", show=False),
-        Binding("end", "scroll_build_end", "End", show=False),
+        Binding("up", "navigate_previous_card", "Previous", show=False, priority=True),
+        Binding("left", "navigate_previous_card", "Previous", show=False, priority=True),
+        Binding("k", "navigate_previous_card", "Previous", show=False, priority=True),
+        Binding("down", "navigate_next_card", "Next", show=False, priority=True),
+        Binding("right", "navigate_next_card", "Next", show=False, priority=True),
+        Binding("j", "navigate_next_card", "Next", show=False, priority=True),
+        Binding("pageup", "navigate_page_up", "Page", show=False, priority=True),
+        Binding("pagedown", "navigate_page_down", "Page", show=False, priority=True),
+        Binding("home", "navigate_home", "Home", show=False, priority=True),
+        Binding("end", "navigate_end", "End", show=False, priority=True),
     ]
 
     def __init__(
@@ -239,6 +260,12 @@ class DraftgoblinTuiApp(App[None]):
         self._last_build_signature: BuildSignature | None = None
         self._build_spell_sort_mode = "curve"
         self._build_show_details = False
+        self._build_focus_cards: tuple[TuiCardQuantityGroup, ...] = ()
+        self._build_focused_card_index = 0
+        self._build_render_pool: BuildPool | None = None
+        self._build_render_selection: PairSelection | None = None
+        self._build_render_spell_selection: SpellSelection | None = None
+        self._build_render_mana_base: ManaBase | None = None
         self._current_pack_event: PackOfferedEvent | None = None
         self._current_pack: ScoredPack | None = None
         self._ratings_data_by_set: dict[str, SeventeenLandsData | None] = {}
@@ -285,6 +312,7 @@ class DraftgoblinTuiApp(App[None]):
             with Vertical(id="sidebar"):
                 yield Static("Pool: no draft yet", id="pool-summary")
                 yield Static("Last picks: none", id="last-picks")
+                yield CardDetailsPanel("Focused card: none", id="focused-card")
         yield Static("", id="status-bar")
         yield Footer()
 
@@ -296,6 +324,7 @@ class DraftgoblinTuiApp(App[None]):
         table = self.query_one("#pack-table", DataTable)
         table.cursor_type = "row"
         table.zebra_stripes = True
+        table.focus()
         self._render_all()
 
         if not self.poll_enabled:
@@ -314,6 +343,17 @@ class DraftgoblinTuiApp(App[None]):
         """
 
         self._render_all()
+
+    def on_data_table_row_highlighted(
+        self,
+        event: DataTable.RowHighlighted,
+    ) -> None:
+        """Refresh card details when keyboard navigation changes rows.
+        Periodic log polls should not be needed before details update.
+        """
+
+        if event.data_table.id == "pack-table":
+            self._render_focused_card_details()
 
     def action_toggle_secondary_columns(self) -> None:
         """Toggle secondary pack columns or build detail sections.
@@ -369,53 +409,72 @@ class DraftgoblinTuiApp(App[None]):
         self._record_build_action_result(success_message="rebuilt current pool")
         self._render_all()
 
-    def action_scroll_build_up(self) -> None:
-        """Scroll the build view one line up when it is visible.
-        Pack tables keep their own built-in navigation behavior.
+    def action_navigate_previous_card(self) -> None:
+        """Move to the previous card in the active card list.
+        Left, Up, and k share this action for predictable keyboard browsing.
         """
 
         if self._view_mode == "build":
-            self.query_one("#build-scroll", VerticalScroll).scroll_up(animate=False)
+            self._move_build_card_cursor(delta=-1)
+            return
 
-    def action_scroll_build_down(self) -> None:
-        """Scroll the build view one line down when it is visible.
-        This makes arrow keys and vim-style j/k usable in build mode.
+        self._move_pack_cursor(delta=-1)
+
+    def action_navigate_next_card(self) -> None:
+        """Move to the next card in the active card list.
+        Right, Down, and j share this action for predictable keyboard browsing.
         """
 
         if self._view_mode == "build":
-            self.query_one("#build-scroll", VerticalScroll).scroll_down(animate=False)
+            self._move_build_card_cursor(delta=1)
+            return
 
-    def action_scroll_build_page_up(self) -> None:
-        """Page the build view up when it is visible.
-        Long selected-spell and bench sections can be browsed quickly.
+        self._move_pack_cursor(delta=1)
+
+    def action_navigate_page_up(self) -> None:
+        """Page up in the current keyboard-navigation context.
+        Pack view moves the card cursor; build view scrolls the deck sheet.
         """
 
         if self._view_mode == "build":
             self.query_one("#build-scroll", VerticalScroll).scroll_page_up(animate=False)
+            return
 
-    def action_scroll_build_page_down(self) -> None:
-        """Page the build view down when it is visible.
-        Long selected-spell and bench sections can be browsed quickly.
+        self._move_pack_cursor(delta=-self._pack_cursor_page_size())
+
+    def action_navigate_page_down(self) -> None:
+        """Page down in the current keyboard-navigation context.
+        Pack view moves the card cursor; build view scrolls the deck sheet.
         """
 
         if self._view_mode == "build":
             self.query_one("#build-scroll", VerticalScroll).scroll_page_down(animate=False)
+            return
 
-    def action_scroll_build_home(self) -> None:
-        """Jump to the top of the build view.
-        Useful after inspecting the bench.
+        self._move_pack_cursor(delta=self._pack_cursor_page_size())
+
+    def action_navigate_home(self) -> None:
+        """Jump to the first pack card or the top of the build view.
+        This keeps Home useful in both major TUI modes.
         """
 
         if self._view_mode == "build":
             self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
+            return
 
-    def action_scroll_build_end(self) -> None:
-        """Jump to the bottom of the build view.
-        Useful when inspecting bench cuts.
+        self._move_pack_cursor_to(row=0)
+
+    def action_navigate_end(self) -> None:
+        """Jump to the last pack card or the bottom of the build view.
+        This keeps End useful in both major TUI modes.
         """
 
         if self._view_mode == "build":
             self.query_one("#build-scroll", VerticalScroll).scroll_end(animate=False)
+            return
+
+        table = self.query_one("#pack-table", DataTable)
+        self._move_pack_cursor_to(row=table.row_count - 1)
 
     def action_cycle_account(self) -> None:
         """Cycle through recovered drafts for other accounts.
@@ -598,6 +657,7 @@ class DraftgoblinTuiApp(App[None]):
         self._last_build_signature = None
         self._build_spell_sort_mode = "curve"
         self._build_show_details = False
+        self._clear_build_render_state()
         self._ensure_ratings_load_started(set_code=event.set_code)
 
     def _consume_pack_event(self, *, event: PackOfferedEvent) -> None:
@@ -822,6 +882,7 @@ class DraftgoblinTuiApp(App[None]):
         self._render_pack_title()
         self._render_pack_table()
         self._render_sidebar()
+        self._ensure_visible_focus()
         self._render_status_bar()
 
     def _update_responsive_visibility(self) -> None:
@@ -855,7 +916,7 @@ class DraftgoblinTuiApp(App[None]):
 
         event = self._current_pack_event
         title.update(
-            "Pack "
+            "Available cards — Pack "
             f"{event.pack_number + 1} "
             "Pick "
             f"{event.pick_number + 1} "
@@ -873,6 +934,7 @@ class DraftgoblinTuiApp(App[None]):
             self._visible_column_keys = ()
             return
 
+        previous_row_key, previous_row_index = self._capture_table_cursor(table=table)
         table.clear(columns=True)
         column_keys = self._column_keys_for_width()
         self._visible_column_keys = column_keys
@@ -896,6 +958,78 @@ class DraftgoblinTuiApp(App[None]):
                 *row,
                 key=f"{rank}-{scored_card.card.grp_id}-{scored_card.original_index}",
             )
+
+        self._restore_table_cursor(
+            table=table,
+            row_key=previous_row_key,
+            row_index=previous_row_index,
+        )
+
+    def _capture_table_cursor(self, *, table: DataTable) -> tuple[str | None, int]:
+        if table.row_count == 0:
+            return None, 0
+
+        row_index = max(0, table.cursor_coordinate.row)
+        try:
+            cell_key = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except Exception:  # pragma: no cover - defensive Textual boundary.
+            return None, row_index
+
+        return str(cell_key.row_key.value), row_index
+
+    def _restore_table_cursor(
+        self,
+        *,
+        table: DataTable,
+        row_key: str | None,
+        row_index: int,
+    ) -> None:
+        if table.row_count == 0:
+            return
+
+        target_row = min(max(row_index, 0), table.row_count - 1)
+        if row_key is not None:
+            try:
+                target_row = table.get_row_index(row_key)
+            except Exception:  # pragma: no cover - defensive Textual boundary.
+                pass
+
+        table.move_cursor(row=target_row, column=0, animate=False)
+
+    def _move_pack_cursor(self, *, delta: int) -> None:
+        table = self.query_one("#pack-table", DataTable)
+        self._move_pack_cursor_to(row=table.cursor_coordinate.row + delta)
+
+    def _move_pack_cursor_to(self, *, row: int) -> None:
+        if self._view_mode != "pack":
+            return
+
+        table = self.query_one("#pack-table", DataTable)
+        if table.row_count == 0:
+            return
+
+        target_row = min(max(row, 0), table.row_count - 1)
+        table.focus()
+        table.move_cursor(row=target_row, column=0, animate=False)
+        self._render_focused_card_details()
+
+    def _move_build_card_cursor(self, *, delta: int) -> None:
+        if not self._build_focus_cards:
+            return
+
+        target_index = self._build_focused_card_index + delta
+        self._build_focused_card_index = min(
+            max(target_index, 0),
+            len(self._build_focus_cards) - 1,
+        )
+        self._refresh_build_text_from_render_state()
+        self.query_one("#build-scroll", VerticalScroll).focus()
+        self.query_one("#build-view", Static).update(self._build_text)
+        self._render_focused_card_details()
+
+    def _pack_cursor_page_size(self) -> int:
+        table = self.query_one("#pack-table", DataTable)
+        return max(1, table.size.height - 3)
 
     def _render_sidebar(self) -> None:
         pool_summary = self.query_one("#pool-summary", Static)
@@ -927,11 +1061,105 @@ class DraftgoblinTuiApp(App[None]):
         )
         if not self._last_picks:
             last_picks.update("Last picks: none")
+            self._render_focused_card_details()
             return
 
         last_picks.update(
             "Last picks:\n" + "\n".join(f"• {pick}" for pick in self._last_picks)
         )
+        self._render_focused_card_details()
+
+    def _render_focused_card_details(self) -> None:
+        focused_card = self.query_one("#focused-card", Static)
+        selected = self._focused_card_details()
+        if selected is None:
+            focused_card.update(
+                "Focused card details\n"
+                "Use ↑/↓/←/→ in the card list to browse card details here."
+            )
+            return
+
+        section, rank, total_count, scored_card, quantity = selected
+        card = scored_card.card
+        type_line = " ".join(card.types) if card.types else "Unknown"
+        quantity_line = f"Quantity: {quantity}\n" if quantity > 1 else ""
+        focused_card.update(
+            "Focused card details\n"
+            f"{section} {rank}/{total_count}\n"
+            f"{_format_card_name(card=card)}\n"
+            f"{quantity_line}"
+            f"Colors: {_format_plain_colors(card.colors)}\n"
+            f"Mana value: {_format_mana_value(card=card)}\n"
+            f"Type: {type_line}\n"
+            f"17L WR: {_format_win_rate(scored_card=scored_card)}\n"
+            f"17L Grade: {_format_letter_grade(scored_card=scored_card)}\n"
+            f"DG Score: {scored_card.score}\n"
+            f"Fit: {_format_color_fit(scored_card=scored_card)}\n"
+            f"ALSA: {_format_alsa(scored_card=scored_card)}\n"
+            f"Source: {scored_card.source_label}"
+        )
+
+    def _focused_card_details(
+        self,
+    ) -> tuple[str, int, int, ScoredCard, int] | None:
+        if self._view_mode == "build":
+            return self._focused_build_card()
+
+        selected = self._focused_pack_card()
+        if selected is None:
+            return None
+
+        rank, scored_card = selected
+        return "Available card", rank, len(self._sorted_cards()), scored_card, 1
+
+    def _focused_build_card(self) -> tuple[str, int, int, ScoredCard, int] | None:
+        if self._view_mode != "build" or not self._build_focus_cards:
+            return None
+
+        self._build_focused_card_index = min(
+            max(self._build_focused_card_index, 0),
+            len(self._build_focus_cards) - 1,
+        )
+        card, quantity = self._build_focus_cards[self._build_focused_card_index]
+        return (
+            "Selected card",
+            self._build_focused_card_index + 1,
+            len(self._build_focus_cards),
+            card,
+            quantity,
+        )
+
+    def _focused_pack_card(self) -> tuple[int, ScoredCard] | None:
+        if self._view_mode != "pack" or self._current_pack is None:
+            return None
+
+        table = self.query_one("#pack-table", DataTable)
+        row_index = table.cursor_coordinate.row
+        cards = self._sorted_cards()
+        if row_index < 0 or row_index >= len(cards):
+            return None
+
+        return row_index + 1, cards[row_index]
+
+    def _ensure_visible_focus(self) -> None:
+        focused_id = None if self.focused is None else self.focused.id
+        if focused_id is None:
+            self._focus_primary_card_section()
+            return
+
+        if focused_id == "pack-table" and self._view_mode != "pack":
+            self._focus_primary_card_section()
+            return
+
+        if focused_id == "build-scroll" and self._view_mode != "build":
+            self._focus_primary_card_section()
+
+    def _focus_primary_card_section(self) -> None:
+        if self._view_mode == "build":
+            self.query_one("#build-scroll", VerticalScroll).focus()
+            return
+
+        self.query_one("#pack-table", DataTable).focus()
 
     def _build_override_label(self) -> str:
         if self._forced_pair is not None:
@@ -1051,6 +1279,7 @@ class DraftgoblinTuiApp(App[None]):
             self._build_text = "Build view: no picked cards yet."
             self._build_pair_label = "—"
             self._last_build_signature = None
+            self._clear_build_render_state()
             return False
 
         try:
@@ -1071,23 +1300,60 @@ class DraftgoblinTuiApp(App[None]):
             )
             self._build_pair_label = "—"
             self._last_build_signature = None
+            self._clear_build_render_state()
             return True
 
         self._build_error = None
         self._last_error = None
         self._build_pair_label = selection.chosen.pair
         self._last_build_signature = self._build_signature(pool=pool)
+        self._build_render_pool = pool
+        self._build_render_selection = selection
+        self._build_render_spell_selection = build_sheet.spell_selection
+        self._build_render_mana_base = build_sheet.mana_base
+        self._refresh_build_text_from_render_state()
+        return True
+
+    def _refresh_build_text_from_render_state(self) -> None:
+        if (
+            self._build_render_pool is None
+            or self._build_render_selection is None
+            or self._build_render_spell_selection is None
+            or self._build_render_mana_base is None
+        ):
+            return
+
+        self._build_focus_cards = _tui_selected_spell_groups(
+            spell_selection=self._build_render_spell_selection,
+            spell_sort_mode=self._build_spell_sort_mode,
+        )
+        if not self._build_focus_cards:
+            self._build_focused_card_index = 0
+        else:
+            self._build_focused_card_index = min(
+                max(self._build_focused_card_index, 0),
+                len(self._build_focus_cards) - 1,
+            )
+
         self._build_text = _format_tui_build_result(
-            pool=pool,
-            selection=selection,
-            spell_selection=build_sheet.spell_selection,
-            mana_base=build_sheet.mana_base,
+            pool=self._build_render_pool,
+            selection=self._build_render_selection,
+            spell_selection=self._build_render_spell_selection,
+            mana_base=self._build_render_mana_base,
             card_database=self.card_database,
             spell_sort_mode=self._build_spell_sort_mode,
             show_details=self._build_show_details,
+            focused_card_index=self._build_focused_card_index,
             width=self._build_text_width(),
         )
-        return True
+
+    def _clear_build_render_state(self) -> None:
+        self._build_focus_cards = ()
+        self._build_focused_card_index = 0
+        self._build_render_pool = None
+        self._build_render_selection = None
+        self._build_render_spell_selection = None
+        self._build_render_mana_base = None
 
     def _build_signature(self, *, pool: BuildPool) -> BuildSignature:
         return (pool.set_code, pool.pool_grp_ids, self._forced_pair)
@@ -1139,6 +1405,7 @@ def _format_tui_build_result(
     card_database: CardDatabase,
     spell_sort_mode: str,
     show_details: bool,
+    focused_card_index: int,
     width: int,
 ) -> str:
     chosen_label = "forced" if selection.forced_pair is not None else "automatic"
@@ -1174,8 +1441,8 @@ def _format_tui_build_result(
             "each source format."
         ),
         (
-            "Keys: b checks build status; ↑/↓ or j/k scroll; PgUp/PgDn page; "
-            "s changes spell sort; c shows details/pool; p changes pair"
+            "Keys: b checks build status; ↑/↓/←/→ or j/k browse cards; "
+            "PgUp/PgDn page; s changes spell sort; c shows details/pool; p changes pair"
         ),
         "",
     ])
@@ -1183,6 +1450,7 @@ def _format_tui_build_result(
         _format_tui_selected_spells(
             spell_selection=spell_selection,
             spell_sort_mode=spell_sort_mode,
+            focused_card_index=focused_card_index,
             width=width,
         )
     )
@@ -1287,44 +1555,102 @@ def _format_tui_selected_spells(
     *,
     spell_selection: SpellSelection,
     spell_sort_mode: str,
+    focused_card_index: int,
     width: int,
 ) -> list[str]:
+    groups = _tui_selected_spell_groups(
+        spell_selection=spell_selection,
+        spell_sort_mode=spell_sort_mode,
+    )
     if spell_sort_mode == "score":
         return _format_tui_spell_columns(
             title="Selected spells by score",
-            cards=tuple(sorted(
-                spell_selection.spells,
-                key=lambda card: (-card.score, _format_mana_value(card=card.card), card.card.name),
-            )),
+            groups=groups,
+            total_count=len(spell_selection.spells),
+            focused_card_index=focused_card_index,
             width=width,
         )
 
     if spell_sort_mode == "name":
         return _format_tui_spell_columns(
             title="Selected spells by name",
-            cards=tuple(sorted(spell_selection.spells, key=lambda card: card.card.name)),
+            groups=groups,
+            total_count=len(spell_selection.spells),
+            focused_card_index=focused_card_index,
             width=width,
         )
 
-    return _format_tui_spell_curve(spells=spell_selection.spells, width=width)
+    return _format_tui_spell_curve(
+        groups=groups,
+        total_count=len(spell_selection.spells),
+        focused_card_index=focused_card_index,
+        width=width,
+    )
 
 
-def _format_tui_spell_curve(*, spells: tuple[ScoredCard, ...], width: int) -> list[str]:
-    groups: dict[str, list[ScoredCard]] = {}
-    for card in sorted(spells, key=_tui_spell_curve_sort_key):
-        groups.setdefault(_mana_value_bucket(card=card), []).append(card)
+def _tui_selected_spell_groups(
+    *,
+    spell_selection: SpellSelection,
+    spell_sort_mode: str,
+) -> tuple[TuiCardQuantityGroup, ...]:
+    if spell_sort_mode == "score":
+        return _group_tui_spell_cards(
+            cards=tuple(sorted(
+                spell_selection.spells,
+                key=lambda card: (
+                    -card.score,
+                    _format_mana_value(card=card.card),
+                    card.card.name,
+                ),
+            )),
+        )
+
+    if spell_sort_mode == "name":
+        return _group_tui_spell_cards(
+            cards=tuple(sorted(
+                spell_selection.spells,
+                key=lambda card: card.card.name,
+            )),
+        )
+
+    return _group_tui_spell_cards(
+        cards=tuple(sorted(spell_selection.spells, key=_tui_spell_curve_sort_key)),
+    )
+
+
+def _format_tui_spell_curve(
+    *,
+    groups: tuple[TuiCardQuantityGroup, ...],
+    total_count: int,
+    focused_card_index: int,
+    width: int,
+) -> list[str]:
+    groups_by_bucket: dict[str, list[tuple[int, TuiCardQuantityGroup]]] = {}
+    for index, group in enumerate(groups):
+        groups_by_bucket.setdefault(_mana_value_bucket(card=group[0]), []).append(
+            (index, group),
+        )
 
     blocks: list[list[str]] = []
-    for bucket in _ordered_mana_buckets(groups=groups):
-        cards = groups[bucket]
-        block = [f"MV {bucket} ({len(cards)})"]
+    for bucket in _ordered_mana_buckets(groups={
+        key: [card for _, (card, _) in values]
+        for key, values in groups_by_bucket.items()
+    }):
+        indexed_groups = groups_by_bucket[bucket]
+        bucket_count = sum(quantity for _, (_, quantity) in indexed_groups)
+        block = [f"MV {bucket} ({bucket_count})"]
         block.extend(
-            f"  {_format_tui_spell_card(card=card, quantity=quantity)}"
-            for card, quantity in _group_tui_spell_cards(cards=cards)
+            _format_tui_spell_card(
+                card=card,
+                quantity=quantity,
+                focused=index == focused_card_index,
+                show_focus_marker=True,
+            )
+            for index, (card, quantity) in indexed_groups
         )
         blocks.append(block)
 
-    return [f"Selected spells by mana value ({len(spells)})"] + _columnize_blocks(
+    return [f"Selected spells by mana value ({total_count})"] + _columnize_blocks(
         blocks=blocks,
         width=width,
     )
@@ -1333,14 +1659,23 @@ def _format_tui_spell_curve(*, spells: tuple[ScoredCard, ...], width: int) -> li
 def _format_tui_spell_columns(
     *,
     title: str,
-    cards: tuple[ScoredCard, ...],
+    groups: tuple[TuiCardQuantityGroup, ...],
+    total_count: int,
+    focused_card_index: int,
     width: int,
 ) -> list[str]:
     blocks = [
-        [_format_tui_spell_card(card=card, quantity=quantity)]
-        for card, quantity in _group_tui_spell_cards(cards=cards)
+        [
+            _format_tui_spell_card(
+                card=card,
+                quantity=quantity,
+                focused=index == focused_card_index,
+                show_focus_marker=True,
+            )
+        ]
+        for index, (card, quantity) in enumerate(groups)
     ]
-    return [f"{title} ({len(cards)})"] + _columnize_blocks(blocks=blocks, width=width)
+    return [f"{title} ({total_count})"] + _columnize_blocks(blocks=blocks, width=width)
 
 
 def _columnize_blocks(*, blocks: list[list[str]], width: int) -> list[str]:
@@ -1450,9 +1785,20 @@ def _format_tui_bench(*, selection: SpellSelection, width: int) -> list[str]:
     return lines
 
 
-def _format_tui_spell_card(*, card: ScoredCard, quantity: int = 1) -> str:
+def _format_tui_spell_card(
+    *,
+    card: ScoredCard,
+    quantity: int = 1,
+    focused: bool = False,
+    show_focus_marker: bool = False,
+) -> str:
     quantity_suffix = _format_tui_quantity_suffix(quantity=quantity)
+    focus_marker = ""
+    if show_focus_marker:
+        focus_marker = "▶ " if focused else "  "
+
     return (
+        f"{focus_marker}"
         f"{_format_win_rate(scored_card=card):>6} "
         f"{_format_letter_grade(scored_card=card):>2} "
         f"{card.score:>2} "
