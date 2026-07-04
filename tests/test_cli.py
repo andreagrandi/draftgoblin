@@ -88,6 +88,34 @@ def test_watch_plain_once_honors_log_path_override(
 
 
 
+def test_watch_tui_once_is_default_mode(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+
+    exit_code = main(
+        argv=[
+            "watch",
+            "--log-path",
+            str(log_path),
+            "--bulk-file",
+            str(SCRYFALL_BULK_SAMPLE_PATH),
+            "--app-dir",
+            str(tmp_path / "app"),
+            "--once",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+
 def test_build_pool_file_selects_pair_offline(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

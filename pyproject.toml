@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Andrea Grandi" }]
-dependencies = []
+dependencies = [
+    "textual>=8.2.8",
+]
 
 [project.scripts]
 draftgoblin = "draftgoblin.cli:main"
