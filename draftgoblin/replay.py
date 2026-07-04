@@ -313,8 +313,16 @@ def _format_pack(
         f"Pack {event.pack_number + 1} Pick {event.pick_number + 1}",
         _format_pack_status(scored_pack=scored_pack),
         f"Data source: {scored_pack.source_summary}",
-        "Offered cards:",
     ]
+    unresolved_count = len(
+        card_database.unresolved_grp_ids(
+            grp_ids=(*event.offered_grp_ids, *event.pool_grp_ids),
+        )
+    )
+    if unresolved_count > 0:
+        lines.append(f"Warning: {unresolved_count} unresolved card metadata")
+
+    lines.append("Offered cards:")
     lines.extend(_format_scored_cards(cards=scored_pack.cards))
     if any(card.no_data for card in scored_pack.cards):
         lines.append("  * Prior uses neutral prior adjusted by ALSA when available.")

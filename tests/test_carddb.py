@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import gzip
+import json
 from pathlib import Path
 
 import pytest
 
 from draftgoblin.carddb import (
+    CardDatabase,
     CardDatabaseCacheMissingError,
+    CardMetadataSeed,
+    augment_card_database_with_mtgjson_set,
+    build_card_database_from_arena_data_dir,
     build_card_database_from_bulk_file,
     card_database_cache_path,
     load_card_database,
+    load_or_refresh_card_database,
     refresh_card_database,
 )
 from draftgoblin.cli import main
@@ -73,6 +79,102 @@ def test_scryfall_bulk_keeps_mana_cost_and_produced_mana(tmp_path: Path) -> None
     assert database.lookup(grp_id=3).produced_mana == ()
     assert database.lookup(grp_id=4).produced_mana == ("G",)
 
+
+def test_arena_local_data_builds_current_set_metadata(tmp_path: Path) -> None:
+    arena_data_dir = _write_arena_data_dir(directory=tmp_path)
+
+    database = build_card_database_from_arena_data_dir(path=arena_data_dir)
+
+    spider = database.lookup(grp_id=105097)
+    assert spider.name == "Arena Spider"
+    assert spider.colors == ("G",)
+    assert spider.mana_value == 4.0
+    assert spider.rarity == "rare"
+    assert spider.types == ("Creature — Spider",)
+    assert spider.mana_cost == "{3}{G}"
+
+    land = database.lookup(grp_id=105200)
+    assert land.name == "Arena Dual"
+    assert land.colors == ()
+    assert land.rarity == "common"
+    assert land.types == ("Land",)
+    assert land.produced_mana == ("W", "U")
+
+
+def test_mtgjson_set_metadata_resolves_grp_ids_from_name_seeds() -> None:
+    database = augment_card_database_with_mtgjson_set(
+        CardDatabase(cards={}),
+        set_code="MSH",
+        seeds=(
+            CardMetadataSeed(
+                grp_id=105097,
+                name="Arena Spider",
+                colors=("G",),
+                rarity="rare",
+            ),
+        ),
+        mtgjson_cards=(
+            {
+                "name": "Arena Spider",
+                "manaValue": 4,
+                "manaCost": "{3}{G}",
+                "colors": ["G"],
+                "producedMana": None,
+                "rarity": "rare",
+                "type": "Creature — Spider",
+                "availability": ["arena"],
+            },
+            {
+                "name": "Arena Forest",
+                "manaValue": 0,
+                "manaCost": None,
+                "colors": [],
+                "colorIdentity": ["G"],
+                "producedMana": ["G"],
+                "rarity": "basic",
+                "type": "Basic Land — Forest",
+                "availability": ["arena"],
+            },
+        ),
+    )
+
+    spider = database.lookup(grp_id=105097)
+    assert spider.name == "Arena Spider"
+    assert spider.colors == ("G",)
+    assert spider.mana_value == 4.0
+    assert spider.rarity == "rare"
+    assert spider.types == ("Creature — Spider",)
+    assert spider.mana_cost == "{3}{G}"
+    assert spider.unknown is False
+
+    forest = database.lookup(grp_id=105098)
+    assert forest.name == "Arena Forest"
+    assert forest.types == ("Basic Land — Forest",)
+    assert forest.produced_mana == ("G",)
+
+
+def test_cached_scryfall_data_is_augmented_with_arena_local_data(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    arena_data_dir = _write_arena_data_dir(directory=tmp_path)
+    bulk_path = tmp_path / "stale-scryfall.jsonl"
+    bulk_path.write_text(
+        '{"arena_id":105097,"name":"Scryfall Spider","colors":["R"],'
+        '"cmc":2,"rarity":"common","type_line":"Creature — Fixture"}\n',
+        encoding="utf-8",
+    )
+    refresh_card_database(app_dir=app_dir, bulk_file=bulk_path)
+
+    database = load_or_refresh_card_database(
+        app_dir=app_dir,
+        arena_data_dir=arena_data_dir,
+    )
+
+    assert database.lookup(grp_id=105097).name == "Arena Spider"
+    assert database.lookup(grp_id=105097).colors == ("G",)
+    assert database.lookup(grp_id=105200).name == "Arena Dual"
+    assert database.unresolved_grp_ids(grp_ids=(105097, 999999, 105200)) == (999999,)
 
 
 def test_unknown_grp_id_returns_explicit_marker() -> None:
@@ -151,4 +253,57 @@ def _fixture_grp_ids() -> set[int]:
             grp_ids.update(event.picked_grp_ids)
 
     return grp_ids
+
+
+def _write_arena_data_dir(*, directory: Path) -> Path:
+    arena_data_dir = directory / "arena-data"
+    arena_data_dir.mkdir()
+    cards = [
+        {
+            "grpid": 105097,
+            "titleId": 1001,
+            "cmc": 4,
+            "rarity": 4,
+            "cardTypeTextId": 2001,
+            "subtypeTextId": 2002,
+            "colors": [5],
+            "colorIdentity": [5],
+            "castingcost": "o3oG",
+            "linkedFaces": [],
+        },
+        {
+            "grpid": 105200,
+            "titleId": 1002,
+            "cmc": 0,
+            "rarity": 2,
+            "cardTypeTextId": 2003,
+            "subtypeTextId": 0,
+            "colors": [],
+            "colorIdentity": [1, 2],
+            "castingcost": "o0",
+            "linkedFaces": [],
+        },
+    ]
+    localization = [
+        {
+            "langkey": "EN",
+            "isoCode": "en-US",
+            "keys": [
+                {"id": 1001, "text": "Arena Spider"},
+                {"id": 1002, "text": "Arena Dual"},
+                {"id": 2001, "text": "Creature"},
+                {"id": 2002, "text": "Spider"},
+                {"id": 2003, "text": "Land"},
+            ],
+        }
+    ]
+    (arena_data_dir / "data_cards_fixture.mtga").write_text(
+        json.dumps(cards),
+        encoding="utf-8",
+    )
+    (arena_data_dir / "data_loc_fixture.mtga").write_text(
+        json.dumps(localization),
+        encoding="utf-8",
+    )
+    return arena_data_dir
 

@@ -6,18 +6,21 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from draftgoblin import DISCLAIMER, __version__
 from draftgoblin.carddb import (
     CardDatabase,
     CardDatabaseError,
+    CardMetadataSeed,
+    augment_card_database_with_mtgjson_set,
     build_card_database_from_bulk_file,
     card_database_cache_path,
     load_card_database,
     load_or_refresh_card_database,
     refresh_card_database,
+    save_card_database,
 )
 from draftgoblin.config import COLOR_PAIRS
 from draftgoblin.deckbuilder import (
@@ -34,6 +37,8 @@ from draftgoblin.pool import DraftPoolError
 from draftgoblin.replay import ReplayError, replay_log_file
 from draftgoblin.seventeen import (
     QUICK_DRAFT_FORMAT,
+    ResolvedCardRating,
+    SeventeenLandsData,
     SeventeenLandsError,
     load_cached_17lands_data,
     load_or_refresh_17lands_data,
@@ -210,8 +215,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     refresh_parser = subparsers.add_parser(
         name="refresh-data",
-        help="Refresh cached Scryfall card metadata.",
-        description="Refresh the local Arena grpId card metadata cache from Scryfall.",
+        help="Refresh cached Scryfall and Arena card metadata.",
+        description=(
+            "Refresh the local Arena grpId card metadata cache from Scryfall, "
+            "overlaying MTG Arena local data when available."
+        ),
     )
     refresh_parser.add_argument(
         "--bulk-file",
@@ -304,9 +312,13 @@ def handle_watch(args: argparse.Namespace) -> int:
 
     try:
         database = _load_watch_card_database(args=args)
-        ratings_loader = lambda set_code: load_or_refresh_17lands_data(
-            set_code=set_code,
-            app_dir=args.app_dir,
+        ratings_loader = _metadata_augmenting_ratings_loader(
+            args=args,
+            database=database,
+            load_ratings=lambda set_code: load_or_refresh_17lands_data(
+                set_code=set_code,
+                app_dir=args.app_dir,
+            ),
         )
         if args.plain:
             return run_plain_watch(
@@ -363,9 +375,13 @@ def handle_replay(args: argparse.Namespace) -> int:
         output = replay_log_file(
             logfile=args.logfile,
             card_database=database,
-            ratings_loader=lambda set_code: load_cached_17lands_data(
-                set_code=set_code,
-                app_dir=args.app_dir,
+            ratings_loader=_metadata_augmenting_ratings_loader(
+                args=args,
+                database=database,
+                load_ratings=lambda set_code: load_cached_17lands_data(
+                    set_code=set_code,
+                    app_dir=args.app_dir,
+                ),
             ),
         )
     except (
@@ -414,6 +430,12 @@ def handle_build(args: argparse.Namespace) -> int:
             set_code=pool.set_code,
             app_dir=args.app_dir,
         )
+        _augment_card_database_from_ratings(
+            args=args,
+            database=database,
+            set_code=pool.set_code,
+            ratings_data=ratings_data,
+        )
         selection, build_sheet = build_deck_from_pool(
             pool=pool,
             card_database=database,
@@ -448,10 +470,92 @@ def _load_build_card_database(*, args: argparse.Namespace) -> CardDatabase:
     return load_or_refresh_card_database(app_dir=args.app_dir)
 
 
+def _metadata_augmenting_ratings_loader(
+    *,
+    args: argparse.Namespace,
+    database: CardDatabase,
+    load_ratings: Callable[[str], SeventeenLandsData],
+) -> Callable[[str], SeventeenLandsData]:
+    def load_and_augment(set_code: str) -> SeventeenLandsData:
+        ratings_data = load_ratings(set_code)
+        _augment_card_database_from_ratings(
+            args=args,
+            database=database,
+            set_code=set_code,
+            ratings_data=ratings_data,
+        )
+        return ratings_data
+
+    return load_and_augment
+
+
+def _augment_card_database_from_ratings(
+    *,
+    args: argparse.Namespace,
+    database: CardDatabase,
+    set_code: str,
+    ratings_data: SeventeenLandsData,
+) -> None:
+    seeds = _metadata_seeds_from_ratings(ratings=ratings_data.ratings.values())
+    if not seeds:
+        return
+
+    missing_grp_ids = database.unresolved_grp_ids(
+        grp_ids=tuple(seed.grp_id for seed in seeds),
+    )
+    if not missing_grp_ids:
+        return
+
+    try:
+        augmented = augment_card_database_with_mtgjson_set(
+            database,
+            set_code=set_code,
+            seeds=seeds,
+        )
+    except CardDatabaseError:
+        return
+
+    database.cards.clear()
+    database.cards.update(augmented.cards)
+    if getattr(args, "bulk_file", None) is not None:
+        return
+
+    try:
+        save_card_database(database, app_dir=args.app_dir)
+    except OSError:
+        return
+
+
+def _metadata_seeds_from_ratings(
+    *,
+    ratings: Iterable[ResolvedCardRating],
+) -> tuple[CardMetadataSeed, ...]:
+    seeds: dict[int, CardMetadataSeed] = {}
+    for rating in ratings:
+        if rating.name.startswith("Unknown card "):
+            continue
+
+        seeds[rating.grp_id] = CardMetadataSeed(
+            grp_id=rating.grp_id,
+            name=rating.name,
+            colors=_rating_colors(color=rating.color),
+            rarity=rating.rarity or "unknown",
+        )
+
+    return tuple(seeds.values())
+
+
+def _rating_colors(*, color: str | None) -> tuple[str, ...]:
+    if color is None:
+        return ()
+
+    return tuple(symbol for symbol in "WUBRG" if symbol in color)
+
+
 
 def handle_refresh_data(args: argparse.Namespace) -> int:
     """Handle the refresh-data command.
-    Build the local Scryfall-backed grpId metadata cache.
+    Build the local Scryfall/Arena-backed grpId metadata cache.
     """
 
     try:

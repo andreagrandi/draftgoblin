@@ -1,4 +1,4 @@
-"""Local card metadata cache backed by Scryfall bulk data.
+"""Local card metadata cache backed by Scryfall and Arena data.
 Translate Arena grpIds into display-ready card facts for replay and scoring.
 """
 
@@ -7,8 +7,11 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import os
+import platform
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -25,12 +28,25 @@ PathInput: TypeAlias = str | PathLike[str]
 CARD_DATABASE_CACHE_FILENAME = "carddb.json"
 SCRYFALL_BULK_DATA_URL = "https://api.scryfall.com/bulk-data"
 SCRYFALL_DEFAULT_CARDS_TYPE = "default_cards"
+MTGJSON_SET_URL_TEMPLATE = "https://mtgjson.com/api/v5/{set_code}.json"
 SCRYFALL_USER_AGENT = (
     f"draftgoblin/{__version__} "
     "(+https://github.com/andreagrandi/draftgoblin)"
 )
+ARENA_DATA_CARDS_PREFIX = "data_cards"
+ARENA_DATA_LOC_PREFIX = "data_loc"
+ARENA_DATA_FILE_SUFFIXES = (".mtga", ".json", ".js")
 HTTP_TIMEOUT_SECONDS = 60
 COLOR_ORDER = ("W", "U", "B", "R", "G")
+ARENA_COLOR_ID_MAP = {1: "W", 2: "U", 3: "B", 4: "R", 5: "G"}
+ARENA_RARITY_ID_MAP = {
+    0: "token",
+    1: "basic",
+    2: "common",
+    3: "uncommon",
+    4: "rare",
+    5: "mythic",
+}
 CACHE_SCHEMA_VERSION = 1
 
 
@@ -123,6 +139,18 @@ class CardInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class CardMetadataSeed:
+    """Set-scoped external metadata used to bridge grpIds to card names.
+    17Lands supplies these rows before Scryfall exposes arena_id values.
+    """
+
+    grp_id: int
+    name: str
+    colors: tuple[str, ...]
+    rarity: str
+
+
+@dataclass(frozen=True, slots=True)
 class CardDatabase:
     """Lookup table from Arena grpId to card metadata.
     Missing grpIds return explicit unknown markers instead of raising.
@@ -139,6 +167,23 @@ class CardDatabase:
         """
 
         return self.cards.get(grp_id, CardInfo.unknown_card(grp_id=grp_id))
+
+    def unresolved_grp_ids(self, *, grp_ids: Iterable[int]) -> tuple[int, ...]:
+        """Return unique ids that still resolve to unknown markers.
+        UI code uses this to warn when metadata coverage is incomplete.
+        """
+
+        seen: set[int] = set()
+        unresolved: list[int] = []
+        for grp_id in grp_ids:
+            if grp_id in seen:
+                continue
+
+            seen.add(grp_id)
+            if self.lookup(grp_id=grp_id).unknown:
+                unresolved.append(grp_id)
+
+        return tuple(unresolved)
 
     def to_json(self) -> dict[str, object]:
         """Convert the database to Draftgoblin's cache format.
@@ -259,16 +304,25 @@ def refresh_card_database(
     app_dir: PathInput | None = None,
     cache_path: PathInput | None = None,
     bulk_file: PathInput | None = None,
+    arena_data_dir: PathInput | None = None,
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
 ) -> CardDatabase:
-    """Build and cache the grpId map from Scryfall bulk data.
+    """Build and cache the grpId map from Scryfall and Arena local data.
     Passing bulk_file keeps tests and local fixtures completely offline.
     """
 
     if bulk_file is None:
-        database = download_scryfall_card_database(timeout_seconds=timeout_seconds)
+        database = _download_or_arena_card_database(
+            arena_data_dir=arena_data_dir,
+            timeout_seconds=timeout_seconds,
+        )
     else:
         database = build_card_database_from_bulk_file(path=bulk_file)
+        if arena_data_dir is not None:
+            database = augment_card_database_with_arena_data(
+                database,
+                arena_data_dir=arena_data_dir,
+            )
 
     save_card_database(database, app_dir=app_dir, cache_path=cache_path)
     return database
@@ -278,6 +332,7 @@ def load_or_refresh_card_database(
     *,
     app_dir: PathInput | None = None,
     cache_path: PathInput | None = None,
+    arena_data_dir: PathInput | None = None,
     refresh: bool = False,
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
 ) -> CardDatabase:
@@ -289,17 +344,24 @@ def load_or_refresh_card_database(
         return refresh_card_database(
             app_dir=app_dir,
             cache_path=cache_path,
+            arena_data_dir=arena_data_dir,
             timeout_seconds=timeout_seconds,
         )
 
     try:
-        return load_card_database(app_dir=app_dir, cache_path=cache_path)
+        database = load_card_database(app_dir=app_dir, cache_path=cache_path)
     except CardDatabaseCacheMissingError:
         return refresh_card_database(
             app_dir=app_dir,
             cache_path=cache_path,
+            arena_data_dir=arena_data_dir,
             timeout_seconds=timeout_seconds,
         )
+
+    return augment_card_database_with_arena_data(
+        database,
+        arena_data_dir=arena_data_dir,
+    )
 
 
 def download_scryfall_card_database(
@@ -351,6 +413,431 @@ def build_card_database_from_scryfall_cards(
     return CardDatabase(cards=database_cards)
 
 
+def build_card_database_from_arena_data_dir(*, path: PathInput) -> CardDatabase:
+    """Build card metadata from MTG Arena's local data_cards/data_loc files.
+    This covers day-one Arena grpIds before Scryfall publishes arena_id values.
+    """
+
+    data_dir = Path(path).expanduser()
+    cards_path, loc_path = _arena_data_file_pair(path=data_dir, required=True)
+    card_objects = _load_arena_json_array(path=cards_path, label="cards")
+    loc_objects = _load_arena_json_array(path=loc_path, label="localization")
+    localization = _arena_localization_map(items=loc_objects, source=str(loc_path))
+    return build_card_database_from_arena_cards(
+        cards=card_objects,
+        localization=localization,
+    )
+
+
+def build_card_database_from_arena_cards(
+    *,
+    cards: Iterable[Mapping[str, Any]],
+    localization: Mapping[int, str],
+) -> CardDatabase:
+    """Build the grpId map from Arena local card objects.
+    Arena local data is authoritative for the client grpIds present in logs.
+    """
+
+    card_objects = tuple(cards)
+    cards_by_grp_id: dict[int, Mapping[str, Any]] = {}
+    for card_object in card_objects:
+        grp_id_value = card_object.get("grpid", card_object.get("grpId"))
+        if grp_id_value is None:
+            continue
+
+        grp_id = _required_int(grp_id_value, field_name="Arena card.grpid")
+        cards_by_grp_id[grp_id] = card_object
+
+    database_cards: dict[int, CardInfo] = {}
+    for card_object in card_objects:
+        card = _card_info_from_arena(
+            card=card_object,
+            localization=localization,
+            cards_by_grp_id=cards_by_grp_id,
+        )
+        if card is None:
+            continue
+
+        database_cards[card.grp_id] = card
+
+    return CardDatabase(cards=database_cards)
+
+
+def find_default_arena_data_dir() -> Path | None:
+    """Return the first default MTG Arena data dir with card metadata files.
+    The function is best-effort and returns None when Arena is not installed.
+    """
+
+    for candidate in _default_arena_data_dir_candidates():
+        if _arena_data_file_pair(path=candidate, required=False) is not None:
+            return candidate
+
+    return None
+
+
+def augment_card_database_with_arena_data(
+    database: CardDatabase,
+    *,
+    arena_data_dir: PathInput | None = None,
+) -> CardDatabase:
+    """Overlay local Arena card data when it is available.
+    Local data wins because it is the source of grpIds emitted by Player.log.
+    """
+
+    arena_database = _load_arena_card_database_if_available(
+        arena_data_dir=arena_data_dir,
+    )
+    if arena_database is None:
+        return database
+
+    return _merge_card_databases(base=database, overlay=arena_database)
+
+
+def augment_card_database_with_mtgjson_set(
+    database: CardDatabase,
+    *,
+    set_code: str,
+    seeds: Iterable[CardMetadataSeed],
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+    mtgjson_cards: Iterable[Mapping[str, Any]] | None = None,
+) -> CardDatabase:
+    """Resolve missing grpIds by matching 17Lands names to MTGJSON set data.
+    This covers new sets whose Scryfall records do not yet expose arena_id.
+    """
+
+    missing_seeds = tuple(
+        seed for seed in seeds if database.lookup(grp_id=seed.grp_id).unknown
+    )
+    if not missing_seeds:
+        return database
+
+    card_objects = tuple(
+        download_mtgjson_set_cards(
+            set_code=set_code,
+            timeout_seconds=timeout_seconds,
+        )
+        if mtgjson_cards is None
+        else mtgjson_cards
+    )
+    cards_by_uuid = _mtgjson_cards_by_uuid(cards=card_objects)
+    cards_by_name = _mtgjson_cards_by_name(cards=card_objects)
+    card_indices = {id(card): index for index, card in enumerate(card_objects)}
+    cards = dict(database.cards)
+    inferred_offset = _mtgjson_arena_id_offset(
+        seeds=missing_seeds,
+        cards_by_name=cards_by_name,
+        card_indices=card_indices,
+    )
+    if inferred_offset is not None:
+        _add_mtgjson_cards_by_inferred_arena_order(
+            cards=cards,
+            card_objects=card_objects,
+            cards_by_uuid=cards_by_uuid,
+            arena_id_offset=inferred_offset,
+        )
+
+    for seed in missing_seeds:
+        mtgjson_card = _mtgjson_card_for_seed(seed=seed, cards_by_name=cards_by_name)
+        if mtgjson_card is None:
+            cards[seed.grp_id] = _card_info_from_metadata_seed(seed=seed)
+            continue
+
+        cards[seed.grp_id] = _card_info_from_mtgjson(
+            card=mtgjson_card,
+            seed=seed,
+            cards_by_uuid=cards_by_uuid,
+        )
+
+    return CardDatabase(cards=cards)
+
+
+def download_mtgjson_set_cards(
+    *,
+    set_code: str,
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+) -> tuple[Mapping[str, Any], ...]:
+    """Download one MTGJSON set file and return its card objects.
+    MTGJSON includes current-set card names, mana values, and type lines.
+    """
+
+    url = MTGJSON_SET_URL_TEMPLATE.format(
+        set_code=urllib.parse.quote(set_code.upper()),
+    )
+    request = _request(url=url)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as error:
+        raise CardDatabaseError(f"Failed to query MTGJSON set metadata: {error}") from error
+    except json.JSONDecodeError as error:
+        raise CardDatabaseError(f"Malformed MTGJSON set metadata: {error}") from error
+
+    if not isinstance(payload, dict):
+        raise CardDatabaseError("Malformed MTGJSON set metadata: expected object.")
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise CardDatabaseError("Malformed MTGJSON set metadata: missing data object.")
+
+    cards_value = data.get("cards")
+    if not isinstance(cards_value, list):
+        raise CardDatabaseError("Malformed MTGJSON set metadata: missing cards list.")
+
+    cards: list[Mapping[str, Any]] = []
+    for item in cards_value:
+        if not isinstance(item, dict):
+            raise CardDatabaseError("Malformed MTGJSON set metadata: card is not object.")
+
+        cards.append(item)
+
+    return tuple(cards)
+
+
+def _mtgjson_cards_by_uuid(
+    *,
+    cards: Iterable[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    cards_by_uuid: dict[str, Mapping[str, Any]] = {}
+    for card in cards:
+        uuid = card.get("uuid")
+        if isinstance(uuid, str) and uuid:
+            cards_by_uuid[uuid] = card
+
+    return cards_by_uuid
+
+
+def _mtgjson_cards_by_name(
+    *,
+    cards: Iterable[Mapping[str, Any]],
+) -> dict[str, list[Mapping[str, Any]]]:
+    cards_by_name: dict[str, list[Mapping[str, Any]]] = {}
+    for card in cards:
+        for name in _mtgjson_card_names(card=card):
+            cards_by_name.setdefault(_normalized_card_name(name=name), []).append(card)
+
+    return cards_by_name
+
+
+def _mtgjson_card_names(*, card: Mapping[str, Any]) -> tuple[str, ...]:
+    names: list[str] = []
+    name = card.get("name")
+    if isinstance(name, str) and name:
+        names.append(name)
+
+    face_name = card.get("faceName")
+    if isinstance(face_name, str) and face_name:
+        names.append(face_name)
+
+    return tuple(dict.fromkeys(names))
+
+
+def _mtgjson_card_for_seed(
+    *,
+    seed: CardMetadataSeed,
+    cards_by_name: Mapping[str, list[Mapping[str, Any]]],
+) -> Mapping[str, Any] | None:
+    candidates = cards_by_name.get(_normalized_card_name(name=seed.name), [])
+    if not candidates:
+        return None
+
+    return min(candidates, key=_mtgjson_card_sort_key)
+
+
+def _mtgjson_arena_id_offset(
+    *,
+    seeds: Iterable[CardMetadataSeed],
+    cards_by_name: Mapping[str, list[Mapping[str, Any]]],
+    card_indices: Mapping[int, int],
+) -> int | None:
+    offset_counts: dict[int, int] = {}
+    for seed in seeds:
+        card = _mtgjson_card_for_seed(seed=seed, cards_by_name=cards_by_name)
+        if card is None:
+            continue
+
+        index = card_indices.get(id(card))
+        if index is None:
+            continue
+
+        offset = seed.grp_id - index
+        offset_counts[offset] = offset_counts.get(offset, 0) + 1
+
+    if not offset_counts:
+        return None
+
+    return max(offset_counts, key=lambda offset: (offset_counts[offset], -offset))
+
+
+def _add_mtgjson_cards_by_inferred_arena_order(
+    *,
+    cards: dict[int, CardInfo],
+    card_objects: tuple[Mapping[str, Any], ...],
+    cards_by_uuid: Mapping[str, Mapping[str, Any]],
+    arena_id_offset: int,
+) -> None:
+    for index, card in enumerate(card_objects):
+        if not _mtgjson_card_is_arena_available(card=card):
+            continue
+
+        grp_id = arena_id_offset + index
+        if grp_id in cards and not cards[grp_id].unknown:
+            continue
+
+        cards[grp_id] = _card_info_from_mtgjson(
+            card=card,
+            seed=_metadata_seed_from_mtgjson_card(grp_id=grp_id, card=card),
+            cards_by_uuid=cards_by_uuid,
+        )
+
+
+def _mtgjson_card_is_arena_available(*, card: Mapping[str, Any]) -> bool:
+    availability = card.get("availability")
+    return isinstance(availability, list) and "arena" in availability
+
+
+def _metadata_seed_from_mtgjson_card(
+    *,
+    grp_id: int,
+    card: Mapping[str, Any],
+) -> CardMetadataSeed:
+    name = _required_str(card.get("name"), field_name=f"MTGJSON card {grp_id}.name")
+    return CardMetadataSeed(
+        grp_id=grp_id,
+        name=name,
+        colors=_mtgjson_colors(card=card, field_name=name),
+        rarity=_required_str(
+            card.get("rarity", "unknown"),
+            field_name=f"MTGJSON card {name}.rarity",
+        ),
+    )
+
+
+def _mtgjson_card_sort_key(card: Mapping[str, Any]) -> tuple[int, int, str]:
+    availability = card.get("availability")
+    available_on_arena = isinstance(availability, list) and "arena" in availability
+    side = card.get("side")
+    is_front_or_single = side in (None, "", "a")
+    uuid = card.get("uuid")
+    return (
+        0 if available_on_arena else 1,
+        0 if is_front_or_single else 1,
+        uuid if isinstance(uuid, str) else "",
+    )
+
+
+def _card_info_from_metadata_seed(*, seed: CardMetadataSeed) -> CardInfo:
+    return CardInfo(
+        grp_id=seed.grp_id,
+        name=seed.name,
+        colors=seed.colors,
+        mana_value=None,
+        rarity=seed.rarity,
+        types=("Unknown",),
+        unknown=True,
+    )
+
+
+def _card_info_from_mtgjson(
+    *,
+    card: Mapping[str, Any],
+    seed: CardMetadataSeed,
+    cards_by_uuid: Mapping[str, Mapping[str, Any]],
+) -> CardInfo:
+    faces = _mtgjson_related_faces(card=card, cards_by_uuid=cards_by_uuid)
+    type_lines = tuple(dict.fromkeys(
+        _required_str(
+            face.get("type"),
+            field_name=f"MTGJSON card {seed.name}.type",
+        )
+        for face in faces
+    ))
+    mana_cost = _mtgjson_combined_mana_cost(faces=faces)
+    return CardInfo(
+        grp_id=seed.grp_id,
+        name=seed.name,
+        colors=seed.colors or _mtgjson_colors(card=card, field_name=seed.name),
+        mana_value=_required_float(
+            card.get("manaValue", card.get("mana_value")),
+            field_name=f"MTGJSON card {seed.name}.manaValue",
+        ),
+        rarity=_required_str(
+            card.get("rarity", seed.rarity),
+            field_name=f"MTGJSON card {seed.name}.rarity",
+        ),
+        types=type_lines,
+        mana_cost=mana_cost,
+        produced_mana=_mtgjson_produced_mana(card=card, field_name=seed.name),
+    )
+
+
+def _mtgjson_related_faces(
+    *,
+    card: Mapping[str, Any],
+    cards_by_uuid: Mapping[str, Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    faces = [card]
+    other_faces_value = card.get("otherFaceIds", ())
+    if isinstance(other_faces_value, list):
+        for face_uuid in other_faces_value:
+            if not isinstance(face_uuid, str):
+                continue
+
+            face = cards_by_uuid.get(face_uuid)
+            if face is not None:
+                faces.append(face)
+
+    return tuple(faces)
+
+
+def _mtgjson_combined_mana_cost(*, faces: tuple[Mapping[str, Any], ...]) -> str | None:
+    costs = tuple(
+        cost
+        for cost in (_optional_mtgjson_mana_cost(face.get("manaCost")) for face in faces)
+        if cost is not None
+    )
+    if not costs:
+        return None
+
+    return " // ".join(costs)
+
+
+def _optional_mtgjson_mana_cost(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    return _required_str(value, field_name="MTGJSON card.manaCost")
+
+
+def _mtgjson_colors(*, card: Mapping[str, Any], field_name: str) -> tuple[str, ...]:
+    colors_value = card.get("colors")
+    if colors_value is not None:
+        return _color_tuple(colors_value, field_name=f"MTGJSON card {field_name}.colors")
+
+    return _color_tuple(
+        card.get("colorIdentity", ()),
+        field_name=f"MTGJSON card {field_name}.colorIdentity",
+    )
+
+
+def _mtgjson_produced_mana(
+    *,
+    card: Mapping[str, Any],
+    field_name: str,
+) -> tuple[str, ...]:
+    produced_value = card.get("producedMana")
+    if produced_value is None:
+        return ()
+
+    return _produced_mana_tuple(
+        produced_value,
+        field_name=f"MTGJSON card {field_name}.producedMana",
+    )
+
+
+def _normalized_card_name(*, name: str) -> str:
+    return " ".join(name.casefold().replace("’", "'").split())
+
+
 def _cache_path(
     *,
     app_dir: PathInput | None,
@@ -381,6 +868,104 @@ def _card_info_from_scryfall(*, card: Mapping[str, Any]) -> CardInfo | None:
         mana_cost=_card_mana_cost(card=card, grp_id=grp_id),
         produced_mana=_card_produced_mana(card=card, grp_id=grp_id),
     )
+
+
+def _card_info_from_arena(
+    *,
+    card: Mapping[str, Any],
+    localization: Mapping[int, str],
+    cards_by_grp_id: Mapping[int, Mapping[str, Any]],
+) -> CardInfo | None:
+    grp_id_value = card.get("grpid", card.get("grpId"))
+    if grp_id_value is None:
+        return None
+
+    grp_id = _required_int(grp_id_value, field_name="Arena card.grpid")
+    linked_faces = _arena_linked_face_cards(
+        card=card,
+        cards_by_grp_id=cards_by_grp_id,
+    )
+    type_line = _arena_combined_type_line(
+        card=card,
+        linked_faces=linked_faces,
+        localization=localization,
+        grp_id=grp_id,
+    )
+    return CardInfo(
+        grp_id=grp_id,
+        name=_arena_localized_text(
+            localization=localization,
+            text_id=card.get("titleId"),
+            field_name=f"Arena card {grp_id}.titleId",
+        ),
+        colors=_arena_card_colors(
+            card=card,
+            linked_faces=linked_faces,
+            grp_id=grp_id,
+        ),
+        mana_value=_required_float(
+            card.get("cmc"),
+            field_name=f"Arena card {grp_id}.cmc",
+        ),
+        rarity=_arena_card_rarity(card=card, grp_id=grp_id),
+        types=(type_line,),
+        mana_cost=_arena_card_mana_cost(card=card, linked_faces=linked_faces),
+        produced_mana=_arena_card_produced_mana(
+            card=card,
+            primary_type_line=_arena_type_line(
+                card=card,
+                localization=localization,
+                grp_id=grp_id,
+            ),
+            grp_id=grp_id,
+        ),
+    )
+
+
+def _download_or_arena_card_database(
+    *,
+    arena_data_dir: PathInput | None,
+    timeout_seconds: int,
+) -> CardDatabase:
+    try:
+        database = download_scryfall_card_database(timeout_seconds=timeout_seconds)
+    except CardDatabaseError:
+        arena_database = _load_arena_card_database_if_available(
+            arena_data_dir=arena_data_dir,
+        )
+        if arena_database is None:
+            raise
+
+        return arena_database
+
+    return augment_card_database_with_arena_data(
+        database,
+        arena_data_dir=arena_data_dir,
+    )
+
+
+def _load_arena_card_database_if_available(
+    *,
+    arena_data_dir: PathInput | None,
+) -> CardDatabase | None:
+    if arena_data_dir is not None:
+        return build_card_database_from_arena_data_dir(path=arena_data_dir)
+
+    default_data_dir = find_default_arena_data_dir()
+    if default_data_dir is None:
+        return None
+
+    return build_card_database_from_arena_data_dir(path=default_data_dir)
+
+
+def _merge_card_databases(
+    *,
+    base: CardDatabase,
+    overlay: CardDatabase,
+) -> CardDatabase:
+    cards = dict(base.cards)
+    cards.update(overlay.cards)
+    return CardDatabase(cards=cards)
 
 
 def _card_colors(*, card: Mapping[str, Any], grp_id: int) -> tuple[str, ...]:
@@ -476,6 +1061,399 @@ def _card_produced_mana(*, card: Mapping[str, Any], grp_id: int) -> tuple[str, .
             )
 
     return _ordered_unique_colors(colors=face_mana)
+
+
+def _arena_linked_face_cards(
+    *,
+    card: Mapping[str, Any],
+    cards_by_grp_id: Mapping[int, Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    linked_faces_value = card.get("linkedFaces", ())
+    if linked_faces_value is None:
+        return ()
+
+    if isinstance(linked_faces_value, (str, bytes)) or not isinstance(
+        linked_faces_value,
+        Iterable,
+    ):
+        raise CardDatabaseError("Missing or invalid Arena card.linkedFaces list.")
+
+    linked_faces: list[Mapping[str, Any]] = []
+    for linked_face_value in linked_faces_value:
+        linked_grp_id = _required_int(
+            linked_face_value,
+            field_name="Arena card.linkedFaces[]",
+        )
+        linked_card = cards_by_grp_id.get(linked_grp_id)
+        if linked_card is not None:
+            linked_faces.append(linked_card)
+
+    return tuple(linked_faces)
+
+
+def _arena_combined_type_line(
+    *,
+    card: Mapping[str, Any],
+    linked_faces: tuple[Mapping[str, Any], ...],
+    localization: Mapping[int, str],
+    grp_id: int,
+) -> str:
+    type_lines = [
+        _arena_type_line(
+            card=face,
+            localization=localization,
+            grp_id=grp_id,
+        )
+        for face in (card, *linked_faces)
+    ]
+    unique_type_lines = tuple(dict.fromkeys(type_lines))
+    return " // ".join(unique_type_lines)
+
+
+def _arena_type_line(
+    *,
+    card: Mapping[str, Any],
+    localization: Mapping[int, str],
+    grp_id: int,
+) -> str:
+    card_type = _arena_optional_localized_text(
+        localization=localization,
+        text_id=card.get("cardTypeTextId"),
+        field_name=f"Arena card {grp_id}.cardTypeTextId",
+    )
+    subtype = _arena_optional_localized_text(
+        localization=localization,
+        text_id=card.get("subtypeTextId"),
+        field_name=f"Arena card {grp_id}.subtypeTextId",
+    )
+    if card_type is None:
+        raise CardDatabaseError(f"Arena card {grp_id} is missing cardTypeTextId.")
+
+    if subtype is None:
+        return card_type
+
+    return f"{card_type} — {subtype}"
+
+
+def _arena_card_colors(
+    *,
+    card: Mapping[str, Any],
+    linked_faces: tuple[Mapping[str, Any], ...],
+    grp_id: int,
+) -> tuple[str, ...]:
+    colors: list[str] = []
+    for face in (card, *linked_faces):
+        colors.extend(
+            _arena_color_tuple(
+                face.get("colors", ()),
+                field_name=f"Arena card {grp_id}.colors",
+            )
+        )
+
+    return _ordered_unique_colors(colors=colors)
+
+
+def _arena_card_rarity(*, card: Mapping[str, Any], grp_id: int) -> str:
+    rarity_value = card.get("rarity")
+    if isinstance(rarity_value, str):
+        rarity = rarity_value.strip().lower().replace("mythic rare", "mythic")
+        return _required_str(rarity, field_name=f"Arena card {grp_id}.rarity")
+
+    rarity_id = _required_int(rarity_value, field_name=f"Arena card {grp_id}.rarity")
+    try:
+        return ARENA_RARITY_ID_MAP[rarity_id]
+    except KeyError as error:
+        raise CardDatabaseError(
+            f"Invalid Arena rarity id in card {grp_id}.rarity: {rarity_id}."
+        ) from error
+
+
+def _arena_card_mana_cost(
+    *,
+    card: Mapping[str, Any],
+    linked_faces: tuple[Mapping[str, Any], ...],
+) -> str | None:
+    costs = tuple(
+        cost
+        for cost in (
+            _arena_mana_cost(face.get("castingcost", face.get("castingCost")))
+            for face in (card, *linked_faces)
+        )
+        if cost is not None
+    )
+    if not costs:
+        return None
+
+    return " // ".join(costs)
+
+
+def _arena_card_produced_mana(
+    *,
+    card: Mapping[str, Any],
+    primary_type_line: str,
+    grp_id: int,
+) -> tuple[str, ...]:
+    for field_name in (
+        "produced_mana",
+        "producedMana",
+        "producesMana",
+        "manaProduced",
+    ):
+        produced_value = card.get(field_name)
+        if produced_value is not None:
+            return _arena_mana_symbol_tuple(
+                produced_value,
+                field_name=f"Arena card {grp_id}.{field_name}",
+            )
+
+    if "Land" not in primary_type_line:
+        return ()
+
+    return _arena_color_tuple(
+        card.get("colorIdentity", ()),
+        field_name=f"Arena card {grp_id}.colorIdentity",
+    )
+
+
+def _arena_mana_cost(value: Any) -> str | None:
+    if not isinstance(value, str) or value in {"", "o0"}:
+        return None
+
+    parts = tuple(part for part in value.split("o") if part and part != "0")
+    if not parts:
+        return None
+
+    return "".join(f"{{{part}}}" for part in parts)
+
+
+def _arena_localization_map(
+    *,
+    items: Iterable[Mapping[str, Any]],
+    source: str,
+) -> dict[int, str]:
+    language = _select_arena_english_localization(items=items, source=source)
+    keys_value = language.get("keys")
+    if not isinstance(keys_value, list):
+        raise CardDatabaseError(
+            f"Malformed Arena localization {source}: selected language has no keys list."
+        )
+
+    localization: dict[int, str] = {}
+    for item in keys_value:
+        if not isinstance(item, dict):
+            raise CardDatabaseError(
+                f"Malformed Arena localization {source}: key entry is not object."
+            )
+
+        text_id = _required_int(item.get("id"), field_name="Arena localization id")
+        text = item.get("text")
+        if not isinstance(text, str):
+            raise CardDatabaseError("Missing or invalid Arena localization text.")
+
+        localization[text_id] = text
+
+    return localization
+
+
+def _select_arena_english_localization(
+    *,
+    items: Iterable[Mapping[str, Any]],
+    source: str,
+) -> Mapping[str, Any]:
+    languages = tuple(items)
+    if not languages:
+        raise CardDatabaseError(f"Malformed Arena localization {source}: empty list.")
+
+    for language in languages:
+        langkey = str(language.get("langkey", "")).lower()
+        iso_code = str(language.get("isoCode", "")).lower()
+        if langkey in {"en", "english"} or iso_code in {"en", "en-us"}:
+            return language
+
+    return languages[0]
+
+
+def _arena_localized_text(
+    *,
+    localization: Mapping[int, str],
+    text_id: Any,
+    field_name: str,
+) -> str:
+    text = _arena_optional_localized_text(
+        localization=localization,
+        text_id=text_id,
+        field_name=field_name,
+    )
+    if text is None:
+        raise CardDatabaseError(f"Missing localization for {field_name}.")
+
+    return text
+
+
+def _arena_optional_localized_text(
+    *,
+    localization: Mapping[int, str],
+    text_id: Any,
+    field_name: str,
+) -> str | None:
+    if text_id is None:
+        return None
+
+    resolved_text_id = _required_int(text_id, field_name=field_name)
+    if resolved_text_id == 0:
+        return None
+
+    text = localization.get(resolved_text_id)
+    if text is None:
+        raise CardDatabaseError(f"Missing localization for {field_name}.")
+
+    if text == "":
+        return None
+
+    return text
+
+
+def _arena_data_file_pair(
+    *,
+    path: Path,
+    required: bool,
+) -> tuple[Path, Path] | None:
+    cards_path = _latest_arena_data_file(path=path, prefix=ARENA_DATA_CARDS_PREFIX)
+    loc_path = _latest_arena_data_file(path=path, prefix=ARENA_DATA_LOC_PREFIX)
+    if cards_path is not None and loc_path is not None:
+        return cards_path, loc_path
+
+    if required:
+        raise CardDatabaseError(
+            f"Arena local data at {path} is missing data_cards*.mtga or data_loc*.mtga."
+        )
+
+    return None
+
+
+def _latest_arena_data_file(*, path: Path, prefix: str) -> Path | None:
+    if not path.is_dir():
+        return None
+
+    candidates = tuple(
+        candidate
+        for candidate in path.iterdir()
+        if candidate.is_file()
+        and candidate.name.startswith(prefix)
+        and candidate.suffix.lower() in ARENA_DATA_FILE_SUFFIXES
+    )
+    if not candidates:
+        return None
+
+    return max(candidates, key=_arena_data_file_sort_key)
+
+
+def _arena_data_file_sort_key(path: Path) -> tuple[float, str]:
+    try:
+        modified_at = path.stat().st_mtime
+    except OSError:
+        modified_at = 0.0
+
+    return modified_at, path.name
+
+
+def _load_arena_json_array(*, path: Path, label: str) -> tuple[Mapping[str, Any], ...]:
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as error:
+        raise CardDatabaseError(f"Could not read Arena {label} file {path}: {error}.") from error
+
+    payload = _strip_javascript_assignment(text=text)
+    try:
+        value = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise CardDatabaseError(
+            f"Malformed Arena {label} JSON at {path}: {error.msg}."
+        ) from error
+
+    if not isinstance(value, list):
+        raise CardDatabaseError(f"Malformed Arena {label} JSON at {path}: expected list.")
+
+    objects: list[Mapping[str, Any]] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            raise CardDatabaseError(
+                f"Malformed Arena {label} JSON at {path}:{index}: expected object."
+            )
+
+        objects.append(item)
+
+    return tuple(objects)
+
+
+def _strip_javascript_assignment(*, text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("var ") and "=" in stripped:
+        stripped = stripped.split("=", 1)[1].strip()
+
+    return stripped.rstrip(";").strip()
+
+
+def _default_arena_data_dir_candidates() -> tuple[Path, ...]:
+    current_system = platform.system()
+    home = Path.home()
+    if current_system == "Darwin":
+        return (
+            home
+            / "Library"
+            / "Application Support"
+            / "com.wizards.mtga"
+            / "Downloads"
+            / "Data",
+        )
+
+    if current_system == "Windows":
+        candidates: list[Path] = []
+        registry_path = _windows_registry_arena_data_dir()
+        if registry_path is not None:
+            candidates.append(registry_path)
+
+        for root_name in ("ProgramFiles", "ProgramFiles(x86)"):
+            root = os.environ.get(root_name)
+            if root is None:
+                continue
+
+            candidates.append(
+                Path(root)
+                / "Wizards of the Coast"
+                / "MTGA"
+                / "MTGA_Data"
+                / "Downloads"
+                / "Data"
+            )
+
+        return tuple(candidates)
+
+    return ()
+
+
+def _windows_registry_arena_data_dir() -> Path | None:
+    if platform.system() != "Windows":
+        return None
+
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Wizards of the Coast\MTGArena",
+        ) as registry_key:
+            install_path, _ = winreg.QueryValueEx(registry_key, "Path")
+    except OSError:
+        return None
+
+    if not isinstance(install_path, str):
+        return None
+
+    return Path(install_path) / "MTGA_Data" / "Downloads" / "Data"
 
 
 def _open_text_bulk_file(*, path: Path) -> io.TextIOBase:
@@ -581,6 +1559,51 @@ def _color_tuple(value: Any, *, field_name: str) -> tuple[str, ...]:
     invalid = [color for color in colors if color not in COLOR_ORDER]
     if invalid:
         raise CardDatabaseError(f"Invalid color values in {field_name}: {invalid}.")
+
+    return _ordered_unique_colors(colors=colors)
+
+
+def _arena_color_tuple(value: Any, *, field_name: str) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
+        raise CardDatabaseError(f"Missing or invalid {field_name}; expected id list.")
+
+    colors: list[str] = []
+    for item in value:
+        color_id = _required_int(item, field_name=field_name)
+        try:
+            colors.append(ARENA_COLOR_ID_MAP[color_id])
+        except KeyError as error:
+            raise CardDatabaseError(
+                f"Invalid Arena color id in {field_name}: {color_id}."
+            ) from error
+
+    return _ordered_unique_colors(colors=colors)
+
+
+def _arena_mana_symbol_tuple(value: Any, *, field_name: str) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
+        raise CardDatabaseError(f"Missing or invalid {field_name}; expected mana list.")
+
+    colors: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            if item == "C":
+                continue
+            if item not in COLOR_ORDER:
+                raise CardDatabaseError(
+                    f"Invalid Arena mana value in {field_name}: {item}."
+                )
+
+            colors.append(item)
+            continue
+
+        color_id = _required_int(item, field_name=field_name)
+        try:
+            colors.append(ARENA_COLOR_ID_MAP[color_id])
+        except KeyError as error:
+            raise CardDatabaseError(
+                f"Invalid Arena mana id in {field_name}: {color_id}."
+            ) from error
 
     return _ordered_unique_colors(colors=colors)
 
