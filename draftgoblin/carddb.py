@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from os import PathLike
 from pathlib import Path
@@ -47,7 +47,7 @@ ARENA_RARITY_ID_MAP = {
     4: "rare",
     5: "mythic",
 }
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 
 
 class CardDatabaseError(RuntimeError):
@@ -59,6 +59,12 @@ class CardDatabaseError(RuntimeError):
 class CardDatabaseCacheMissingError(CardDatabaseError):
     """Raised when the card database cache has not been built yet.
     Run refresh-data once before relying on fully offline lookups.
+    """
+
+
+class CardDatabaseCacheStaleError(CardDatabaseError):
+    """Raised when the card cache schema needs a refresh.
+    Watch mode can rebuild it automatically from Scryfall bulk data.
     """
 
 
@@ -76,6 +82,7 @@ class CardInfo:
     types: tuple[str, ...]
     mana_cost: str | None = None
     produced_mana: tuple[str, ...] = ()
+    image_uri: str | None = None
     unknown: bool = False
 
     @classmethod
@@ -93,6 +100,7 @@ class CardInfo:
             types=("Unknown",),
             mana_cost=None,
             produced_mana=(),
+            image_uri=None,
             unknown=True,
         )
 
@@ -117,6 +125,7 @@ class CardInfo:
                 data.get("produced_mana", ()),
                 field_name="card.produced_mana",
             ),
+            image_uri=_optional_str(data.get("image_uri"), field_name="card.image_uri"),
             unknown=bool(data.get("unknown", False)),
         )
 
@@ -134,6 +143,7 @@ class CardInfo:
             "types": list(self.types),
             "mana_cost": self.mana_cost,
             "produced_mana": list(self.produced_mana),
+            "image_uri": self.image_uri,
             "unknown": self.unknown,
         }
 
@@ -157,6 +167,7 @@ class CardDatabase:
     """
 
     cards: dict[int, CardInfo]
+    image_uris_by_name: dict[str, str] = field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.cards)
@@ -167,6 +178,13 @@ class CardDatabase:
         """
 
         return self.cards.get(grp_id, CardInfo.unknown_card(grp_id=grp_id))
+
+    def image_uri_for_name(self, *, name: str) -> str | None:
+        """Return a cached Scryfall image URI by normalized card name.
+        This avoids per-card Scryfall API lookups while browsing in the TUI.
+        """
+
+        return self.image_uris_by_name.get(_normalized_card_name(name=name))
 
     def unresolved_grp_ids(self, *, grp_ids: Iterable[int]) -> tuple[int, ...]:
         """Return unique ids that still resolve to unknown markers.
@@ -198,6 +216,7 @@ class CardDatabase:
                 str(grp_id): card.to_json()
                 for grp_id, card in sorted(self.cards.items())
             },
+            "image_uris_by_name": dict(sorted(self.image_uris_by_name.items())),
         }
 
     @classmethod
@@ -211,7 +230,7 @@ class CardDatabase:
             field_name="schema_version",
         )
         if schema_version != CACHE_SCHEMA_VERSION:
-            raise CardDatabaseError(
+            raise CardDatabaseCacheStaleError(
                 "Unsupported card database cache schema "
                 f"{schema_version}; expected {CACHE_SCHEMA_VERSION}."
             )
@@ -234,7 +253,24 @@ class CardDatabase:
 
             cards[grp_id] = card
 
-        return cls(cards=cards)
+        return cls(
+            cards=cards,
+            image_uris_by_name=_image_uris_by_name_from_json(data=data),
+        )
+
+
+def _image_uris_by_name_from_json(*, data: Mapping[str, Any]) -> dict[str, str]:
+    value = data.get("image_uris_by_name", {})
+    if not isinstance(value, dict):
+        raise CardDatabaseError("Card database cache image index is not an object.")
+
+    image_uris: dict[str, str] = {}
+    for key, uri in value.items():
+        name = _required_str(key, field_name="image_uris_by_name key")
+        image_uri = _required_str(uri, field_name=f"image URI for {name}")
+        image_uris[_normalized_card_name(name=name)] = image_uri
+
+    return image_uris
 
 
 def card_database_cache_path(*, app_dir: PathInput | None = None) -> Path:
@@ -350,7 +386,7 @@ def load_or_refresh_card_database(
 
     try:
         database = load_card_database(app_dir=app_dir, cache_path=cache_path)
-    except CardDatabaseCacheMissingError:
+    except (CardDatabaseCacheMissingError, CardDatabaseCacheStaleError):
         return refresh_card_database(
             app_dir=app_dir,
             cache_path=cache_path,
@@ -403,14 +439,19 @@ def build_card_database_from_scryfall_cards(
     """
 
     database_cards: dict[int, CardInfo] = {}
+    image_uris_by_name: dict[str, str] = {}
     for card_object in cards:
+        _add_scryfall_image_uri_entries(
+            card=card_object,
+            image_uris_by_name=image_uris_by_name,
+        )
         card = _card_info_from_scryfall(card=card_object)
         if card is None:
             continue
 
         database_cards[card.grp_id] = card
 
-    return CardDatabase(cards=database_cards)
+    return CardDatabase(cards=database_cards, image_uris_by_name=image_uris_by_name)
 
 
 def build_card_database_from_arena_data_dir(*, path: PathInput) -> CardDatabase:
@@ -548,7 +589,10 @@ def augment_card_database_with_mtgjson_set(
             cards_by_uuid=cards_by_uuid,
         )
 
-    return CardDatabase(cards=cards)
+    return CardDatabase(
+        cards=cards,
+        image_uris_by_name=database.image_uris_by_name,
+    )
 
 
 def download_mtgjson_set_cards(
@@ -867,6 +911,7 @@ def _card_info_from_scryfall(*, card: Mapping[str, Any]) -> CardInfo | None:
         types=_card_types(card=card, grp_id=grp_id),
         mana_cost=_card_mana_cost(card=card, grp_id=grp_id),
         produced_mana=_card_produced_mana(card=card, grp_id=grp_id),
+        image_uri=_card_image_uri(card=card),
     )
 
 
@@ -964,8 +1009,90 @@ def _merge_card_databases(
     overlay: CardDatabase,
 ) -> CardDatabase:
     cards = dict(base.cards)
-    cards.update(overlay.cards)
-    return CardDatabase(cards=cards)
+    for grp_id, overlay_card in overlay.cards.items():
+        base_card = cards.get(grp_id)
+        if overlay_card.image_uri is None and base_card is not None:
+            overlay_card = replace(overlay_card, image_uri=base_card.image_uri)
+
+        cards[grp_id] = overlay_card
+
+    image_uris_by_name = dict(base.image_uris_by_name)
+    image_uris_by_name.update(overlay.image_uris_by_name)
+    return CardDatabase(cards=cards, image_uris_by_name=image_uris_by_name)
+
+
+SCRYFALL_IMAGE_URI_KEYS = (
+    "normal",
+    "large",
+    "small",
+    "png",
+    "border_crop",
+    "art_crop",
+)
+
+
+def _add_scryfall_image_uri_entries(
+    *,
+    card: Mapping[str, Any],
+    image_uris_by_name: dict[str, str],
+) -> None:
+    image_uri = _card_image_uri(card=card)
+    if image_uri is None:
+        return
+
+    for name in _scryfall_card_image_names(card=card):
+        image_uris_by_name.setdefault(_normalized_card_name(name=name), image_uri)
+
+
+def _scryfall_card_image_names(*, card: Mapping[str, Any]) -> tuple[str, ...]:
+    names: list[str] = []
+    name = card.get("name")
+    if isinstance(name, str) and name:
+        names.append(name)
+
+    faces_value = card.get("card_faces")
+    if isinstance(faces_value, list):
+        for face in faces_value:
+            if not isinstance(face, dict):
+                continue
+
+            face_name = face.get("name")
+            if isinstance(face_name, str) and face_name:
+                names.append(face_name)
+
+    return tuple(dict.fromkeys(names))
+
+
+def _card_image_uri(*, card: Mapping[str, Any]) -> str | None:
+    image_uri = _image_uri_from_scryfall_image_uris(card.get("image_uris"))
+    if image_uri is not None:
+        return image_uri
+
+    faces_value = card.get("card_faces")
+    if not isinstance(faces_value, list):
+        return None
+
+    for face in faces_value:
+        if not isinstance(face, dict):
+            continue
+
+        image_uri = _image_uri_from_scryfall_image_uris(face.get("image_uris"))
+        if image_uri is not None:
+            return image_uri
+
+    return None
+
+
+def _image_uri_from_scryfall_image_uris(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+
+    for key in SCRYFALL_IMAGE_URI_KEYS:
+        uri = value.get(key)
+        if isinstance(uri, str) and uri:
+            return uri
+
+    return None
 
 
 def _card_colors(*, card: Mapping[str, Any], grp_id: int) -> tuple[str, ...]:

@@ -4,22 +4,35 @@ Render score-sorted packs and status updates without blocking fetches.
 
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from os import PathLike
 from pathlib import Path
 from typing import TypeAlias
 
+from rich.console import Group
 from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Static
 from textual.worker import get_current_worker
 
-from draftgoblin.carddb import CardDatabase, CardInfo
+try:  # pragma: no cover - import availability depends on optional terminal extras.
+    from textual_image.renderable.tgp import Image as TgpImage
+except Exception:  # pragma: no cover - graceful fallback when unavailable.
+    TgpImage = None
+
+from draftgoblin.carddb import SCRYFALL_USER_AGENT, CardDatabase, CardInfo
 from draftgoblin.config import COLOR_PAIRS, POLL_INTERVAL_SECONDS
 from draftgoblin.deckbuilder import (
     BuildPool,
@@ -48,6 +61,7 @@ from draftgoblin.setinfo import format_set_label
 
 PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
+CardImageFetcher: TypeAlias = Callable[[str, Path], Path]
 BuildSignature: TypeAlias = tuple[str, tuple[int, ...], str | None]
 TuiCardQuantityKey: TypeAlias = tuple[str, str]
 TuiCardQuantityGroup: TypeAlias = tuple[ScoredCard, int]
@@ -63,6 +77,11 @@ COLORLESS_KEY = "C"
 UNKNOWN_COLOR_KEY = "?"
 CURVE_BUCKET_LABELS = ("0", "1", "2", "3", "4", "5", "6+")
 SPARKLINE_GLYPHS = "▁▂▃▄▅▆▇█"
+CARD_IMAGE_CACHE_DIR_NAME = "card-images"
+CARD_IMAGE_PREVIEW_MAX_BYTES = 8 * 1024 * 1024
+CARD_IMAGE_PREVIEW_TIMEOUT_SECONDS = 10
+CARD_IMAGE_PREVIEW_ENV = "DRAFTGOBLIN_CARD_IMAGES"
+CARD_IMAGE_FILE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 COLOR_STYLES = {
     "W": "bold bright_white",
@@ -171,8 +190,8 @@ class DraftgoblinTuiApp(App[None]):
     }
 
     #pool-summary,
-    #last-picks,
-    #focused-card {
+    #focused-card,
+    #card-image-preview {
         height: auto;
         margin-bottom: 1;
     }
@@ -216,6 +235,8 @@ class DraftgoblinTuiApp(App[None]):
         startup_scan: bool = False,
         once: bool = False,
         poll_enabled: bool = True,
+        image_preview_enabled: bool | None = None,
+        card_image_fetcher: CardImageFetcher | None = None,
     ) -> None:
         super().__init__()
         self.log_path = Path(log_path).expanduser().resolve(strict=False)
@@ -233,6 +254,17 @@ class DraftgoblinTuiApp(App[None]):
         self.once = once
         self.poll_enabled = poll_enabled
         self.poll_interval = poll_interval
+        self.card_image_fetcher = card_image_fetcher or _fetch_card_image
+        self._card_image_cache_dir = _card_image_cache_dir(app_dir=app_dir)
+        self._card_image_preview_enabled = (
+            _card_image_preview_enabled(env=os.environ)
+            if image_preview_enabled is None
+            else image_preview_enabled
+        )
+        self._card_image_paths_by_uri: dict[str, Path] = {}
+        self._card_image_failures_by_uri: dict[str, str] = {}
+        self._loading_card_image_uris: set[str] = set()
+        self._card_image_uris_by_grp_id: dict[int, str] = {}
 
         self.show_secondary_columns = True
         self.sort_mode = "score"
@@ -311,7 +343,7 @@ class DraftgoblinTuiApp(App[None]):
                     yield Static("Build view: no picked cards yet.", id="build-view")
             with Vertical(id="sidebar"):
                 yield Static("Pool: no draft yet", id="pool-summary")
-                yield Static("Last picks: none", id="last-picks")
+                yield Static("", id="card-image-preview")
                 yield CardDetailsPanel("Focused card: none", id="focused-card")
         yield Static("", id="status-bar")
         yield Footer()
@@ -1033,46 +1065,45 @@ class DraftgoblinTuiApp(App[None]):
 
     def _render_sidebar(self) -> None:
         pool_summary = self.query_one("#pool-summary", Static)
-        last_picks = self.query_one("#last-picks", Static)
-        event_text = self._event_name or "unknown event"
-        draft_text = self._draft_id or "unknown draft"
-        color_bar = _pool_color_distribution_bar(
-            pool_grp_ids=self._pool_grp_ids,
-            card_database=self.card_database,
-        )
-        curve = _pool_curve_sparkline(
-            pool_grp_ids=self._pool_grp_ids,
-            card_database=self.card_database,
-        )
-        override_label = self._build_override_label()
-        pool_summary.update(
-            "Pool summary\n"
-            f"Set: {format_set_label(set_code=self._set_code)}\n"
-            f"Event: {event_text}\n"
-            f"Draft: {draft_text}\n"
-            f"Pool size: {self._pool_size}\n"
-            f"Inferred pair: {self._pair_label}\n"
-            f"Build pair: {self._build_pair_label}\n"
-            f"Override: {override_label}\n"
-            f"Build action: {self._build_action_label()}\n"
-            f"{self._metadata_status_text()}\n"
-            f"{color_bar}\n"
-            f"{curve}"
-        )
-        if not self._last_picks:
-            last_picks.update("Last picks: none")
-            self._render_focused_card_details()
-            return
+        pool_summary.display = self._view_mode != "build"
+        if pool_summary.display:
+            event_text = self._event_name or "unknown event"
+            draft_text = self._draft_id or "unknown draft"
+            color_bar = _pool_color_distribution_bar(
+                pool_grp_ids=self._pool_grp_ids,
+                card_database=self.card_database,
+            )
+            curve = _pool_curve_sparkline(
+                pool_grp_ids=self._pool_grp_ids,
+                card_database=self.card_database,
+            )
+            override_label = self._build_override_label()
+            pool_summary.update(
+                "Pool summary\n"
+                f"Set: {format_set_label(set_code=self._set_code)}\n"
+                f"Event: {event_text}\n"
+                f"Draft: {draft_text}\n"
+                f"Pool size: {self._pool_size}\n"
+                f"Inferred pair: {self._pair_label}\n"
+                f"Build pair: {self._build_pair_label}\n"
+                f"Override: {override_label}\n"
+                f"Build action: {self._build_action_label()}\n"
+                f"{self._metadata_status_text()}\n"
+                f"{color_bar}\n"
+                f"{curve}"
+            )
 
-        last_picks.update(
-            "Last picks:\n" + "\n".join(f"• {pick}" for pick in self._last_picks)
-        )
         self._render_focused_card_details()
 
     def _render_focused_card_details(self) -> None:
-        focused_card = self.query_one("#focused-card", Static)
+        try:
+            focused_card = self.query_one("#focused-card", Static)
+        except NoMatches:
+            return
+
         selected = self._focused_card_details()
         if selected is None:
+            self._render_card_image_preview(card=None)
             focused_card.update(
                 "Focused card details\n"
                 "Use ↑/↓/←/→ in the card list to browse card details here."
@@ -1081,6 +1112,7 @@ class DraftgoblinTuiApp(App[None]):
 
         section, rank, total_count, scored_card, quantity = selected
         card = scored_card.card
+        self._render_card_image_preview(card=card)
         type_line = " ".join(card.types) if card.types else "Unknown"
         quantity_line = f"Quantity: {quantity}\n" if quantity > 1 else ""
         focused_card.update(
@@ -1098,6 +1130,175 @@ class DraftgoblinTuiApp(App[None]):
             f"ALSA: {_format_alsa(scored_card=scored_card)}\n"
             f"Source: {scored_card.source_label}"
         )
+
+    def _render_card_image_preview(self, *, card: CardInfo | None) -> None:
+        image_panel = self.query_one("#card-image-preview", Static)
+        if not self._card_image_preview_enabled:
+            image_panel.display = False
+            return
+
+        sidebar = self.query_one("#sidebar", Vertical)
+        if not sidebar.display:
+            image_panel.display = False
+            return
+
+        if TgpImage is None:
+            image_panel.display = True
+            image_panel.update(
+                "Image preview unavailable\n"
+                "Install the textual-image package to render Kitty images."
+            )
+            return
+
+        if card is None:
+            image_panel.display = False
+            return
+
+        image_panel.display = True
+        image_uri = self._card_image_uri_for_card(card=card)
+        if image_uri is None:
+            self._render_pending_card_image_uri(image_panel=image_panel, card=card)
+            return
+        image_path = self._card_image_paths_by_uri.get(image_uri)
+        if image_path is not None and image_path.exists():
+            self._show_card_image(
+                image_panel=image_panel,
+                image_path=image_path,
+                card=card,
+                image_uri=image_uri,
+            )
+            return
+
+        cached_path = _cached_card_image_path(
+            cache_dir=self._card_image_cache_dir,
+            image_uri=image_uri,
+        )
+        if cached_path.exists():
+            self._card_image_paths_by_uri[image_uri] = cached_path
+            self._show_card_image(
+                image_panel=image_panel,
+                image_path=cached_path,
+                card=card,
+                image_uri=image_uri,
+            )
+            return
+
+        failure = self._card_image_failures_by_uri.get(image_uri)
+        if failure is not None:
+            image_panel.update(
+                "Image preview unavailable\n"
+                f"{_format_card_name(card=card)}\n"
+                f"{failure}"
+            )
+            return
+
+        image_panel.update(
+            "Loading image preview…\n"
+            f"{_format_card_name(card=card)}"
+        )
+        if image_uri not in self._loading_card_image_uris:
+            self._loading_card_image_uris.add(image_uri)
+            self._fetch_card_image_worker(image_uri)
+
+    def _card_image_uri_for_card(self, *, card: CardInfo) -> str | None:
+        if card.image_uri is not None:
+            return card.image_uri
+
+        return self._card_image_uris_by_grp_id.get(card.grp_id)
+
+    def _render_pending_card_image_uri(
+        self,
+        *,
+        image_panel: Static,
+        card: CardInfo,
+    ) -> None:
+        if card.unknown:
+            image_panel.display = False
+            return
+
+        image_uri = self.card_database.image_uri_for_name(name=card.name)
+        if image_uri is not None:
+            self._card_image_uris_by_grp_id[card.grp_id] = image_uri
+            self._render_card_image_preview(card=card)
+            return
+
+        image_panel.update(
+            "Image preview unavailable\n"
+            f"{_format_card_name(card=card)}\n"
+            "Image URL is not in the local Scryfall cache. Run refresh-data."
+        )
+
+    def _show_card_image(
+        self,
+        *,
+        image_panel: Static,
+        image_path: Path,
+        card: CardInfo,
+        image_uri: str,
+    ) -> None:
+        if TgpImage is None:
+            return
+
+        width = max(20, min(30, image_panel.size.width or 28))
+        try:
+            preview = TgpImage(
+                str(image_path),
+                width=width,
+                height="auto",
+            )
+        except Exception as error:  # pragma: no cover - defensive renderer boundary.
+            self._card_image_failures_by_uri[image_uri] = str(error)
+            image_panel.update(
+                "Image preview unavailable\n"
+                f"{_format_card_name(card=card)}\n"
+                f"{error}"
+            )
+            return
+
+        image_panel.update(Group(f"Preview: {_format_card_name(card=card)}", preview))
+
+    @work(thread=True, group="card-images")
+    def _fetch_card_image_worker(self, image_uri: str) -> None:
+        worker = get_current_worker()
+        if worker.is_cancelled:
+            return
+
+        image_path = None
+        error_message = None
+        try:
+            image_path = self.card_image_fetcher(
+                image_uri,
+                self._card_image_cache_dir,
+            )
+        except Exception as error:  # pragma: no cover - defensive network boundary.
+            error_message = str(error)
+
+        if worker.is_cancelled:
+            return
+
+        self.call_from_thread(
+            self._finish_card_image_load,
+            image_uri,
+            image_path,
+            error_message,
+        )
+
+    def _finish_card_image_load(
+        self,
+        image_uri: str,
+        image_path: Path | None,
+        error_message: str | None,
+    ) -> None:
+        self._loading_card_image_uris.discard(image_uri)
+        if image_path is None:
+            self._card_image_failures_by_uri[image_uri] = error_message or "fetch failed"
+        elif not image_path.exists():
+            self._card_image_failures_by_uri[image_uri] = "fetch failed"
+        else:
+            self._card_image_paths_by_uri[image_uri] = image_path
+            self._card_image_failures_by_uri.pop(image_uri, None)
+
+        self._render_focused_card_details()
 
     def _focused_card_details(
         self,
@@ -1390,6 +1591,86 @@ class DraftgoblinTuiApp(App[None]):
     def _record_error(self, message: str) -> None:
         self._last_error = message
         self._render_all()
+
+
+def _card_image_preview_enabled(*, env: Mapping[str, str]) -> bool:
+    if TgpImage is None:
+        return False
+
+    override = env.get(CARD_IMAGE_PREVIEW_ENV)
+    if override is not None:
+        return override.strip().casefold() in {"1", "true", "yes", "on"}
+
+    term_program = env.get("TERM_PROGRAM", "").casefold()
+    if term_program in {"ghostty", "kitty", "wezterm"}:
+        return True
+
+    term = env.get("TERM", "").casefold()
+    if "kitty" in term or "ghostty" in term:
+        return True
+
+    return bool(
+        env.get("KITTY_WINDOW_ID")
+        or env.get("GHOSTTY_RESOURCES_DIR")
+        or env.get("WEZTERM_EXECUTABLE")
+    )
+
+
+def _card_image_cache_dir(*, app_dir: PathInput | None) -> Path:
+    store = DraftPoolStore(app_dir=app_dir)
+    return store.root.parent / CARD_IMAGE_CACHE_DIR_NAME
+
+
+def _fetch_card_image(image_uri: str, cache_dir: Path) -> Path:
+    image_path = _cached_card_image_path(cache_dir=cache_dir, image_uri=image_uri)
+    if image_path.exists():
+        return image_path
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(
+        image_uri,
+        headers={
+            "Accept": "image/*,*/*;q=0.8",
+            "User-Agent": SCRYFALL_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=CARD_IMAGE_PREVIEW_TIMEOUT_SECONDS,
+        ) as response:
+            image_data = response.read(CARD_IMAGE_PREVIEW_MAX_BYTES + 1)
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"image fetch failed: {error}") from error
+
+    if len(image_data) > CARD_IMAGE_PREVIEW_MAX_BYTES:
+        raise RuntimeError("image fetch failed: response too large")
+
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=cache_dir,
+        delete=False,
+    ) as temporary_file:
+        temporary_file.write(image_data)
+        temporary_path = Path(temporary_file.name)
+
+    temporary_path.replace(image_path)
+    return image_path
+
+
+def _cached_card_image_path(*, cache_dir: Path, image_uri: str) -> Path:
+    digest = hashlib.sha256(image_uri.encode("utf-8")).hexdigest()
+    extension = _card_image_extension(image_uri=image_uri)
+    return cache_dir / f"{digest}{extension}"
+
+
+def _card_image_extension(*, image_uri: str) -> str:
+    parsed_uri = urllib.parse.urlparse(image_uri)
+    extension = Path(parsed_uri.path).suffix.lower()
+    if extension in CARD_IMAGE_FILE_EXTENSIONS:
+        return extension
+
+    return ".jpg"
 
 
 _BUILD_COLUMN_MIN_WIDTH = 34

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from textual.containers import VerticalScroll
 from textual.widgets import DataTable, Static
 
@@ -115,9 +116,10 @@ async def _assert_build_view_refuses_unknown_metadata_pool(tmp_path: Path) -> No
         await pilot.pause()
 
         title = app.query_one("#pack-title", Static)
+        pool_summary = app.query_one("#pool-summary", Static)
         assert str(title.render()).startswith("Build view unavailable")
         assert "automatic" not in str(title.render())
-        assert "Override: unavailable" in _pool_summary_text(app=app)
+        assert pool_summary.display is False
         assert "Build view unavailable: Card metadata is missing" in app.build_view_text
         assert "The build cannot be trusted" in app.build_view_text
         assert "no deck was produced" in app.build_view_text
@@ -233,7 +235,7 @@ async def _assert_pack_navigation_preserves_focus_and_details(
         assert table.cursor_coordinate.row == 0
 
 
-def test_tui_sidebar_updates_pool_distribution_curve_and_last_picks(
+def test_tui_sidebar_updates_pool_distribution_and_curve(
     tmp_path: Path,
 ) -> None:
     asyncio.run(_assert_sidebar_updates_pool_summary(tmp_path=tmp_path))
@@ -247,7 +249,6 @@ async def _assert_sidebar_updates_pool_summary(tmp_path: Path) -> None:
         await pilot.pause()
 
         summary = _pool_summary_text(app=app)
-        last_picks = _last_picks_text(app=app)
 
         assert "Pool size: 1" in summary
         assert "Colors:" in summary
@@ -255,7 +256,6 @@ async def _assert_sidebar_updates_pool_summary(tmp_path: Path) -> None:
         assert "Set: MSH — Marvel Super Heroes" in summary
         assert "Curve:" in summary
         assert "4█1" in summary
-        assert "Fixture Spider" in last_picks
 
 
 def test_tui_build_view_lists_full_picked_pool_with_card_details(
@@ -410,10 +410,12 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         title = app.query_one("#pack-title", Static)
         table = app.query_one("#pack-table", DataTable)
         build_scroll = app.query_one("#build-scroll", VerticalScroll)
+        pool_summary = app.query_one("#pool-summary", Static)
 
         assert str(title.render()).startswith("Build view — pair WU (automatic)")
         assert table.display is False
         assert build_scroll.display is True
+        assert pool_summary.display is False
         assert app.build_view_text.startswith("Suggested deck\n")
         assert "Selected spells by mana value" in app.build_view_text
         assert "Color pair: WU (automatic" in app.build_view_text
@@ -463,6 +465,118 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         assert str(title.render()).startswith("Build view — pair WB (forced WB)")
         assert "Color pair: WB (forced" in app.build_view_text
         assert "Override: WB" in _status_text(app=app)
+
+
+def test_tui_card_image_preserves_ratio_with_auto_height(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asyncio.run(
+        _assert_card_image_preserves_ratio_with_auto_height(
+            tmp_path=tmp_path,
+            monkeypatch=monkeypatch,
+        )
+    )
+
+
+async def _assert_card_image_preserves_ratio_with_auto_height(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_sizes: list[tuple[int | None, object]] = []
+
+    class FakeTgpImage:
+        def __init__(
+            self,
+            image: str,
+            width: int | None = None,
+            height: object = None,
+        ) -> None:
+            captured_sizes.append((width, height))
+
+        def __rich_console__(self, *args: object) -> list[str]:
+            return ["<image>"]
+
+    def successful_fetcher(image_uri: str, cache_dir: Path) -> Path:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        image_path = cache_dir / "spider.jpg"
+        image_path.write_bytes(b"image")
+        return image_path
+
+    monkeypatch.setattr("draftgoblin.tui.TgpImage", FakeTgpImage)
+    fixture_database = _fixture_card_database()
+    app = _tui_app(
+        tmp_path=tmp_path,
+        card_database=CardDatabase(
+            cards=fixture_database.cards,
+            image_uris_by_name={"fixture spider": "https://cards.example/spider.jpg"},
+        ),
+        image_preview_enabled=True,
+        card_image_fetcher=successful_fetcher,
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_first_pick_lines())
+        await pilot.pause()
+
+        await pilot.press("b")
+        for _ in range(10):
+            await pilot.pause(0.05)
+            if captured_sizes:
+                break
+
+        assert captured_sizes
+        width, height = captured_sizes[-1]
+        assert width is not None and width <= 30
+        assert height == "auto"
+
+
+def test_tui_build_focused_card_image_fetch_failure_stays_nonblocking(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_build_image_fetch_failure_stays_nonblocking(tmp_path=tmp_path))
+
+
+async def _assert_build_image_fetch_failure_stays_nonblocking(tmp_path: Path) -> None:
+    started = threading.Event()
+
+    def failing_fetcher(image_uri: str, cache_dir: Path) -> Path:
+        assert image_uri == "https://cards.example/spider.jpg"
+        started.set()
+        raise OSError("network down")
+
+    fixture_database = _fixture_card_database()
+    app = _tui_app(
+        tmp_path=tmp_path,
+        card_database=CardDatabase(
+            cards=fixture_database.cards,
+            image_uris_by_name={"fixture spider": "https://cards.example/spider.jpg"},
+        ),
+        image_preview_enabled=True,
+        card_image_fetcher=failing_fetcher,
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_first_pick_lines())
+        await pilot.pause()
+
+        await pilot.press("b")
+        await pilot.pause()
+
+        assert "Selected card 1/" in _focused_card_text(app=app)
+        assert await asyncio.to_thread(started.wait, 0.5)
+        for _ in range(10):
+            await pilot.pause(0.05)
+            image_text = _card_image_preview_text(app=app)
+            if "Image preview unavailable" in image_text:
+                break
+
+        image_panel = app.query_one("#card-image-preview", Static)
+        assert image_panel.display is True
+        assert "Image preview unavailable" in _card_image_preview_text(app=app)
+        assert "network down" in _card_image_preview_text(app=app)
+        assert "Error:" not in _status_text(app=app)
+        assert app.build_view_text.startswith("Suggested deck\n")
 
 
 def test_tui_account_event_recovers_latest_persisted_state(tmp_path: Path) -> None:
@@ -587,6 +701,8 @@ def _tui_app(
     tmp_path: Path,
     card_database: CardDatabase | None = None,
     ratings_loader: Callable[[str], SeventeenLandsData] | None = None,
+    image_preview_enabled: bool | None = None,
+    card_image_fetcher: Callable[[str, Path], Path] | None = None,
 ) -> DraftgoblinTuiApp:
     return DraftgoblinTuiApp(
         log_path=tmp_path / "Player.log",
@@ -596,6 +712,8 @@ def _tui_app(
         app_dir=tmp_path / "app",
         ratings_loader=ratings_loader,
         poll_enabled=False,
+        image_preview_enabled=image_preview_enabled,
+        card_image_fetcher=card_image_fetcher,
     )
 
 
@@ -654,14 +772,14 @@ def _pool_summary_text(*, app: DraftgoblinTuiApp) -> str:
     return str(summary.render())
 
 
-def _last_picks_text(*, app: DraftgoblinTuiApp) -> str:
-    last_picks = app.query_one("#last-picks", Static)
-    return str(last_picks.render())
-
-
 def _focused_card_text(*, app: DraftgoblinTuiApp) -> str:
     focused_card = app.query_one("#focused-card", Static)
     return str(focused_card.render())
+
+
+def _card_image_preview_text(*, app: DraftgoblinTuiApp) -> str:
+    preview = app.query_one("#card-image-preview", Static)
+    return str(preview.render())
 
 
 def _card_cells(*, rows: list[list[object]]) -> list[str]:
