@@ -314,6 +314,11 @@ def select_color_pair(
 
     _validate_deck_builder_config(config=config)
     _validate_blending_weights(config=config)
+    _validate_metadata_coverage(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        config=config,
+    )
     resolved_forced_pair = _optional_pair(value=forced_pair)
     scored_pool = PickEngine(ratings_data=ratings_data).score_pack(
         offered_grp_ids=pool_grp_ids,
@@ -329,6 +334,12 @@ def select_color_pair(
             config=config,
         )
         for pair in COLOR_PAIRS
+    )
+    _validate_playable_pair_scores(
+        scores=scores,
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        config=config,
     )
     ranked_scores = tuple(sorted(scores, key=_pair_score_sort_key))
     automatic = ranked_scores[0]
@@ -369,6 +380,11 @@ def select_deck_spells(
     """
 
     _validate_deck_builder_config(config=config)
+    _validate_metadata_coverage(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        config=config,
+    )
     resolved_pair = _optional_pair(value=pair)
     if resolved_pair is None:
         raise DeckBuilderError("A color pair is required before selecting spells.")
@@ -404,6 +420,13 @@ def select_deck_spells(
             splash_fixing_counts=splash_fixing_counts,
             config=effective_config,
         )
+    )
+    _validate_spell_candidates(
+        candidates=candidates,
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        pair=resolved_pair,
+        config=effective_config,
     )
 
     for plan in _constraint_plans():
@@ -788,6 +811,182 @@ def _missing_persisted_pool_message(
 
     return "No persisted pools found. Pass --pool or replay/watch a draft first."
 
+
+def _validate_metadata_coverage(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    config: DeckBuilderConfig,
+) -> None:
+    if not pool_grp_ids:
+        raise DeckBuilderError("Deck build unavailable: pool is empty.")
+
+    unresolved_grp_ids = _unresolved_pool_grp_ids(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+    )
+    if not unresolved_grp_ids:
+        return
+
+    unresolved_ratio = len(unresolved_grp_ids) / len(pool_grp_ids)
+    if unresolved_ratio > config.maximum_unresolved_metadata_ratio:
+        raise DeckBuilderError(
+            _metadata_missing_message(
+                pool_size=len(pool_grp_ids),
+                unresolved_grp_ids=unresolved_grp_ids,
+                detail=(
+                    "Too much of the pool is unresolved for reliable "
+                    "playable-card detection."
+                ),
+            )
+        )
+
+
+def _validate_playable_pair_scores(
+    *,
+    scores: tuple[PairScore, ...],
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    config: DeckBuilderConfig,
+) -> None:
+    best_playable_count = max((score.playable_count for score in scores), default=0)
+    if best_playable_count <= 0:
+        unresolved_grp_ids = _unresolved_pool_grp_ids(
+            pool_grp_ids=pool_grp_ids,
+            card_database=card_database,
+        )
+        if unresolved_grp_ids:
+            raise DeckBuilderError(
+                _metadata_missing_message(
+                    pool_size=len(pool_grp_ids),
+                    unresolved_grp_ids=unresolved_grp_ids,
+                    detail="No playable spells could be identified from the known cards.",
+                )
+            )
+
+        raise DeckBuilderError(
+            "Deck build unavailable: no playable spells were detected in the pool, "
+            "so no automatic color pair can be trusted."
+        )
+
+    _validate_playable_count_with_metadata(
+        playable_count=best_playable_count,
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        target_spell_count=config.target_spell_count,
+        label="playable spells",
+    )
+
+
+def _validate_spell_candidates(
+    *,
+    candidates: tuple[ScoredCard, ...],
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    pair: str,
+    config: DeckBuilderConfig,
+) -> None:
+    if not candidates:
+        unresolved_grp_ids = _unresolved_pool_grp_ids(
+            pool_grp_ids=pool_grp_ids,
+            card_database=card_database,
+        )
+        if unresolved_grp_ids:
+            raise DeckBuilderError(
+                _metadata_missing_message(
+                    pool_size=len(pool_grp_ids),
+                    unresolved_grp_ids=unresolved_grp_ids,
+                    detail=(
+                        f"No playable {pair} spells could be identified "
+                        "from the known cards."
+                    ),
+                )
+            )
+
+        raise DeckBuilderError(
+            f"Deck build unavailable: no playable spells were detected for pair {pair}."
+        )
+
+    _validate_playable_count_with_metadata(
+        playable_count=len(candidates),
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        target_spell_count=config.target_spell_count,
+        label=f"playable {pair} spells",
+    )
+
+
+def _validate_playable_count_with_metadata(
+    *,
+    playable_count: int,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    target_spell_count: int,
+    label: str,
+) -> None:
+    unresolved_grp_ids = _unresolved_pool_grp_ids(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+    )
+    if not unresolved_grp_ids:
+        return
+
+    required_count = min(target_spell_count, len(pool_grp_ids))
+    if playable_count >= required_count:
+        return
+
+    raise DeckBuilderError(
+        _metadata_missing_message(
+            pool_size=len(pool_grp_ids),
+            unresolved_grp_ids=unresolved_grp_ids,
+            detail=(
+                f"Only {playable_count} {label} could be identified, below the "
+                f"{required_count}-card target for this pool."
+            ),
+        )
+    )
+
+
+def _unresolved_pool_grp_ids(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+) -> tuple[int, ...]:
+    return tuple(
+        grp_id
+        for grp_id in pool_grp_ids
+        if card_database.lookup(grp_id=grp_id).unknown
+    )
+
+
+def _metadata_missing_message(
+    *,
+    pool_size: int,
+    unresolved_grp_ids: tuple[int, ...],
+    detail: str,
+) -> str:
+    unresolved_count = len(unresolved_grp_ids)
+    unresolved_percent = (unresolved_count / pool_size) * 100.0
+    return (
+        "Card metadata is missing for "
+        f"{unresolved_count}/{pool_size} picked cards "
+        f"({unresolved_percent:.0f}%). "
+        f"{detail} "
+        "The build cannot be trusted, so no deck was produced. "
+        "Run `draftgoblin refresh-data` or pass `--bulk-file` with current card data, "
+        "then build again. "
+        f"Unresolved grpIds: {_format_grp_id_preview(grp_ids=unresolved_grp_ids)}."
+    )
+
+
+def _format_grp_id_preview(*, grp_ids: tuple[int, ...]) -> str:
+    unique_grp_ids = tuple(dict.fromkeys(grp_ids))
+    preview = unique_grp_ids[:5]
+    suffix = ""
+    if len(unique_grp_ids) > len(preview):
+        suffix = f", +{len(unique_grp_ids) - len(preview)} more"
+
+    return ", ".join(str(grp_id) for grp_id in preview) + suffix
 
 
 def _score_pair(
@@ -2037,6 +2236,11 @@ def _validate_deck_builder_config(*, config: DeckBuilderConfig) -> None:
 
     if config.land_count_iteration_limit <= 0:
         raise DeckBuilderError("Deck-builder land-count iterations must be positive.")
+
+    if not 0.0 <= config.maximum_unresolved_metadata_ratio <= 1.0:
+        raise DeckBuilderError(
+            "Deck-builder unresolved metadata ratio must be between zero and one."
+        )
 
     if config.main_color_source_floor < 0:
         raise DeckBuilderError("Deck-builder source floor must be non-negative.")

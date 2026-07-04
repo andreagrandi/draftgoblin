@@ -36,6 +36,7 @@ class DeckBuilderConfig:
     splash_elite_score_minimum: float = 70.0
     bench_card_count: int = 5
     land_count_iteration_limit: int = 4
+    maximum_unresolved_metadata_ratio: float = 0.25
     relaxation_order: tuple[str, ...] = (
         "expensive-spell cap",
         "minimum two-drop quota",

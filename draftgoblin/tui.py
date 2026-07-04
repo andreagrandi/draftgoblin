@@ -770,6 +770,10 @@ class DraftgoblinTuiApp(App[None]):
     def _render_pack_title(self) -> None:
         title = self.query_one("#pack-title", Static)
         if self._view_mode == "build":
+            if self._build_error is not None and self._build_pair_label == "—":
+                title.update("Build view unavailable — metadata or playable count issue")
+                return
+
             override = (
                 "automatic" if self._forced_pair is None else f"forced {self._forced_pair}"
             )
@@ -845,6 +849,7 @@ class DraftgoblinTuiApp(App[None]):
             pool_grp_ids=self._pool_grp_ids,
             card_database=self.card_database,
         )
+        override_label = self._build_override_label()
         pool_summary.update(
             "Pool summary\n"
             f"Set: {self._set_code or 'unknown'}\n"
@@ -853,7 +858,7 @@ class DraftgoblinTuiApp(App[None]):
             f"Pool size: {self._pool_size}\n"
             f"Inferred pair: {self._pair_label}\n"
             f"Build pair: {self._build_pair_label}\n"
-            f"Override: {self._forced_pair or 'automatic'}\n"
+            f"Override: {override_label}\n"
             f"{self._metadata_status_text()}\n"
             f"{color_bar}\n"
             f"{curve}"
@@ -865,6 +870,15 @@ class DraftgoblinTuiApp(App[None]):
         last_picks.update(
             "Last picks:\n" + "\n".join(f"• {pick}" for pick in self._last_picks)
         )
+
+    def _build_override_label(self) -> str:
+        if self._forced_pair is not None:
+            return self._forced_pair
+
+        if self._build_error is not None and self._build_pair_label == "—":
+            return "unavailable"
+
+        return "automatic"
 
     def _render_status_bar(self) -> None:
         status = self.query_one("#status-bar", Static)
@@ -979,7 +993,7 @@ class DraftgoblinTuiApp(App[None]):
             self._build_error = str(error)
             self._build_text = f"Build view unavailable: {error}"
             self._build_pair_label = "—"
-            return False
+            return True
 
         self._build_error = None
         self._last_error = None
