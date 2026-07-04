@@ -49,6 +49,8 @@ from draftgoblin.setinfo import format_set_label
 PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
 BuildSignature: TypeAlias = tuple[str, tuple[int, ...], str | None]
+TuiCardQuantityKey: TypeAlias = tuple[str, str]
+TuiCardQuantityGroup: TypeAlias = tuple[ScoredCard, int]
 
 PRIMARY_COLUMN_KEYS = ("rank", "win_rate", "grade", "score", "card", "colors")
 SECONDARY_COLUMN_KEYS = ("fit", "alsa", "mv", "source")
@@ -1125,7 +1127,7 @@ class DraftgoblinTuiApp(App[None]):
 
 
 _BUILD_COLUMN_MIN_WIDTH = 34
-_BUILD_COLUMN_MAX_WIDTH = 46
+_BUILD_COLUMN_MAX_WIDTH = 80
 
 
 def _format_tui_build_result(
@@ -1168,8 +1170,8 @@ def _format_tui_build_result(
         f"Mana pips: {_format_plain_color_counts(mana_base.pip_counts)}",
         f"Mana sources: {_format_plain_color_counts(mana_base.source_counts)}",
         (
-            "Ratings: 17Lands WR and 17Lands-style grade use each row's "
-            "source format; DG is Draftgoblin's color-adjusted score."
+            "Ratings: rows show 17Lands WR and 17Lands-style grade from "
+            "each source format."
         ),
         (
             "Keys: b checks build status; ↑/↓ or j/k scroll; PgUp/PgDn page; "
@@ -1316,7 +1318,10 @@ def _format_tui_spell_curve(*, spells: tuple[ScoredCard, ...], width: int) -> li
     for bucket in _ordered_mana_buckets(groups=groups):
         cards = groups[bucket]
         block = [f"MV {bucket} ({len(cards)})"]
-        block.extend(f"  {_format_tui_spell_card(card=card)}" for card in cards)
+        block.extend(
+            f"  {_format_tui_spell_card(card=card, quantity=quantity)}"
+            for card, quantity in _group_tui_spell_cards(cards=cards)
+        )
         blocks.append(block)
 
     return [f"Selected spells by mana value ({len(spells)})"] + _columnize_blocks(
@@ -1331,7 +1336,10 @@ def _format_tui_spell_columns(
     cards: tuple[ScoredCard, ...],
     width: int,
 ) -> list[str]:
-    blocks = [[_format_tui_spell_card(card=card)] for card in cards]
+    blocks = [
+        [_format_tui_spell_card(card=card, quantity=quantity)]
+        for card, quantity in _group_tui_spell_cards(cards=cards)
+    ]
     return [f"{title} ({len(cards)})"] + _columnize_blocks(blocks=blocks, width=width)
 
 
@@ -1339,8 +1347,11 @@ def _columnize_blocks(*, blocks: list[list[str]], width: int) -> list[str]:
     if not blocks:
         return ["- none"]
 
-    column_count = max(1, min(3, width // _BUILD_COLUMN_MIN_WIDTH))
-    column_width = min(_BUILD_COLUMN_MAX_WIDTH, max(_BUILD_COLUMN_MIN_WIDTH, width // column_count))
+    column_count = max(1, min(2, width // _BUILD_COLUMN_MIN_WIDTH))
+    column_width = min(
+        _BUILD_COLUMN_MAX_WIDTH,
+        max(_BUILD_COLUMN_MIN_WIDTH, width // column_count),
+    )
     columns: list[list[str]] = [[] for _ in range(column_count)]
     heights = [0 for _ in range(column_count)]
     for block in blocks:
@@ -1366,22 +1377,23 @@ def _columnize_blocks(*, blocks: list[list[str]], width: int) -> list[str]:
 
 
 def _format_tui_lands(*, mana_base: ManaBase) -> list[str]:
-    lines = [
-        "Lands",
-        f"Land count: {mana_base.land_count} ({mana_base.reason})",
-    ]
+    lines = [f"Lands: {mana_base.land_count} ({mana_base.reason})"]
+    basics = ", ".join(
+        f"{basic.count} {basic.name}" for basic in mana_base.basic_lands
+    )
+    if basics:
+        lines.append(f"Basics: {basics}")
+    else:
+        lines.append("Basics: none")
+
     if mana_base.nonbasic_lands:
-        lines.append("Nonbasics:")
-        for land in mana_base.nonbasic_lands:
-            lines.append(
-                f"  {_format_plain_colors(land.source_colors)} source | {land.card.name}"
-            )
+        nonbasics = "; ".join(
+            f"{land.card.name} ({_format_plain_colors(land.source_colors)} source)"
+            for land in mana_base.nonbasic_lands
+        )
+        lines.append(f"Nonbasics: {nonbasics}")
     else:
         lines.append("Nonbasics: none")
-
-    lines.append("Basics:")
-    for basic in mana_base.basic_lands:
-        lines.append(f"  {basic.count} {basic.name}")
 
     return lines
 
@@ -1427,20 +1439,58 @@ def _format_tui_bench(*, selection: SpellSelection, width: int) -> list[str]:
     if not selection.bench:
         return lines + ["- none"]
 
-    for card in selection.bench:
-        lines.append(_clip(text=_format_tui_spell_card(card=card), width=width))
+    for card, quantity in _group_tui_spell_cards(cards=selection.bench):
+        lines.append(
+            _clip(
+                text=_format_tui_spell_card(card=card, quantity=quantity),
+                width=width,
+            )
+        )
 
     return lines
 
 
-def _format_tui_spell_card(*, card: ScoredCard) -> str:
-    marker = "C" if _is_creature_card(card=card.card) else "N"
+def _format_tui_spell_card(*, card: ScoredCard, quantity: int = 1) -> str:
+    quantity_suffix = _format_tui_quantity_suffix(quantity=quantity)
     return (
         f"{_format_win_rate(scored_card=card):>6} "
         f"{_format_letter_grade(scored_card=card):>2} "
-        f"DG {card.score:>2} {marker} "
+        f"{card.score:>2} "
         f"{card.card.name} ({_format_plain_colors(card.card.colors)})"
+        f"{quantity_suffix}"
     )
+
+
+def _group_tui_spell_cards(
+    *,
+    cards: Iterable[ScoredCard],
+) -> tuple[TuiCardQuantityGroup, ...]:
+    grouped_cards: dict[TuiCardQuantityKey, TuiCardQuantityGroup] = {}
+    for card in cards:
+        quantity_key = _tui_card_quantity_key(card=card.card)
+        existing_group = grouped_cards.get(quantity_key)
+        if existing_group is None:
+            grouped_cards[quantity_key] = (card, 1)
+            continue
+
+        representative, quantity = existing_group
+        grouped_cards[quantity_key] = (representative, quantity + 1)
+
+    return tuple(grouped_cards.values())
+
+
+def _tui_card_quantity_key(*, card: CardInfo) -> TuiCardQuantityKey:
+    if card.unknown:
+        return ("unknown", str(card.grp_id))
+
+    return ("name", " ".join(card.name.casefold().split()))
+
+
+def _format_tui_quantity_suffix(*, quantity: int) -> str:
+    if quantity <= 1:
+        return ""
+
+    return f" x{quantity}"
 
 
 def _tui_spell_curve_sort_key(card: ScoredCard) -> tuple[float, int, str, int]:
@@ -1496,7 +1546,31 @@ def _clip(*, text: str, width: int) -> str:
     if width <= 1:
         return "…"
 
+    protected_suffix = _clip_protected_suffix(text=text)
+    if protected_suffix and width > len(protected_suffix) + 1:
+        prefix_width = width - len(protected_suffix) - 1
+        return text[:prefix_width] + "…" + protected_suffix
+
     return text[: width - 1] + "…"
+
+
+def _clip_protected_suffix(*, text: str) -> str:
+    quantity_index = text.rfind(" x")
+    if quantity_index == -1 or not text[quantity_index + 2 :].isdigit():
+        return ""
+
+    color_close_index = quantity_index - 1
+    if color_close_index < 0 or text[color_close_index] != ")":
+        return ""
+
+    color_open_index = text.rfind("(", 0, color_close_index)
+    if color_open_index == -1:
+        return ""
+
+    if color_open_index > 0 and text[color_open_index - 1] == " ":
+        return text[color_open_index - 1 :]
+
+    return text[color_open_index:]
 
 
 _ERROR_EXIT_CODE = 1
