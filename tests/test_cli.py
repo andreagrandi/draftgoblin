@@ -8,8 +8,11 @@ import pytest
 
 from draftgoblin import __version__
 from draftgoblin import config
+from draftgoblin import cli
+from draftgoblin.carddb import CardDatabase
 from draftgoblin.cli import build_parser, main
 from draftgoblin.pool import DraftState, save_draft_state
+from draftgoblin.seventeen import seventeen_lands_structure_targets_cache_path
 
 SCRYFALL_BULK_SAMPLE_PATH = (
     Path(__file__).parent / "fixtures" / "scryfall-default-cards-sample.jsonl"
@@ -39,6 +42,7 @@ def test_version_output_includes_required_disclaimer(
         ("replay", "Deterministic"),
         ("build", "Select"),
         ("refresh-data", "Scryfall"),
+        ("refresh-structure-targets", "17Lands"),
     ],
 )
 def test_subcommands_are_registered_with_help_text(
@@ -153,7 +157,7 @@ def test_build_pool_file_selects_pair_offline(
 
 
 
-def test_build_allow_splash_is_accepted_but_inert(
+def test_build_allow_splash_requires_fixing_before_off_pair_cards(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -180,8 +184,43 @@ def test_build_allow_splash_is_accepted_but_inert(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Splash: --allow-splash accepted but inert in v1" in captured.out
+    assert "Splash: enabled but unavailable" in captured.out
     assert "Eligible spells for WU: 4" in captured.out
+    assert captured.err == ""
+
+
+
+def test_refresh_structure_targets_command_writes_cache(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    app_dir = tmp_path / "app"
+    bulk_file = _write_build_bulk_file(directory=tmp_path)
+    draft_data_file = _write_structure_draft_data_file(directory=tmp_path)
+
+    exit_code = main(
+        argv=[
+            "refresh-structure-targets",
+            "--set-code",
+            "TST",
+            "--draft-data-file",
+            str(draft_data_file),
+            "--bulk-file",
+            str(bulk_file),
+            "--app-dir",
+            str(app_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "pair structure targets" in captured.out
+    assert seventeen_lands_structure_targets_cache_path(
+        set_code="TST",
+        event_format="QuickDraft",
+        app_dir=app_dir,
+    ).exists()
     assert captured.err == ""
 
 
@@ -279,7 +318,11 @@ def test_config_exposes_documented_tunables() -> None:
     assert config.DECK_BUILDER.two_drop_mana_value == 2.0
     assert config.DECK_BUILDER.expensive_spell_mana_value == 6.0
     assert config.DECK_BUILDER.near_tie_creature_preference_points == 2.0
+    assert config.DECK_BUILDER.splash_max_cards == 2
+    assert config.DECK_BUILDER.splash_minimum_fixing_sources == 2
+    assert config.DECK_BUILDER.splash_elite_score_minimum == 70.0
     assert config.DECK_BUILDER.main_color_source_floor == 7
+    assert config.DECK_BUILDER.structure_maindeck_rate_threshold == 0.5
     assert "minimum two-drop quota" in config.DECK_BUILDER.relaxation_order
     assert config.PICK_ENGINE.thin_sample_minimum == 500
     assert config.PICK_ENGINE.neutral_prior_win_rate == 0.55
@@ -288,14 +331,63 @@ def test_config_exposes_documented_tunables() -> None:
     assert "WU" in config.COLOR_PAIRS
 
 
-def test_parser_returns_help_when_no_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
+def test_no_subcommand_defaults_to_watch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    def fake_watch(args: object) -> int:
+        calls.append(args)
+        return 0
+
+    monkeypatch.setattr(cli, "handle_watch", fake_watch)
+
     exit_code = main(argv=[])
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    assert getattr(calls[0], "command") == "watch"
+    assert getattr(calls[0], "startup_scan") is True
+
+
+def test_watch_fetches_missing_card_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[Path | None] = []
+
+    def fake_load_or_refresh_card_database(*, app_dir: Path | None = None) -> CardDatabase:
+        calls.append(app_dir)
+        return CardDatabase(cards={})
+
+    monkeypatch.setattr(
+        cli,
+        "load_or_refresh_card_database",
+        fake_load_or_refresh_card_database,
+    )
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+    app_dir = tmp_path / "app"
+
+    exit_code = main(
+        argv=[
+            "watch",
+            "--log-path",
+            str(log_path),
+            "--plain",
+            "--app-dir",
+            str(app_dir),
+            "--once",
+        ]
+    )
 
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "watch" in captured.out
-    assert "refresh-data" in captured.out
+    assert calls == [app_dir]
+    assert "Mode: plain-text" in captured.out
+    assert captured.err == ""
 
 
 
@@ -312,6 +404,27 @@ def _write_build_bulk_file(*, directory: Path) -> Path:
         "".join(f"{json.dumps(row)}\n" for row in rows),
         encoding="utf-8",
     )
+    return path
+
+
+
+def _write_structure_draft_data_file(*, directory: Path) -> Path:
+    path = directory / "draft-data.csv"
+    rows = [
+        "draft_id,expansion,event_type,event_match_wins,pick,pick_maindeck_rate",
+    ]
+    names = ["White Fixture", "Blue Fixture", "Second White Fixture", "Second Blue Fixture"]
+    for index in range(23):
+        rows.append(
+            "draft,"
+            "TST,"
+            "QuickDraft,"
+            "7,"
+            f"{names[index % len(names)]},"
+            "1.0"
+        )
+
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
 
 

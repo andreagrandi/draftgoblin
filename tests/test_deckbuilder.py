@@ -9,6 +9,7 @@ import pytest
 from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
 from draftgoblin.config import DECK_BUILDER
 from draftgoblin.deckbuilder import (
+    BuildPool,
     DeckBuilderError,
     ManaBase,
     build_deck_from_pool,
@@ -28,6 +29,7 @@ from draftgoblin.seventeen import (
     SeventeenCardStats,
     SeventeenLandsData,
     SeventeenLandsFormatData,
+    StructuralTargets,
 )
 
 FIXTURE_NOW = datetime(2026, 7, 3, 12, 0, tzinfo=UTC).isoformat()
@@ -237,6 +239,143 @@ def test_mana_base_slots_in_pair_nonbasics_before_basics() -> None:
 
 
 
+def test_build_sheet_uses_structure_targets_and_prints_similarity() -> None:
+    config = replace(
+        DECK_BUILDER,
+        minimum_two_drops=0,
+        maximum_expensive_spells=10,
+        bench_card_count=0,
+    )
+    pool = BuildPool(
+        set_code="TST",
+        pool_grp_ids=tuple(range(701, 731)),
+        source_label="structure target test",
+    )
+    ratings_data = _ratings_data_with_structure_targets(
+        _structure_targets(
+            pair="WU",
+            average_creature_count=10.0,
+            average_land_count=18.0,
+            average_two_drop_count=0.0,
+            average_expensive_spell_count=0.0,
+            sample_size=3,
+        )
+    )
+    selection, build_sheet = build_deck_from_pool(
+        pool=pool,
+        card_database=_targeted_card_database(),
+        ratings_data=ratings_data,
+        config=config,
+    )
+
+    output = format_build_result(
+        pool=pool,
+        selection=selection,
+        spell_selection=build_sheet.spell_selection,
+        mana_base=build_sheet.mana_base,
+        config=config,
+    )
+
+    assert build_sheet.spell_selection.counts.total == 22
+    assert build_sheet.spell_selection.counts.creatures == 10
+    assert build_sheet.spell_selection.constraints.creature_floor == 10
+    assert build_sheet.spell_selection.constraints.creature_ceiling == 10
+    assert build_sheet.mana_base.land_count == 18
+    assert "Similarity: 17Lands trophy WU decks in TST (n=3)" in output
+    assert "avg 10.0 creatures / 18.0 lands; your build: 10 / 18" in output
+
+
+
+def test_allow_splash_selects_at_most_two_elite_off_pair_cards_with_fixing() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+        bench_card_count=3,
+    )
+    pool_ids = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+    no_splash = select_deck_spells(
+        pool_grp_ids=pool_ids,
+        card_database=_splash_card_database(fixing_count=2),
+        pair="WU",
+        ratings_data=_splash_ratings_data(),
+        allow_splash=False,
+        config=config,
+    )
+    splash = select_deck_spells(
+        pool_grp_ids=pool_ids,
+        card_database=_splash_card_database(fixing_count=2),
+        pair="WU",
+        ratings_data=_splash_ratings_data(),
+        allow_splash=True,
+        config=config,
+    )
+
+    assert no_splash.counts.splashes == 0
+    assert no_splash.eligible_count == 4
+    assert splash.splash_fixing_sources == 2
+    assert splash.counts.splashes == 2
+    assert [card.card.grp_id for card in splash.spells[:2]] == [5, 6]
+    assert 7 not in {card.card.grp_id for card in splash.spells}
+
+
+
+def test_allow_splash_caps_target_when_splash_limit_makes_pool_short() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=8,
+        creature_floor=0,
+        creature_ceiling=8,
+        minimum_two_drops=0,
+        maximum_expensive_spells=8,
+        bench_card_count=0,
+    )
+
+    selection = select_deck_spells(
+        pool_grp_ids=(1, 2, 3, 4, 5, 6, 7, 8, 9),
+        card_database=_splash_card_database(fixing_count=2),
+        pair="WU",
+        ratings_data=_splash_ratings_data(),
+        allow_splash=True,
+        config=config,
+    )
+
+    assert selection.counts.total == 6
+    assert selection.counts.splashes == 2
+    assert "eligible-card shortage" in selection.applied_relaxations
+
+
+
+def test_allow_splash_requires_two_fixing_sources() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+        bench_card_count=0,
+    )
+
+    selection = select_deck_spells(
+        pool_grp_ids=(1, 2, 3, 4, 5, 8),
+        card_database=_splash_card_database(fixing_count=1),
+        pair="WU",
+        ratings_data=_splash_ratings_data(),
+        allow_splash=True,
+        config=config,
+    )
+
+    assert selection.splash_fixing_sources == 1
+    assert selection.counts.splashes == 0
+    assert selection.eligible_count == 4
+
+
+
 def test_near_tie_creature_preference_applies_while_floor_unmet() -> None:
     config = replace(
         DECK_BUILDER,
@@ -429,7 +568,7 @@ def test_format_build_result_reports_spell_selection_and_attribution(tmp_path: P
     assert "Spell selection:" in output
     assert "Selected spells: 4/23" in output
     assert "Lands:" in output
-    assert "--allow-splash is inert in v1" in output
+    assert "--allow-splash not set" in output
     assert "Card data from 17Lands" in output
 
 
@@ -515,6 +654,121 @@ def _write_pool_file(directory: Path) -> Path:
     path = directory / ".deckbuilder-test-pool.json"
     path.write_text("[1, 2, 3, 4, 5, 6]", encoding="utf-8")
     return path
+
+
+
+def _ratings_data_with_structure_targets(
+    target: StructuralTargets,
+) -> SeventeenLandsData:
+    data = _ratings_data()
+    return SeventeenLandsData(
+        set_code=data.set_code,
+        requested_format=data.requested_format,
+        primary=data.primary,
+        fallback=data.fallback,
+        structure_targets={target.pair: target},
+        thin_sample_minimum=data.thin_sample_minimum,
+    )
+
+
+
+def _structure_targets(
+    *,
+    pair: str,
+    average_creature_count: float,
+    average_land_count: float,
+    average_two_drop_count: float,
+    average_expensive_spell_count: float,
+    sample_size: int,
+) -> StructuralTargets:
+    return StructuralTargets(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        pair=pair,
+        sample_size=sample_size,
+        average_creature_count=average_creature_count,
+        average_land_count=average_land_count,
+        average_spell_count=40.0 - average_land_count,
+        average_two_drop_count=average_two_drop_count,
+        average_expensive_spell_count=average_expensive_spell_count,
+        average_curve=(
+            ("0-1", 0.0),
+            ("2", average_two_drop_count),
+            ("3", 40.0 - average_land_count - average_two_drop_count),
+            ("4", 0.0),
+            ("5", 0.0),
+            ("6+", average_expensive_spell_count),
+        ),
+        source="17lands-public-draft-data",
+        source_url="https://17lands-public.example/draft.csv.gz",
+        computed_at=datetime(2026, 7, 3, 12, 0, tzinfo=UTC),
+    )
+
+
+
+def _targeted_card_database() -> CardDatabase:
+    cards: dict[int, CardInfo] = {}
+    for offset in range(30):
+        grp_id = 701 + offset
+        cards[grp_id] = _card(
+            grp_id=grp_id,
+            name=f"Target Fixture {grp_id}",
+            colors=("W",) if offset % 2 == 0 else ("U",),
+            mana_value=3.0,
+            types=("Creature — Fixture",) if offset < 10 else ("Instant",),
+            mana_cost="{W}" if offset % 2 == 0 else "{U}",
+        )
+
+    return CardDatabase(cards=cards)
+
+
+
+def _splash_card_database(*, fixing_count: int) -> CardDatabase:
+    cards = {
+        1: _card(grp_id=1, name="White Playable", colors=("W",)),
+        2: _card(grp_id=2, name="Blue Playable", colors=("U",)),
+        3: _card(grp_id=3, name="Second White Playable", colors=("W",)),
+        4: _card(grp_id=4, name="Second Blue Playable", colors=("U",)),
+        5: _card(grp_id=5, name="Red Bomb One", colors=("R",)),
+        6: _card(grp_id=6, name="Red Bomb Two", colors=("R",)),
+        7: _card(grp_id=7, name="Red Bomb Three", colors=("R",)),
+    }
+    if fixing_count >= 1:
+        cards[8] = _card(
+            grp_id=8,
+            name="Red Fixing Land One",
+            colors=(),
+            mana_value=0.0,
+            types=("Land",),
+            produced_mana=("R",),
+        )
+
+    if fixing_count >= 2:
+        cards[9] = _card(
+            grp_id=9,
+            name="Red Fixing Land Two",
+            colors=(),
+            mana_value=0.0,
+            types=("Land",),
+            produced_mana=("R",),
+        )
+
+    return CardDatabase(cards=cards)
+
+
+
+def _splash_ratings_data() -> SeventeenLandsData:
+    return _ratings_data_from_entries(
+        entries=(
+            (1, "White Playable", "W", 0.55),
+            (2, "Blue Playable", "U", 0.55),
+            (3, "Second White Playable", "W", 0.54),
+            (4, "Second Blue Playable", "U", 0.54),
+            (5, "Red Bomb One", "R", 0.70),
+            (6, "Red Bomb Two", "R", 0.69),
+            (7, "Red Bomb Three", "R", 0.68),
+        )
+    )
 
 
 

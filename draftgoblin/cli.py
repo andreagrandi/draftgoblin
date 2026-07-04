@@ -16,6 +16,7 @@ from draftgoblin.carddb import (
     build_card_database_from_bulk_file,
     card_database_cache_path,
     load_card_database,
+    load_or_refresh_card_database,
     refresh_card_database,
 )
 from draftgoblin.config import COLOR_PAIRS
@@ -32,9 +33,12 @@ from draftgoblin.paths import UnsupportedPlatformError, resolve_player_log_path
 from draftgoblin.pool import DraftPoolError
 from draftgoblin.replay import ReplayError, replay_log_file
 from draftgoblin.seventeen import (
+    QUICK_DRAFT_FORMAT,
     SeventeenLandsError,
     load_cached_17lands_data,
     load_or_refresh_17lands_data,
+    refresh_17lands_structure_targets,
+    seventeen_lands_structure_targets_cache_path,
 )
 from draftgoblin.tui import run_tui_watch
 from draftgoblin.watch import run_plain_watch
@@ -94,10 +98,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="Seconds between Player.log polls in watch mode.",
     )
+    watch_parser.set_defaults(startup_scan=True)
     watch_parser.add_argument(
         "--startup-scan",
+        dest="startup_scan",
         action="store_true",
-        help="Scan Player-prev.log and Player.log at startup before tailing.",
+        help=argparse.SUPPRESS,
+    )
+    watch_parser.add_argument(
+        "--no-startup-scan",
+        dest="startup_scan",
+        action="store_false",
+        help="Skip startup recovery and only process new Player.log lines.",
     )
     watch_parser.add_argument(
         "--once",
@@ -169,7 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser_command.add_argument(
         "--allow-splash",
         action="store_true",
-        help="Accepted but inert in v1; splash selection is deferred.",
+        help=(
+            "Allow up to two elite off-pair splash cards when the pool has "
+            "at least two fixing sources."
+        ),
     )
     build_parser_command.add_argument(
         "--set-code",
@@ -214,6 +229,52 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
     refresh_parser.set_defaults(handler=handle_refresh_data)
+
+    structure_parser = subparsers.add_parser(
+        name="refresh-structure-targets",
+        help="Compute cached 17Lands trophy-deck structure targets.",
+        description=(
+            "Compute per-pair deck-structure targets from a 17Lands public "
+            "draft-data dump."
+        ),
+    )
+    structure_parser.add_argument(
+        "--set-code",
+        required=True,
+        help="Set code for the public draft data dump.",
+    )
+    structure_parser.add_argument(
+        "--format",
+        default=QUICK_DRAFT_FORMAT,
+        help=f"17Lands event format (default: {QUICK_DRAFT_FORMAT}).",
+    )
+    structure_parser.add_argument(
+        "--draft-data-file",
+        type=Path,
+        default=None,
+        help="Local 17Lands public draft-data CSV(.gz) or tar.gz file to analyze.",
+    )
+    structure_parser.add_argument(
+        "--draft-data-url",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    structure_parser.add_argument(
+        "--bulk-file",
+        type=Path,
+        default=None,
+        help=(
+            "Resolve card names from a local Scryfall JSONL(.gz) bulk file "
+            "instead of the cached card database."
+        ),
+    )
+    structure_parser.add_argument(
+        "--app-dir",
+        type=Path,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    structure_parser.set_defaults(handler=handle_refresh_structure_targets)
 
     return parser
 
@@ -282,11 +343,14 @@ def handle_watch(args: argparse.Namespace) -> int:
 
 
 def _load_watch_card_database(*, args: argparse.Namespace) -> CardDatabase:
-    """Load watch card metadata without implicit network access.
-    Users can run refresh-data first or pass a local bulk file for tests.
+    """Load watch card metadata, refreshing automatically when missing.
+    Users can still pass a local bulk file for deterministic tests.
     """
 
-    return _load_replay_card_database(args=args)
+    if args.bulk_file is not None:
+        return build_card_database_from_bulk_file(path=args.bulk_file)
+
+    return load_or_refresh_card_database(app_dir=args.app_dir)
 
 
 def handle_replay(args: argparse.Namespace) -> int:
@@ -336,7 +400,7 @@ def handle_build(args: argparse.Namespace) -> int:
     """
 
     try:
-        database = _load_replay_card_database(args=args)
+        database = _load_build_card_database(args=args)
         pool = (
             load_pool_file(path=args.pool, set_code=args.set_code)
             if args.pool is not None
@@ -373,6 +437,18 @@ def handle_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_build_card_database(*, args: argparse.Namespace) -> CardDatabase:
+    """Load build card metadata, refreshing automatically when missing.
+    Build is user-facing, so it should not require a separate bootstrap command.
+    """
+
+    if args.bulk_file is not None:
+        return build_card_database_from_bulk_file(path=args.bulk_file)
+
+    return load_or_refresh_card_database(app_dir=args.app_dir)
+
+
+
 def handle_refresh_data(args: argparse.Namespace) -> int:
     """Handle the refresh-data command.
     Build the local Scryfall-backed grpId metadata cache.
@@ -392,13 +468,46 @@ def handle_refresh_data(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_refresh_structure_targets(args: argparse.Namespace) -> int:
+    """Handle empirical structure-target computation.
+    Uses 17Lands public draft data dumps rather than scraping trophy pages.
+    """
+
+    try:
+        database = _load_build_card_database(args=args)
+        targets = refresh_17lands_structure_targets(
+            set_code=args.set_code,
+            event_format=args.format,
+            card_database=database,
+            app_dir=args.app_dir,
+            draft_data_file=args.draft_data_file,
+            draft_data_url=args.draft_data_url,
+        )
+    except (CardDatabaseError, SeventeenLandsError) as error:
+        print(f"refresh-structure-targets failed: {error}", file=sys.stderr)
+        return 1
+
+    cache_path = seventeen_lands_structure_targets_cache_path(
+        set_code=targets.set_code,
+        event_format=targets.event_format,
+        app_dir=args.app_dir,
+    )
+    print(
+        "refreshed "
+        f"{len(targets.targets)} pair structure targets "
+        f"from {targets.total_decks} trophy decks at {cache_path}."
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the Draftgoblin CLI.
     Return a process-style exit code for tests and console-script use.
     """
 
     parser = build_parser()
-    args = parser.parse_args(args=argv)
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(args=raw_args)
 
     if args.version:
         print(format_version())
@@ -406,8 +515,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     handler: CommandHandler | None = getattr(args, "handler", None)
     if handler is None:
-        parser.print_help()
-        return 0
+        default_args = parser.parse_args(args=["watch"])
+        return default_args.handler(default_args)
 
     return handler(args)
 

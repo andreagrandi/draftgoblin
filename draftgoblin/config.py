@@ -31,6 +31,9 @@ class DeckBuilderConfig:
     two_drop_mana_value: float = 2.0
     expensive_spell_mana_value: float = 6.0
     near_tie_creature_preference_points: float = 2.0
+    splash_max_cards: int = 2
+    splash_minimum_fixing_sources: int = 2
+    splash_elite_score_minimum: float = 70.0
     bench_card_count: int = 5
     land_count_iteration_limit: int = 4
     relaxation_order: tuple[str, ...] = (
@@ -41,6 +44,9 @@ class DeckBuilderConfig:
         "eligible-card shortage",
     )
     main_color_source_floor: int = 7
+    structure_maindeck_rate_threshold: float = 0.5
+    structure_min_land_count: int = 14
+    structure_max_land_count: int = 20
 
 
 @dataclass(frozen=True)

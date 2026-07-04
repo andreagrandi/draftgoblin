@@ -10,6 +10,7 @@ from pathlib import Path
 from textual.widgets import DataTable, Static
 
 from draftgoblin.carddb import CardDatabase, build_card_database_from_bulk_file
+from draftgoblin.pool import DraftState, save_draft_state
 from draftgoblin.seventeen import (
     QUICK_DRAFT_FORMAT,
     RatingSampleCounts,
@@ -163,6 +164,36 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         assert "Override: WB" in _status_text(app=app)
 
 
+def test_tui_account_key_cycles_recovered_drafts(tmp_path: Path) -> None:
+    asyncio.run(_assert_account_key_cycles_recovered_drafts(tmp_path=tmp_path))
+
+
+async def _assert_account_key_cycles_recovered_drafts(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    save_draft_state(
+        state=_draft_state(
+            account_id="test-account",
+            draft_id="test-draft",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(104894, 105097),
+        ),
+        app_dir=tmp_path / "app",
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_full_fixture_lines())
+        await pilot.pause()
+
+        assert "Account: FixturePlayer" in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert "Account: test-account" in _status_text(app=app)
+        assert "Draft: test-draft" in app.build_view_text
+        assert "Pool size: 2 cards" in app.build_view_text
+
+
 def test_tui_narrow_width_hides_secondary_columns_first(tmp_path: Path) -> None:
     asyncio.run(_assert_narrow_width_hides_secondary_columns(tmp_path=tmp_path))
 
@@ -233,6 +264,29 @@ def _tui_app(
 
 def _fixture_card_database() -> CardDatabase:
     return build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+
+
+def _draft_state(
+    *,
+    account_id: str,
+    draft_id: str,
+    event_name: str,
+    pool_grp_ids: tuple[int, ...],
+) -> DraftState:
+    now = datetime(2026, 7, 4, 12, 0, tzinfo=UTC).isoformat()
+    return DraftState(
+        account_id=account_id,
+        draft_id=draft_id,
+        event_name=event_name,
+        set_code="MSH",
+        course_id=draft_id,
+        started_at=now,
+        updated_at=now,
+        completed_at=now,
+        completed=True,
+        picks=(),
+        pool_grp_ids=pool_grp_ids,
+    )
 
 
 def _first_pack_lines() -> list[str]:

@@ -452,7 +452,10 @@ def _card_mana_cost(*, card: Mapping[str, Any], grp_id: int) -> str | None:
 def _card_produced_mana(*, card: Mapping[str, Any], grp_id: int) -> tuple[str, ...]:
     produced_value = card.get("produced_mana")
     if produced_value is not None:
-        return _color_tuple(produced_value, field_name=f"card {grp_id}.produced_mana")
+        return _produced_mana_tuple(
+            produced_value,
+            field_name=f"card {grp_id}.produced_mana",
+        )
 
     faces_value = card.get("card_faces")
     face_mana: list[str] = []
@@ -466,7 +469,7 @@ def _card_produced_mana(*, card: Mapping[str, Any], grp_id: int) -> tuple[str, .
                 continue
 
             face_mana.extend(
-                _color_tuple(
+                _produced_mana_tuple(
                     face_value,
                     field_name=f"card {grp_id}.card_faces[].produced_mana",
                 )
@@ -580,6 +583,17 @@ def _color_tuple(value: Any, *, field_name: str) -> tuple[str, ...]:
         raise CardDatabaseError(f"Invalid color values in {field_name}: {invalid}.")
 
     return _ordered_unique_colors(colors=colors)
+
+
+def _produced_mana_tuple(value: Any, *, field_name: str) -> tuple[str, ...]:
+    mana_symbols = _string_tuple(value, field_name=field_name)
+    invalid = [symbol for symbol in mana_symbols if symbol not in (*COLOR_ORDER, "C")]
+    if invalid:
+        raise CardDatabaseError(f"Invalid mana values in {field_name}: {invalid}.")
+
+    return _ordered_unique_colors(
+        colors=(symbol for symbol in mana_symbols if symbol in COLOR_ORDER)
+    )
 
 
 def _ordered_unique_colors(*, colors: Iterable[str]) -> tuple[str, ...]:
