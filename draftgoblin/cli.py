@@ -36,6 +36,7 @@ from draftgoblin.seventeen import (
     load_cached_17lands_data,
     load_or_refresh_17lands_data,
 )
+from draftgoblin.tui import run_tui_watch
 from draftgoblin.watch import run_plain_watch
 
 CommandHandler = Callable[[argparse.Namespace], int]
@@ -76,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument(
         "--plain",
         action="store_true",
-        help="Use plain-text output instead of the future TUI.",
+        help="Use plain-text output instead of the default TUI.",
     )
     watch_parser.add_argument(
         "--bulk-file",
@@ -236,30 +237,35 @@ def handle_watch(args: argparse.Namespace) -> int:
         print(f"watch failed: {error}", file=sys.stderr)
         return 2
 
-    if not args.plain:
-        print(
-            "watch TUI is not implemented yet; rerun with --plain for live text output.",
-            file=sys.stderr,
-        )
-        return 2
-
     if args.poll_interval <= 0:
         print("watch failed: --poll-interval must be greater than zero.", file=sys.stderr)
         return 2
 
     try:
         database = _load_watch_card_database(args=args)
-        return run_plain_watch(
+        ratings_loader = lambda set_code: load_or_refresh_17lands_data(
+            set_code=set_code,
+            app_dir=args.app_dir,
+        )
+        if args.plain:
+            return run_plain_watch(
+                log_path=log_path,
+                card_database=database,
+                app_dir=args.app_dir,
+                poll_interval=args.poll_interval,
+                once=args.once,
+                startup_scan=args.startup_scan,
+                ratings_loader=ratings_loader,
+            )
+
+        return run_tui_watch(
             log_path=log_path,
             card_database=database,
             app_dir=args.app_dir,
             poll_interval=args.poll_interval,
             once=args.once,
             startup_scan=args.startup_scan,
-            ratings_loader=lambda set_code: load_or_refresh_17lands_data(
-                set_code=set_code,
-                app_dir=args.app_dir,
-            ),
+            ratings_loader=ratings_loader,
         )
     except KeyboardInterrupt:
         return 130
