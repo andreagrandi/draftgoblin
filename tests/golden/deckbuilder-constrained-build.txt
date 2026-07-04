@@ -1,38 +1,19 @@
-Deck builder pair selection
-Pool: tests/fixtures/deckbuilder-constrained-pool.json
+Suggested deck
 Set: TST
+Pool: tests/fixtures/deckbuilder-constrained-pool.json
 Pool size: 28 cards
-Chosen pair: WU (automatic, score 50.00)
-Runner-up: WB (score 33.37)
-Score gap: 16.63
-Pair scores:
-- WU: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 28
-- WB: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
-- WR: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
-- WG: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
-- UB: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
-- UR: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
-- UG: score 33.37; top 23 sum 700.00; 17Lands WR neutral 50.0%; playables 14
-- BR: score 7.50; top 23 sum 0.00; 17Lands WR neutral 50.0%; playables 0
-- BG: score 7.50; top 23 sum 0.00; 17Lands WR neutral 50.0%; playables 0
-- RG: score 7.50; top 23 sum 0.00; 17Lands WR neutral 50.0%; playables 0
+Color pair: WU (automatic; 17Lands WR neutral 50.0%)
 
-Build sheet:
-Pair: WU (17Lands WR neutral 50.0%)
+Deck summary:
 Deck size: 40 cards (23 spells + 17 lands)
+Average mana value: 3.17
+Mana curve: 0: 0 | 1: 0 | 2: 5 | 3: 15 | 4: 0 | 5: 0 | 6+: 3
+Creatures: 17; Non-creatures: 6; Lands: 17
 Land count: 17 (default curve: avg MV 3.17)
 Mana pips: W 12, U 11
 Sources: W 9, U 8 (floor 7)
 
-Spell selection:
-Eligible spells for WU: 28
-Selected spells: 23/23
-Creature count: 17 (target 14-17)
-Two-drops MV 2: 5 (minimum 5)
-Expensive spells MV >= 6: 3 (soft cap 3)
-Splash: disabled (--allow-splash not set; off-pair cards excluded)
-Relaxation order: expensive-spell cap -> minimum two-drop quota -> creature ceiling -> creature floor -> eligible-card shortage
-Applied relaxations: none
+Selected spells:
 Creatures:
 - MV 2 | score 50 | Cloudkin Cadet (W)
 - MV 2 | score 50 | Harbor Recruit (U)
@@ -64,10 +45,37 @@ Nonbasic lands:
 Basics:
 - 9 Plains
 - 8 Island
+
+Structure checks:
+Eligible spells for WU: 28
+Selected spells: 23/23
+Creature count: 17 (target 14-17)
+Two-drops MV 2: 5 (minimum 5)
+Expensive spells MV >= 6: 3 (soft cap 3)
+Splash: disabled (--allow-splash not set; off-pair cards excluded)
+Relaxation order: expensive-spell cap -> minimum two-drop quota -> creature ceiling -> creature floor -> eligible-card shortage
+Applied relaxations: none
 Bench:
 - MV 6 | score 50 | Skyline Colossus (U) (cut: expensive-spell cap)
 - MV 3 | score 50 | Guiding Light (W) (cut: lower score)
 - MV 3 | score 50 | Hold Still (U) (cut: lower score)
 - MV 3 | score 50 | Insightful Study (W) (cut: lower score)
 - MV 3 | score 50 | Jury-Rig (U) (cut: lower score)
+
+Color-pair reasoning:
+Diagnostic: compares playable-card quality with 17Lands color-pair context; it is not another decklist.
+Chosen pair: WU (automatic, strength 50.00)
+Runner-up: WB (strength 33.37)
+Strength gap: 16.63
+Pair strengths:
+- WU: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 28
+- WB: strength 33.37; top 23 playable quality sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- WR: strength 33.37; top 23 playable quality sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- WG: strength 33.37; top 23 playable quality sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- UB: strength 33.37; top 23 playable quality sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- UR: strength 33.37; top 23 playable quality sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- UG: strength 33.37; top 23 playable quality sum 700.00; 17Lands WR neutral 50.0%; playables 14
+- BR: strength 7.50; top 23 playable quality sum 0.00; 17Lands WR neutral 50.0%; playables 0
+- BG: strength 7.50; top 23 playable quality sum 0.00; 17Lands WR neutral 50.0%; playables 0
+- RG: strength 7.50; top 23 playable quality sum 0.00; 17Lands WR neutral 50.0%; playables 0
 Card data from 17Lands (17lands.com)

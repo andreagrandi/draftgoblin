@@ -150,6 +150,7 @@ async def _assert_sidebar_updates_pool_summary(tmp_path: Path) -> None:
         assert "Pool size: 1" in summary
         assert "Colors:" in summary
         assert "G █████ 1" in summary
+        assert "Set: MSH — Marvel Super Heroes" in summary
         assert "Curve:" in summary
         assert "4█1" in summary
         assert "Fixture Spider" in last_picks
@@ -171,8 +172,14 @@ async def _assert_build_keybinding_opens_build_view(tmp_path: Path) -> None:
 
         title = app.query_one("#pack-title", Static)
         assert str(title.render()).startswith("Build view — pair")
+        assert app.build_view_text.startswith("Suggested deck\n")
+        assert "Set: MSH — Marvel Super Heroes" in app.build_view_text
         assert "Pool size: 1 cards" in app.build_view_text
-        assert "Build sheet:" in app.build_view_text
+        assert "Average mana value:" in app.build_view_text
+        assert "Mana curve: 0:" in app.build_view_text
+        assert "Color-pair reasoning" not in app.build_view_text
+        assert "Pair scores" not in app.build_view_text
+        assert "Details hidden: press c" in app.build_view_text
 
 
 def test_tui_completion_switches_to_build_view_and_pair_override_keybinding(
@@ -195,9 +202,11 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         assert str(title.render()).startswith("Build view — pair WU (automatic)")
         assert table.display is False
         assert build_scroll.display is True
-        assert "Build sheet:" in app.build_view_text
+        assert app.build_view_text.startswith("Suggested deck\n")
         assert "Selected spells by mana value" in app.build_view_text
-        assert "Pair: WU (automatic" in app.build_view_text
+        assert "Color pair: WU (automatic" in app.build_view_text
+        assert "Average mana value:" in app.build_view_text
+        assert "Mana curve: 0:" in app.build_view_text
 
         await pilot.press("s")
         await pilot.pause()
@@ -208,6 +217,7 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         await pilot.press("c")
         await pilot.pause()
 
+        assert "Color-pair reasoning" in app.build_view_text
         assert "top 23 sum" in app.build_view_text
         assert "Bench" in app.build_view_text
 
@@ -220,7 +230,7 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         await pilot.pause()
 
         assert str(title.render()).startswith("Build view — pair WB (forced WB)")
-        assert "Pair: WB (forced" in app.build_view_text
+        assert "Color pair: WB (forced" in app.build_view_text
         assert "Override: WB" in _status_text(app=app)
 
 

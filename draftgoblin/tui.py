@@ -44,6 +44,7 @@ from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
 from draftgoblin.pool import DraftPoolStore, DraftState, list_draft_states
 from draftgoblin.seventeen import SEVENTEEN_LANDS_ATTRIBUTION, SeventeenLandsData
+from draftgoblin.setinfo import format_set_label
 
 PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
@@ -885,7 +886,7 @@ class DraftgoblinTuiApp(App[None]):
         override_label = self._build_override_label()
         pool_summary.update(
             "Pool summary\n"
-            f"Set: {self._set_code or 'unknown'}\n"
+            f"Set: {format_set_label(set_code=self._set_code)}\n"
             f"Event: {event_text}\n"
             f"Draft: {draft_text}\n"
             f"Pool size: {self._pool_size}\n"
@@ -1084,10 +1085,21 @@ def _format_tui_build_result(
     width: int,
 ) -> str:
     chosen_label = "forced" if selection.forced_pair is not None else "automatic"
+    counts = spell_selection.counts
     lines = [
-        "Build sheet:",
-        f"Pair: {selection.chosen.pair} ({chosen_label}; score {selection.chosen.blended_score:.2f})",
-        f"Deck: {mana_base.deck_size} cards ({mana_base.spell_count} spells + {mana_base.land_count} lands)",
+        "Suggested deck",
+        f"Set: {format_set_label(set_code=pool.set_code)}",
+        f"Color pair: {selection.chosen.pair} ({chosen_label})",
+        (
+            f"Deck: {mana_base.deck_size} cards — "
+            f"{mana_base.spell_count} spells, {mana_base.land_count} lands"
+        ),
+        f"Average mana value: {mana_base.average_mana_value:.2f}",
+        (
+            f"Creatures: {counts.creatures}; "
+            f"Noncreatures: {counts.noncreatures}; Lands: {mana_base.land_count}"
+        ),
+        _format_tui_curve_summary(spells=spell_selection.spells),
         f"Pool: {pool.source_label}",
         f"Pool size: {selection.pool_size} cards",
     ]
@@ -1099,8 +1111,11 @@ def _format_tui_build_result(
 
     lines.extend([
         f"Mana pips: {_format_plain_color_counts(mana_base.pip_counts)}",
-        f"Sources: {_format_plain_color_counts(mana_base.source_counts)}",
-        "Keys: ↑/↓ or j/k scroll; PgUp/PgDn page; s changes spell sort; c toggles details; p changes pair",
+        f"Mana sources: {_format_plain_color_counts(mana_base.source_counts)}",
+        (
+            "Keys: ↑/↓ or j/k scroll; PgUp/PgDn page; s changes spell sort; "
+            "c shows details; p changes pair"
+        ),
         "",
     ])
     lines.extend(
@@ -1112,17 +1127,43 @@ def _format_tui_build_result(
     )
     lines.append("")
     lines.extend(_format_tui_lands(mana_base=mana_base))
-    lines.append("")
-    lines.extend(_format_tui_spell_counts(spell_selection=spell_selection))
-    lines.append("")
-    lines.extend(_format_tui_pair_scores(selection=selection, show_details=show_details))
     if show_details:
         lines.append("")
+        lines.extend(_format_tui_spell_counts(spell_selection=spell_selection))
+        lines.append("")
+        lines.extend(_format_tui_pair_scores(selection=selection))
+        lines.append("")
         lines.extend(_format_tui_bench(selection=spell_selection, width=width))
+    else:
+        lines.append("")
+        lines.append(
+            "Details hidden: press c for color-pair reasoning, structure checks, and bench cuts."
+        )
 
     lines.append("")
     lines.append(selection.attribution)
     return "\n".join(lines) + "\n"
+
+
+def _format_tui_curve_summary(*, spells: tuple[ScoredCard, ...]) -> str:
+    counts = [0 for _ in CURVE_BUCKET_LABELS]
+    unknown_count = 0
+    for card in spells:
+        mana_value = card.card.mana_value
+        if mana_value is None:
+            unknown_count += 1
+            continue
+
+        counts[_curve_bucket(mana_value=mana_value)] += 1
+
+    parts = [
+        f"{label}: {counts[index]}"
+        for index, label in enumerate(CURVE_BUCKET_LABELS)
+    ]
+    if unknown_count > 0:
+        parts.append(f"?: {unknown_count}")
+
+    return "Mana curve: " + " | ".join(parts)
 
 
 def _format_tui_selected_spells(
@@ -1237,35 +1278,31 @@ def _format_tui_spell_counts(*, spell_selection: SpellSelection) -> list[str]:
         "Structure checks",
         f"Eligible spells for {spell_selection.pair}: {spell_selection.eligible_count}",
         f"Selected spells: {counts.total}/{spell_selection.requested_spell_count}",
-        f"Creatures: {counts.creatures} (target {constraints.creature_floor}-{constraints.creature_ceiling})",
+        (
+            f"Creatures: {counts.creatures} "
+            f"(target {constraints.creature_floor}-{constraints.creature_ceiling})"
+        ),
         f"Two-drops: {counts.two_drops} (minimum {constraints.minimum_two_drops})",
         f"Expensive spells: {counts.expensive} (soft cap {constraints.maximum_expensive_spells})",
         f"Applied relaxations: {_format_tui_relaxations(spell_selection.applied_relaxations)}",
     ]
 
 
-def _format_tui_pair_scores(
-    *,
-    selection: PairSelection,
-    show_details: bool,
-) -> list[str]:
+def _format_tui_pair_scores(*, selection: PairSelection) -> list[str]:
     lines = [
-        "Pair scores",
-        "Score blends card quality with 17Lands color-pair win rate; higher is better.",
+        "Color-pair reasoning",
+        (
+            "This diagnostic compares playable cards with 17Lands color-pair "
+            "context; it is not another decklist."
+        ),
     ]
-    for score in selection.ranked_scores[:4 if not show_details else len(selection.ranked_scores)]:
-        line = (
-            f"- {score.pair}: {score.blended_score:.2f}; "
-            f"playables {score.playable_count}; "
-            f"17Lands WR {_format_tui_win_rate(score.pair_win_rate)}"
+    for score in selection.ranked_scores:
+        lines.append(
+            f"- {score.pair}: {score.playable_count} playable cards; "
+            f"pair strength {score.blended_score:.2f}; "
+            f"17Lands WR {_format_tui_win_rate(score.pair_win_rate)}; "
+            f"top {selection.target_spell_count} sum {score.playable_score_sum:.2f}"
         )
-        if show_details:
-            line += f"; top 23 sum {score.playable_score_sum:.2f}"
-
-        lines.append(line)
-
-    if not show_details:
-        lines.append("  Press c for all pairs and top-23 sums.")
 
     return lines
 

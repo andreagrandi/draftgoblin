@@ -22,6 +22,7 @@ from draftgoblin.seventeen import (
     SeventeenLandsData,
     StructuralTargets,
 )
+from draftgoblin.setinfo import format_set_label
 
 PathInput: TypeAlias = str | PathLike[str]
 CardQuantityKey: TypeAlias = tuple[str, str]
@@ -42,6 +43,7 @@ BASIC_LANDS_BY_COLOR = {
     "G": "Forest",
 }
 MANA_SYMBOL_PATTERN = re.compile(r"\{([^}]+)\}")
+CURVE_BUCKET_LABELS = ("0", "1", "2", "3", "4", "5", "6+")
 
 
 class DeckBuilderError(RuntimeError):
@@ -693,38 +695,117 @@ def format_build_result(
     config: DeckBuilderConfig = DECK_BUILDER,
 ) -> str:
     """Format deterministic plain-text deck-builder output.
-    Pair selection remains first, followed by the final build sheet.
+    Complete builds start with the suggested deck before diagnostics.
     """
 
+    if spell_selection is not None and mana_base is not None:
+        lines = _format_player_build_result(
+            pool=pool,
+            selection=selection,
+            spell_selection=spell_selection,
+            mana_base=mana_base,
+            config=config,
+        )
+    else:
+        lines = _format_pair_selection_result(
+            pool=pool,
+            selection=selection,
+            config=config,
+        )
+        if spell_selection is not None:
+            lines.extend(_format_spell_selection(selection=spell_selection, config=config))
+
+    lines.append(selection.attribution)
+    return "\n".join(lines) + "\n"
+
+
+def _format_player_build_result(
+    *,
+    pool: BuildPool,
+    selection: PairSelection,
+    spell_selection: SpellSelection,
+    mana_base: ManaBase,
+    config: DeckBuilderConfig,
+) -> list[str]:
+    chosen_label = "forced" if selection.forced_pair is not None else "automatic"
+    lines = [
+        "Suggested deck",
+        f"Set: {format_set_label(set_code=pool.set_code)}",
+        f"Pool: {pool.source_label}",
+        f"Pool size: {selection.pool_size} cards",
+    ]
+    _append_optional_pool_context(lines=lines, pool=pool)
+    lines.append(
+        f"Color pair: {selection.chosen.pair} "
+        f"({chosen_label}; 17Lands WR {_format_win_rate(score=selection.chosen)})"
+    )
+    lines.extend(
+        _format_player_build_sheet(
+            spell_selection=spell_selection,
+            mana_base=mana_base,
+            config=config,
+        )
+    )
+    lines.extend(
+        _format_pair_analysis(
+            selection=selection,
+            config=config,
+        )
+    )
+    return lines
+
+
+def _format_pair_selection_result(
+    *,
+    pool: BuildPool,
+    selection: PairSelection,
+    config: DeckBuilderConfig,
+) -> list[str]:
     lines = [
         "Deck builder pair selection",
         f"Pool: {pool.source_label}",
-        f"Set: {pool.set_code}",
+        f"Set: {format_set_label(set_code=pool.set_code)}",
         f"Pool size: {selection.pool_size} cards",
     ]
+    _append_optional_pool_context(lines=lines, pool=pool)
+    lines.extend(_format_pair_analysis(selection=selection, config=config))
+    return lines
+
+
+def _append_optional_pool_context(*, lines: list[str], pool: BuildPool) -> None:
     if pool.account_id is not None:
         lines.append(f"Account: {pool.account_id}")
 
     if pool.draft_id is not None:
         lines.append(f"Draft: {pool.draft_id}")
 
+
+def _format_pair_analysis(
+    *,
+    selection: PairSelection,
+    config: DeckBuilderConfig,
+) -> list[str]:
     chosen_label = "forced" if selection.forced_pair is not None else "automatic"
-    lines.extend(
-        [
-            f"Chosen pair: {selection.chosen.pair} ({chosen_label}, score "
-            f"{_format_score(selection.chosen.blended_score, config=config)})",
-            f"Runner-up: {selection.runner_up.pair} (score "
-            f"{_format_score(selection.runner_up.blended_score, config=config)})",
-            f"Score gap: {_format_score(selection.score_gap, config=config)}",
-        ]
-    )
+    lines = [
+        "",
+        "Color-pair reasoning:",
+        (
+            "Diagnostic: compares playable-card quality with 17Lands color-pair "
+            "context; it is not another decklist."
+        ),
+        f"Chosen pair: {selection.chosen.pair} ({chosen_label}, strength "
+        f"{_format_score(selection.chosen.blended_score, config=config)})",
+        f"Runner-up: {selection.runner_up.pair} (strength "
+        f"{_format_score(selection.runner_up.blended_score, config=config)})",
+        f"Strength gap: {_format_score(selection.score_gap, config=config)}",
+    ]
     if selection.forced_pair is not None:
         lines.append(
-            f"Best automatic pair: {selection.automatic.pair} (score "
+            f"Best automatic pair: {selection.automatic.pair} (strength "
             f"{_format_score(selection.automatic.blended_score, config=config)})"
         )
 
-    lines.append("Pair scores:")
+    lines.append("Pair strengths:")
     for score in selection.ranked_scores:
         lines.append(
             _format_pair_score(
@@ -734,20 +815,7 @@ def format_build_result(
             )
         )
 
-    if spell_selection is not None and mana_base is not None:
-        lines.extend(
-            _format_build_sheet(
-                pair_selection=selection,
-                spell_selection=spell_selection,
-                mana_base=mana_base,
-                config=config,
-            )
-        )
-    elif spell_selection is not None:
-        lines.extend(_format_spell_selection(selection=spell_selection, config=config))
-
-    lines.append(selection.attribution)
-    return "\n".join(lines) + "\n"
+    return lines
 
 
 
@@ -2006,21 +2074,25 @@ def _mana_base_caveats(
 
 
 
-def _format_build_sheet(
+def _format_player_build_sheet(
     *,
-    pair_selection: PairSelection,
     spell_selection: SpellSelection,
     mana_base: ManaBase,
     config: DeckBuilderConfig,
 ) -> list[str]:
+    counts = spell_selection.counts
     lines = [
         "",
-        "Build sheet:",
-        f"Pair: {spell_selection.pair} "
-        f"(17Lands WR {_format_win_rate(score=pair_selection.chosen)})",
+        "Deck summary:",
         "Deck size: "
         f"{mana_base.total_cards} cards "
-        f"({spell_selection.counts.total} spells + {mana_base.land_count} lands)",
+        f"({counts.total} spells + {mana_base.land_count} lands)",
+        f"Average mana value: {mana_base.average_mana_value:.2f}",
+        _format_mana_curve_summary(cards=spell_selection.spells),
+        (
+            f"Creatures: {counts.creatures}; "
+            f"Non-creatures: {counts.noncreatures}; Lands: {mana_base.land_count}"
+        ),
         f"Land count: {mana_base.land_count} ({mana_base.reason})",
         "Mana pips: " f"{_format_color_counts(mana_base.pip_counts)}",
         "Sources: "
@@ -2033,16 +2105,43 @@ def _format_build_sheet(
     )
     if similarity_line is not None:
         lines.append(similarity_line)
+
+    lines.extend(_format_selected_spell_cards(selection=spell_selection))
+    lines.extend(_format_land_section(mana_base=mana_base))
     lines.extend(
-        _format_spell_selection(
+        _format_structure_checks(
             selection=spell_selection,
             config=config,
-            include_bench=False,
         )
     )
-    lines.extend(_format_land_section(mana_base=mana_base))
     lines.extend(_format_bench_section(selection=spell_selection, config=config))
     return lines
+
+
+def _format_mana_curve_summary(*, cards: tuple[ScoredCard, ...]) -> str:
+    counts = [0 for _ in CURVE_BUCKET_LABELS]
+    unknown_count = 0
+    for card in cards:
+        mana_value = card.card.mana_value
+        if mana_value is None:
+            unknown_count += 1
+            continue
+
+        counts[_curve_bucket(mana_value=mana_value)] += 1
+
+    parts = [
+        f"{label}: {counts[index]}"
+        for index, label in enumerate(CURVE_BUCKET_LABELS)
+    ]
+    if unknown_count > 0:
+        parts.append(f"?: {unknown_count}")
+
+    return "Mana curve: " + " | ".join(parts)
+
+
+def _curve_bucket(*, mana_value: float) -> int:
+    rounded = max(0, int(mana_value))
+    return min(rounded, len(CURVE_BUCKET_LABELS) - 1)
 
 
 def _format_similarity_line(
@@ -2101,6 +2200,44 @@ def _format_color_counts(counts: tuple[tuple[str, int], ...]) -> str:
         return "none"
 
     return ", ".join(f"{color} {count}" for color, count in counts)
+
+
+def _format_selected_spell_cards(*, selection: SpellSelection) -> list[str]:
+    lines = ["", "Selected spells:", "Creatures:"]
+    lines.extend(
+        _format_spell_card(card=card)
+        for card in _sorted_spell_cards(cards=selection.spells, creatures=True)
+    )
+    lines.append("Non-creatures:")
+    lines.extend(
+        _format_spell_card(card=card)
+        for card in _sorted_spell_cards(cards=selection.spells, creatures=False)
+    )
+    return lines
+
+
+def _format_structure_checks(
+    *,
+    selection: SpellSelection,
+    config: DeckBuilderConfig,
+) -> list[str]:
+    counts = selection.counts
+    constraints = selection.constraints
+    return [
+        "",
+        "Structure checks:",
+        f"Eligible spells for {selection.pair}: {selection.eligible_count}",
+        f"Selected spells: {counts.total}/{selection.requested_spell_count}",
+        f"Creature count: {counts.creatures} "
+        f"(target {constraints.creature_floor}-{constraints.creature_ceiling})",
+        f"Two-drops MV {config.two_drop_mana_value:g}: {counts.two_drops} "
+        f"(minimum {constraints.minimum_two_drops})",
+        f"Expensive spells MV >= {config.expensive_spell_mana_value:g}: "
+        f"{counts.expensive} (soft cap {constraints.maximum_expensive_spells})",
+        _format_splash_note(selection=selection, config=config),
+        f"Relaxation order: {' -> '.join(config.relaxation_order)}",
+        f"Applied relaxations: {_format_relaxations(selection.applied_relaxations)}",
+    ]
 
 
 def _format_spell_selection(
@@ -2221,7 +2358,8 @@ def _format_bench_card(
     selection: SpellSelection,
     config: DeckBuilderConfig,
 ) -> str:
-    return f"{_format_spell_card(card=card)} ({_bench_reason(card=card, selection=selection, config=config)})"
+    reason = _bench_reason(card=card, selection=selection, config=config)
+    return f"{_format_spell_card(card=card)} ({reason})"
 
 
 
@@ -2414,8 +2552,8 @@ def _format_pair_score(
 ) -> str:
     win_rate_label = _format_win_rate(score=score)
     return (
-        f"- {score.pair}: score {_format_score(score.blended_score, config=config)}; "
-        f"top {target_spell_count} sum "
+        f"- {score.pair}: strength {_format_score(score.blended_score, config=config)}; "
+        f"top {target_spell_count} playable quality sum "
         f"{_format_score(score.playable_score_sum, config=config)}; "
         f"17Lands WR {win_rate_label}; playables {score.playable_count}"
     )
