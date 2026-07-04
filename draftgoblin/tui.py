@@ -15,7 +15,7 @@ from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import DataTable, Footer, Header, Static
 from textual.worker import get_current_worker
 
@@ -24,6 +24,9 @@ from draftgoblin.config import COLOR_PAIRS, POLL_INTERVAL_SECONDS
 from draftgoblin.deckbuilder import (
     BuildPool,
     DeckBuilderError,
+    ManaBase,
+    PairSelection,
+    SpellSelection,
     build_deck_from_pool,
     format_build_result,
 )
@@ -48,6 +51,7 @@ RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
 PRIMARY_COLUMN_KEYS = ("rank", "score", "card", "colors")
 SECONDARY_COLUMN_KEYS = ("fit", "gih", "alsa", "mv", "source")
 SORT_MODES = ("score", "alsa", "mv")
+BUILD_SPELL_SORT_MODES = ("curve", "score", "name")
 SECONDARY_COLUMN_MIN_WIDTH = 88
 SIDEBAR_MIN_WIDTH = 56
 COLOR_ORDER = ("W", "U", "B", "R", "G")
@@ -131,9 +135,13 @@ class DraftgoblinTuiApp(App[None]):
         height: 1fr;
     }
 
-    #build-view {
+    #build-scroll {
         height: 1fr;
         overflow-y: auto;
+    }
+
+    #build-view {
+        height: auto;
     }
 
     #pool-summary,
@@ -157,6 +165,14 @@ class DraftgoblinTuiApp(App[None]):
         Binding("b", "open_build_view", "Build", show=True),
         Binding("a", "cycle_account", "Account", show=True),
         Binding("p", "rebuild_with_pair_override", "Pair", show=True),
+        Binding("up", "scroll_build_up", "Scroll", show=False),
+        Binding("down", "scroll_build_down", "Scroll", show=False),
+        Binding("k", "scroll_build_up", "Scroll", show=False),
+        Binding("j", "scroll_build_down", "Scroll", show=False),
+        Binding("pageup", "scroll_build_page_up", "Page", show=False),
+        Binding("pagedown", "scroll_build_page_down", "Page", show=False),
+        Binding("home", "scroll_build_home", "Home", show=False),
+        Binding("end", "scroll_build_end", "End", show=False),
     ]
 
     def __init__(
@@ -211,6 +227,8 @@ class DraftgoblinTuiApp(App[None]):
         self._build_pair_label = "—"
         self._build_text = "Build view: no picked cards yet."
         self._build_error: str | None = None
+        self._build_spell_sort_mode = "curve"
+        self._build_show_details = False
         self._current_pack_event: PackOfferedEvent | None = None
         self._current_pack: ScoredPack | None = None
         self._ratings_data_by_set: dict[str, SeventeenLandsData | None] = {}
@@ -252,7 +270,8 @@ class DraftgoblinTuiApp(App[None]):
             with Vertical(id="pack-panel"):
                 yield Static("Waiting for a Quick Draft pack…", id="pack-title")
                 yield DataTable(id="pack-table")
-                yield Static("Build view: no picked cards yet.", id="build-view")
+                with VerticalScroll(id="build-scroll", can_focus=True):
+                    yield Static("Build view: no picked cards yet.", id="build-view")
             with Vertical(id="sidebar"):
                 yield Static("Pool: no draft yet", id="pool-summary")
                 yield Static("Last picks: none", id="last-picks")
@@ -287,20 +306,33 @@ class DraftgoblinTuiApp(App[None]):
         self._render_all()
 
     def action_toggle_secondary_columns(self) -> None:
-        """Toggle secondary pack-stat columns.
-        Narrow terminals still hide them until enough width is available.
+        """Toggle secondary pack columns or build detail sections.
+        In build view this makes the key produce an immediate visible change.
         """
 
-        self.show_secondary_columns = not self.show_secondary_columns
+        if self._view_mode == "build":
+            self._build_show_details = not self._build_show_details
+            self._rebuild_build_view()
+        else:
+            self.show_secondary_columns = not self.show_secondary_columns
+
         self._render_all()
 
     def action_cycle_sort(self) -> None:
-        """Cycle pack sorting through score, ALSA, and mana value.
-        The table is rebuilt from the last scored pack on every change.
+        """Cycle pack sorting or build spell grouping.
+        Build mode uses the same key to reorder the selected-spell section.
         """
 
-        index = SORT_MODES.index(self.sort_mode)
-        self.sort_mode = SORT_MODES[(index + 1) % len(SORT_MODES)]
+        if self._view_mode == "build":
+            index = BUILD_SPELL_SORT_MODES.index(self._build_spell_sort_mode)
+            self._build_spell_sort_mode = BUILD_SPELL_SORT_MODES[
+                (index + 1) % len(BUILD_SPELL_SORT_MODES)
+            ]
+            self._rebuild_build_view()
+        else:
+            index = SORT_MODES.index(self.sort_mode)
+            self.sort_mode = SORT_MODES[(index + 1) % len(SORT_MODES)]
+
         self._render_all()
 
     def action_open_build_view(self) -> None:
@@ -308,9 +340,63 @@ class DraftgoblinTuiApp(App[None]):
         The draft may still be in progress when this is invoked.
         """
 
-        if self._rebuild_build_view():
+        if self._view_mode == "build":
+            if self._current_pack_event is not None:
+                self._view_mode = "pack"
+            else:
+                self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
+                self._last_error = "already in build view; use ↑/↓ or PgUp/PgDn to scroll"
+        elif self._rebuild_build_view():
             self._view_mode = "build"
         self._render_all()
+
+    def action_scroll_build_up(self) -> None:
+        """Scroll the build view one line up when it is visible.
+        Pack tables keep their own built-in navigation behavior.
+        """
+
+        if self._view_mode == "build":
+            self.query_one("#build-scroll", VerticalScroll).scroll_up(animate=False)
+
+    def action_scroll_build_down(self) -> None:
+        """Scroll the build view one line down when it is visible.
+        This makes arrow keys and vim-style j/k usable in build mode.
+        """
+
+        if self._view_mode == "build":
+            self.query_one("#build-scroll", VerticalScroll).scroll_down(animate=False)
+
+    def action_scroll_build_page_up(self) -> None:
+        """Page the build view up when it is visible.
+        Long selected-spell and bench sections can be browsed quickly.
+        """
+
+        if self._view_mode == "build":
+            self.query_one("#build-scroll", VerticalScroll).scroll_page_up(animate=False)
+
+    def action_scroll_build_page_down(self) -> None:
+        """Page the build view down when it is visible.
+        Long selected-spell and bench sections can be browsed quickly.
+        """
+
+        if self._view_mode == "build":
+            self.query_one("#build-scroll", VerticalScroll).scroll_page_down(animate=False)
+
+    def action_scroll_build_home(self) -> None:
+        """Jump to the top of the build view.
+        Useful after inspecting the bench.
+        """
+
+        if self._view_mode == "build":
+            self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
+
+    def action_scroll_build_end(self) -> None:
+        """Jump to the bottom of the build view.
+        Useful when inspecting bench cuts.
+        """
+
+        if self._view_mode == "build":
+            self.query_one("#build-scroll", VerticalScroll).scroll_end(animate=False)
 
     def action_cycle_account(self) -> None:
         """Cycle through recovered drafts for other accounts.
@@ -467,6 +553,8 @@ class DraftgoblinTuiApp(App[None]):
         self._build_pair_label = "—"
         self._build_text = "Build view: no picked cards yet."
         self._build_error = None
+        self._build_spell_sort_mode = "curve"
+        self._build_show_details = False
         self._ensure_ratings_load_started(set_code=event.set_code)
 
     def _consume_pack_event(self, *, event: PackOfferedEvent) -> None:
@@ -685,7 +773,12 @@ class DraftgoblinTuiApp(App[None]):
             override = (
                 "automatic" if self._forced_pair is None else f"forced {self._forced_pair}"
             )
-            title.update(f"Build view — pair {self._build_pair_label} ({override})")
+            detail = "details" if self._build_show_details else "compact"
+            title.update(
+                f"Build view — pair {self._build_pair_label} ({override}); "
+                f"spells {self._build_spell_sort_mode}; {detail}; "
+                "scroll ↑/↓ PgUp/PgDn"
+            )
             return
 
         if self._current_pack_event is None:
@@ -706,9 +799,10 @@ class DraftgoblinTuiApp(App[None]):
 
     def _render_pack_table(self) -> None:
         table = self.query_one("#pack-table", DataTable)
+        build_scroll = self.query_one("#build-scroll", VerticalScroll)
         build_view = self.query_one("#build-view", Static)
         table.display = self._view_mode == "pack"
-        build_view.display = self._view_mode == "build"
+        build_scroll.display = self._view_mode == "build"
         build_view.update(self._build_text)
         if self._view_mode == "build":
             self._visible_column_keys = ()
@@ -760,6 +854,7 @@ class DraftgoblinTuiApp(App[None]):
             f"Inferred pair: {self._pair_label}\n"
             f"Build pair: {self._build_pair_label}\n"
             f"Override: {self._forced_pair or 'automatic'}\n"
+            f"{self._metadata_status_text()}\n"
             f"{color_bar}\n"
             f"{curve}"
         )
@@ -777,6 +872,11 @@ class DraftgoblinTuiApp(App[None]):
         if self._view_mode == "build" and self._build_pair_label != "—":
             pair_label = self._build_pair_label
 
+        sort_label = (
+            f"Build sort: {self._build_spell_sort_mode}"
+            if self._view_mode == "build"
+            else f"Sort: {SORT_LABELS[self.sort_mode]}"
+        )
         text = (
             f"Account: {self._active_account_label} | "
             f"View: {self._view_mode} | "
@@ -784,11 +884,15 @@ class DraftgoblinTuiApp(App[None]):
             f"Pick: {self._pick_label} | "
             f"Pool: {self._pool_size} | "
             f"Data: {self._data_source} | "
-            f"Sort: {SORT_LABELS[self.sort_mode]} | "
+            f"{sort_label} | "
             f"{SEVENTEEN_LANDS_ATTRIBUTION}"
         )
         if self._forced_pair is not None:
             text = f"Override: {self._forced_pair} | {text}"
+
+        unresolved_count = self._unresolved_metadata_count()
+        if unresolved_count > 0:
+            text = f"Warning: {unresolved_count} unresolved card metadata | {text}"
 
         if self._build_error is not None:
             text = f"Build: {self._build_error} | {text}"
@@ -831,6 +935,30 @@ class DraftgoblinTuiApp(App[None]):
             draft_id=self._draft_id,
         )
 
+    def _metadata_status_text(self) -> str:
+        visible_count = len(self._visible_metadata_grp_ids())
+        if visible_count == 0:
+            return "Metadata: waiting"
+
+        unresolved_count = self._unresolved_metadata_count()
+        if unresolved_count == 0:
+            return "Metadata: complete"
+
+        return f"Metadata warning: {unresolved_count} unresolved card metadata"
+
+    def _unresolved_metadata_count(self) -> int:
+        unresolved_grp_ids = self.card_database.unresolved_grp_ids(
+            grp_ids=self._visible_metadata_grp_ids(),
+        )
+        return len(unresolved_grp_ids)
+
+    def _visible_metadata_grp_ids(self) -> tuple[int, ...]:
+        grp_ids = list(self._pool_grp_ids)
+        if self._current_pack_event is not None:
+            grp_ids.extend(self._current_pack_event.offered_grp_ids)
+
+        return tuple(grp_ids)
+
     def _rebuild_build_view(self) -> bool:
         pool = self._current_build_pool()
         if pool is None:
@@ -856,13 +984,20 @@ class DraftgoblinTuiApp(App[None]):
         self._build_error = None
         self._last_error = None
         self._build_pair_label = selection.chosen.pair
-        self._build_text = format_build_result(
+        self._build_text = _format_tui_build_result(
             pool=pool,
             selection=selection,
             spell_selection=build_sheet.spell_selection,
             mana_base=build_sheet.mana_base,
+            spell_sort_mode=self._build_spell_sort_mode,
+            show_details=self._build_show_details,
+            width=self._build_text_width(),
         )
         return True
+
+    def _build_text_width(self) -> int:
+        sidebar_width = max(0, self.query_one("#sidebar", Vertical).size.width)
+        return max(60, self.size.width - sidebar_width - 4)
 
     def _next_forced_pair(self) -> str:
         current_pair = self._forced_pair
@@ -885,6 +1020,282 @@ class DraftgoblinTuiApp(App[None]):
     def _record_error(self, message: str) -> None:
         self._last_error = message
         self._render_all()
+
+
+_BUILD_COLUMN_MIN_WIDTH = 34
+_BUILD_COLUMN_MAX_WIDTH = 46
+
+
+def _format_tui_build_result(
+    *,
+    pool: BuildPool,
+    selection: PairSelection,
+    spell_selection: SpellSelection,
+    mana_base: ManaBase,
+    spell_sort_mode: str,
+    show_details: bool,
+    width: int,
+) -> str:
+    chosen_label = "forced" if selection.forced_pair is not None else "automatic"
+    lines = [
+        "Build sheet:",
+        f"Pair: {selection.chosen.pair} ({chosen_label}; score {selection.chosen.blended_score:.2f})",
+        f"Deck: {mana_base.deck_size} cards ({mana_base.spell_count} spells + {mana_base.land_count} lands)",
+        f"Pool: {pool.source_label}",
+        f"Pool size: {selection.pool_size} cards",
+    ]
+    if pool.account_id is not None:
+        lines.append(f"Account: {pool.account_id}")
+
+    if pool.draft_id is not None:
+        lines.append(f"Draft: {pool.draft_id}")
+
+    lines.extend([
+        f"Mana pips: {_format_plain_color_counts(mana_base.pip_counts)}",
+        f"Sources: {_format_plain_color_counts(mana_base.source_counts)}",
+        "Keys: ↑/↓ or j/k scroll; PgUp/PgDn page; s changes spell sort; c toggles details; p changes pair",
+        "",
+    ])
+    lines.extend(
+        _format_tui_selected_spells(
+            spell_selection=spell_selection,
+            spell_sort_mode=spell_sort_mode,
+            width=width,
+        )
+    )
+    lines.append("")
+    lines.extend(_format_tui_lands(mana_base=mana_base))
+    lines.append("")
+    lines.extend(_format_tui_spell_counts(spell_selection=spell_selection))
+    lines.append("")
+    lines.extend(_format_tui_pair_scores(selection=selection, show_details=show_details))
+    if show_details:
+        lines.append("")
+        lines.extend(_format_tui_bench(selection=spell_selection, width=width))
+
+    lines.append("")
+    lines.append(selection.attribution)
+    return "\n".join(lines) + "\n"
+
+
+def _format_tui_selected_spells(
+    *,
+    spell_selection: SpellSelection,
+    spell_sort_mode: str,
+    width: int,
+) -> list[str]:
+    if spell_sort_mode == "score":
+        return _format_tui_spell_columns(
+            title="Selected spells by score",
+            cards=tuple(sorted(
+                spell_selection.spells,
+                key=lambda card: (-card.score, _format_mana_value(card=card.card), card.card.name),
+            )),
+            width=width,
+        )
+
+    if spell_sort_mode == "name":
+        return _format_tui_spell_columns(
+            title="Selected spells by name",
+            cards=tuple(sorted(spell_selection.spells, key=lambda card: card.card.name)),
+            width=width,
+        )
+
+    return _format_tui_spell_curve(spells=spell_selection.spells, width=width)
+
+
+def _format_tui_spell_curve(*, spells: tuple[ScoredCard, ...], width: int) -> list[str]:
+    groups: dict[str, list[ScoredCard]] = {}
+    for card in sorted(spells, key=_tui_spell_curve_sort_key):
+        groups.setdefault(_mana_value_bucket(card=card), []).append(card)
+
+    blocks: list[list[str]] = []
+    for bucket in _ordered_mana_buckets(groups=groups):
+        cards = groups[bucket]
+        block = [f"MV {bucket} ({len(cards)})"]
+        block.extend(f"  {_format_tui_spell_card(card=card)}" for card in cards)
+        blocks.append(block)
+
+    return [f"Selected spells by mana value ({len(spells)})"] + _columnize_blocks(
+        blocks=blocks,
+        width=width,
+    )
+
+
+def _format_tui_spell_columns(
+    *,
+    title: str,
+    cards: tuple[ScoredCard, ...],
+    width: int,
+) -> list[str]:
+    blocks = [[_format_tui_spell_card(card=card)] for card in cards]
+    return [f"{title} ({len(cards)})"] + _columnize_blocks(blocks=blocks, width=width)
+
+
+def _columnize_blocks(*, blocks: list[list[str]], width: int) -> list[str]:
+    if not blocks:
+        return ["- none"]
+
+    column_count = max(1, min(3, width // _BUILD_COLUMN_MIN_WIDTH))
+    column_width = min(_BUILD_COLUMN_MAX_WIDTH, max(_BUILD_COLUMN_MIN_WIDTH, width // column_count))
+    columns: list[list[str]] = [[] for _ in range(column_count)]
+    heights = [0 for _ in range(column_count)]
+    for block in blocks:
+        column_index = min(range(column_count), key=lambda index: heights[index])
+        if columns[column_index]:
+            columns[column_index].append("")
+            heights[column_index] += 1
+
+        columns[column_index].extend(block)
+        heights[column_index] += len(block)
+
+    max_height = max(len(column) for column in columns)
+    lines: list[str] = []
+    for row_index in range(max_height):
+        parts = []
+        for column in columns:
+            text = column[row_index] if row_index < len(column) else ""
+            parts.append(_clip(text=text, width=column_width - 2).ljust(column_width))
+
+        lines.append("".join(parts).rstrip())
+
+    return lines
+
+
+def _format_tui_lands(*, mana_base: ManaBase) -> list[str]:
+    lines = [
+        "Lands",
+        f"Land count: {mana_base.land_count} ({mana_base.reason})",
+    ]
+    if mana_base.nonbasic_lands:
+        lines.append("Nonbasics:")
+        for land in mana_base.nonbasic_lands:
+            lines.append(
+                f"  {_format_plain_colors(land.source_colors)} source | {land.card.name}"
+            )
+    else:
+        lines.append("Nonbasics: none")
+
+    lines.append("Basics:")
+    for basic in mana_base.basic_lands:
+        lines.append(f"  {basic.count} {basic.name}")
+
+    return lines
+
+
+def _format_tui_spell_counts(*, spell_selection: SpellSelection) -> list[str]:
+    counts = spell_selection.counts
+    constraints = spell_selection.constraints
+    return [
+        "Structure checks",
+        f"Eligible spells for {spell_selection.pair}: {spell_selection.eligible_count}",
+        f"Selected spells: {counts.total}/{spell_selection.requested_spell_count}",
+        f"Creatures: {counts.creatures} (target {constraints.creature_floor}-{constraints.creature_ceiling})",
+        f"Two-drops: {counts.two_drops} (minimum {constraints.minimum_two_drops})",
+        f"Expensive spells: {counts.expensive} (soft cap {constraints.maximum_expensive_spells})",
+        f"Applied relaxations: {_format_tui_relaxations(spell_selection.applied_relaxations)}",
+    ]
+
+
+def _format_tui_pair_scores(
+    *,
+    selection: PairSelection,
+    show_details: bool,
+) -> list[str]:
+    lines = [
+        "Pair scores",
+        "Score blends card quality with 17Lands color-pair win rate; higher is better.",
+    ]
+    for score in selection.ranked_scores[:4 if not show_details else len(selection.ranked_scores)]:
+        line = (
+            f"- {score.pair}: {score.blended_score:.2f}; "
+            f"playables {score.playable_count}; "
+            f"17Lands WR {_format_tui_win_rate(score.pair_win_rate)}"
+        )
+        if show_details:
+            line += f"; top 23 sum {score.playable_score_sum:.2f}"
+
+        lines.append(line)
+
+    if not show_details:
+        lines.append("  Press c for all pairs and top-23 sums.")
+
+    return lines
+
+
+def _format_tui_bench(*, selection: SpellSelection, width: int) -> list[str]:
+    lines = ["Bench"]
+    if not selection.bench:
+        return lines + ["- none"]
+
+    for card in selection.bench:
+        lines.append(_clip(text=_format_tui_spell_card(card=card), width=width))
+
+    return lines
+
+
+def _format_tui_spell_card(*, card: ScoredCard) -> str:
+    marker = "C" if _is_creature_card(card=card.card) else "N"
+    return (
+        f"{card.score:>2} {marker} "
+        f"{card.card.name} ({_format_plain_colors(card.card.colors)})"
+    )
+
+
+def _tui_spell_curve_sort_key(card: ScoredCard) -> tuple[float, int, str, int]:
+    mana_value = 99.0 if card.card.mana_value is None else card.card.mana_value
+    return (mana_value, -card.score, card.card.name, card.original_index)
+
+
+def _mana_value_bucket(*, card: ScoredCard) -> str:
+    mana_value = card.card.mana_value
+    if mana_value is None:
+        return "?"
+
+    if mana_value >= 6:
+        return "6+"
+
+    return _format_mana_value(card=card.card)
+
+
+def _ordered_mana_buckets(*, groups: dict[str, list[ScoredCard]]) -> tuple[str, ...]:
+    ordered = tuple(label for label in ("0", "1", "2", "3", "4", "5", "6+") if label in groups)
+    if "?" in groups:
+        return ordered + ("?",)
+
+    return ordered
+
+
+def _format_plain_color_counts(counts: tuple[tuple[str, int], ...]) -> str:
+    if not counts:
+        return "none"
+
+    return ", ".join(f"{color} {count}" for color, count in counts)
+
+
+def _format_plain_colors(colors: tuple[str, ...]) -> str:
+    return "".join(colors) if colors else "Colorless"
+
+
+def _format_tui_relaxations(relaxations: tuple[str, ...]) -> str:
+    return ", ".join(relaxations) if relaxations else "none"
+
+
+def _format_tui_win_rate(value: float | None) -> str:
+    if value is None:
+        return "unknown"
+
+    return f"{value:.1%}"
+
+
+def _clip(*, text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+
+    if width <= 1:
+        return "…"
+
+    return text[: width - 1] + "…"
 
 
 _ERROR_EXIT_CODE = 1
@@ -1112,6 +1523,10 @@ def _curve_bucket(*, mana_value: float) -> int:
 
 def _is_land_card(*, card: CardInfo) -> bool:
     return any("Land" in type_line for type_line in card.types)
+
+
+def _is_creature_card(*, card: CardInfo) -> bool:
+    return any("Creature" in type_line for type_line in card.types)
 
 
 def _scaled_bar(*, count: int, max_count: int, width: int = 5) -> str:

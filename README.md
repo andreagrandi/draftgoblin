@@ -8,6 +8,8 @@ Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists 
 
 See [docs/pick-scoring.md](docs/pick-scoring.md) for the initial 0–100 scoring model and integer tie-display decision. The Textual watch view uses `q` to quit, `c` to toggle secondary columns, and `s` to cycle score/ALSA/mana-value sorting. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, 17Lands structure targets, mana-base defaults, relaxation order, and `--allow-splash`.
 
+Card metadata comes from the cached Scryfall bulk data and is automatically overlaid with MTG Arena's local `data_cards`/`data_loc` files when available, so newly released Arena grpIds can resolve before Scryfall publishes `arena_id` mappings.
+
 ## Usage
 
 ```bash

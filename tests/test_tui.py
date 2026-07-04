@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from textual.containers import VerticalScroll
 from textual.widgets import DataTable, Static
 
 from draftgoblin.carddb import CardDatabase, build_card_database_from_bulk_file
@@ -49,6 +50,23 @@ async def _assert_fixture_stream_updates_pack_panel(tmp_path: Path) -> None:
         assert "Pool: 0" in status
         assert "Data: neutral prior" in status
         assert "Card data from 17Lands (17lands.com)" in status
+
+
+def test_tui_warns_when_card_metadata_is_incomplete(tmp_path: Path) -> None:
+    asyncio.run(_assert_tui_warns_when_card_metadata_is_incomplete(tmp_path=tmp_path))
+
+
+async def _assert_tui_warns_when_card_metadata_is_incomplete(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path, card_database=CardDatabase(cards={}))
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        await pilot.pause()
+
+        assert "Warning: 14 unresolved card metadata" in _status_text(app=app)
+        assert "Metadata warning: 14 unresolved card metadata" in _pool_summary_text(
+            app=app,
+        )
 
 
 def test_tui_keybindings_toggle_columns_and_cycle_sort(tmp_path: Path) -> None:
@@ -147,20 +165,37 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
 
         title = app.query_one("#pack-title", Static)
         table = app.query_one("#pack-table", DataTable)
-        build_view = app.query_one("#build-view", Static)
+        build_scroll = app.query_one("#build-scroll", VerticalScroll)
 
-        assert str(title.render()) == "Build view — pair WU (automatic)"
+        assert str(title.render()).startswith("Build view — pair WU (automatic)")
         assert table.display is False
-        assert build_view.display is True
+        assert build_scroll.display is True
         assert "Build sheet:" in app.build_view_text
-        assert "Bench:" in app.build_view_text
-        assert "Chosen pair: WU (automatic" in app.build_view_text
+        assert "Selected spells by mana value" in app.build_view_text
+        assert "Pair: WU (automatic" in app.build_view_text
+
+        await pilot.press("s")
+        await pilot.pause()
+
+        assert "Selected spells by score" in app.build_view_text
+        assert "Build sort: score" in _status_text(app=app)
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert "top 23 sum" in app.build_view_text
+        assert "Bench" in app.build_view_text
+
+        await pilot.press("pagedown")
+        await pilot.pause()
+
+        assert build_scroll.scroll_y > 0
 
         await pilot.press("p")
         await pilot.pause()
 
-        assert str(title.render()) == "Build view — pair WB (forced WB)"
-        assert "Chosen pair: WB (forced" in app.build_view_text
+        assert str(title.render()).startswith("Build view — pair WB (forced WB)")
+        assert "Pair: WB (forced" in app.build_view_text
         assert "Override: WB" in _status_text(app=app)
 
 
@@ -251,11 +286,14 @@ async def _assert_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
 def _tui_app(
     *,
     tmp_path: Path,
+    card_database: CardDatabase | None = None,
     ratings_loader: Callable[[str], SeventeenLandsData] | None = None,
 ) -> DraftgoblinTuiApp:
     return DraftgoblinTuiApp(
         log_path=tmp_path / "Player.log",
-        card_database=_fixture_card_database(),
+        card_database=(
+            card_database if card_database is not None else _fixture_card_database()
+        ),
         app_dir=tmp_path / "app",
         ratings_loader=ratings_loader,
         poll_enabled=False,

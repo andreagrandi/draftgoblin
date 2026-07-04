@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from draftgoblin.carddb import build_card_database_from_bulk_file, refresh_card_database
+from draftgoblin.carddb import CardDatabase, build_card_database_from_bulk_file, refresh_card_database
 from draftgoblin.cli import main
 from draftgoblin.replay import replay_log_file
 from draftgoblin.seventeen import (
@@ -72,6 +72,18 @@ def test_replay_with_ratings_data_shows_fallback_sources() -> None:
     assert "Fixture Split Card (grpId 104894)   WU         Open    62.0%" in output
     assert "Fixture Blue Card (grpId 105134)    U          Open    58.0%" in output
     assert "Premier" in output
+
+
+def test_replay_warns_when_card_metadata_is_incomplete(tmp_path: Path) -> None:
+    partial_log = tmp_path / "partial-player.log"
+    partial_log.write_text(
+        "\n".join(FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()[:7]),
+        encoding="utf-8",
+    )
+
+    output = replay_log_file(logfile=partial_log, card_database=CardDatabase(cards={}))
+
+    assert "Warning: 14 unresolved card metadata" in output
 
 
 def test_replay_uses_cached_card_database_without_refreshing(
