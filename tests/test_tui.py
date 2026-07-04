@@ -10,7 +10,7 @@ from pathlib import Path
 from textual.containers import VerticalScroll
 from textual.widgets import DataTable, Static
 
-from draftgoblin.carddb import CardDatabase, build_card_database_from_bulk_file
+from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
 from draftgoblin.pool import DraftState, save_draft_state
 from draftgoblin.seventeen import (
     QUICK_DRAFT_FORMAT,
@@ -273,6 +273,67 @@ async def _assert_build_keybinding_opens_build_view(tmp_path: Path) -> None:
         assert "Build action: no build needed — current pool already shown" in _status_text(
             app=app,
         )
+
+
+def test_tui_build_view_collapses_duplicate_selected_spells(tmp_path: Path) -> None:
+    asyncio.run(
+        _assert_build_view_collapses_duplicate_selected_spells(tmp_path=tmp_path)
+    )
+
+
+async def _assert_build_view_collapses_duplicate_selected_spells(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(
+        tmp_path=tmp_path,
+        card_database=CardDatabase(
+            cards={
+                1: CardInfo(
+                    grp_id=1,
+                    name="Copy",
+                    colors=("G",),
+                    mana_value=4.0,
+                    rarity="common",
+                    types=("Creature",),
+                ),
+                2: CardInfo(
+                    grp_id=2,
+                    name="One",
+                    colors=("W",),
+                    mana_value=2.0,
+                    rarity="common",
+                    types=("Creature",),
+                ),
+            }
+        ),
+    )
+    save_draft_state(
+        state=_draft_state(
+            account_id="FIXTURECLIENTID1234567890",
+            draft_id="duplicate-card-draft",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(1, 1, 1, 2),
+        ),
+        app_dir=tmp_path / "app",
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_account_lines())
+        await pilot.pause()
+
+        text = app.build_view_text
+        assert "Selected spells by mana value (4)" in text
+        assert "MV 4 (3)" in text
+        assert "Copy (G) x3" in text
+        assert text.count("Copy (G)") == 1
+        assert "One (W)" in text
+        assert "One (W) x" not in text
+        assert "DG" not in text
+        assert "50 Copy (G) x3" in text
+        assert "50 One (W)" in text
+        assert "Lands: 36" in text
+        assert "Basics: 9 Plains, 27 Forest" in text
+        assert "Land count:" not in text
 
 
 def test_tui_completion_switches_to_build_view_and_pair_override_keybinding(
