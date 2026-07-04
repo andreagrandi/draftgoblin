@@ -224,6 +224,31 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         assert "Override: WB" in _status_text(app=app)
 
 
+def test_tui_account_event_recovers_latest_persisted_state(tmp_path: Path) -> None:
+    asyncio.run(_assert_account_event_recovers_latest_persisted_state(tmp_path=tmp_path))
+
+
+async def _assert_account_event_recovers_latest_persisted_state(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    save_draft_state(
+        state=_draft_state(
+            account_id="FIXTURECLIENTID1234567890",
+            draft_id="recovered-draft",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(104894, 105097),
+        ),
+        app_dir=tmp_path / "app",
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_account_lines())
+        await pilot.pause()
+
+        assert "Account: FixturePlayer" in _status_text(app=app)
+        assert "Draft: recovered-draft" in app.build_view_text
+        assert "Pool size: 2 cards" in app.build_view_text
+
+
 def test_tui_account_key_cycles_recovered_drafts(tmp_path: Path) -> None:
     asyncio.run(_assert_account_key_cycles_recovered_drafts(tmp_path=tmp_path))
 
@@ -233,6 +258,7 @@ async def _assert_account_key_cycles_recovered_drafts(tmp_path: Path) -> None:
     save_draft_state(
         state=_draft_state(
             account_id="test-account",
+            account_screen_name="TestUser",
             draft_id="test-draft",
             event_name="QuickDraft_MSH_20260702",
             pool_grp_ids=(104894, 105097),
@@ -249,7 +275,7 @@ async def _assert_account_key_cycles_recovered_drafts(tmp_path: Path) -> None:
         await pilot.press("a")
         await pilot.pause()
 
-        assert "Account: test-account" in _status_text(app=app)
+        assert "Account: TestUser (test-account)" in _status_text(app=app)
         assert "Draft: test-draft" in app.build_view_text
         assert "Pool size: 2 cards" in app.build_view_text
 
@@ -335,6 +361,7 @@ def _draft_state(
     draft_id: str,
     event_name: str,
     pool_grp_ids: tuple[int, ...],
+    account_screen_name: str | None = None,
 ) -> DraftState:
     now = datetime(2026, 7, 4, 12, 0, tzinfo=UTC).isoformat()
     return DraftState(
@@ -349,7 +376,12 @@ def _draft_state(
         completed=True,
         picks=(),
         pool_grp_ids=pool_grp_ids,
+        account_screen_name=account_screen_name,
     )
+
+
+def _account_lines() -> list[str]:
+    return FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()[:2]
 
 
 def _first_pack_lines() -> list[str]:

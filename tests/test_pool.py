@@ -35,6 +35,7 @@ def test_fixture_replay_persists_complete_pool_under_account_directory(
     assert len(states) == 1
     state = states[0]
     assert state.account_id == FIXTURE_ACCOUNT_ID
+    assert state.account_screen_name == "FixturePlayer"
     assert state.draft_id == FIXTURE_DRAFT_ID
     assert state.event_name == FIXTURE_EVENT_NAME
     assert state.set_code == "MSH"
@@ -63,6 +64,7 @@ def test_fixture_replay_persists_complete_pool_under_account_directory(
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["account_id"] == FIXTURE_ACCOUNT_ID
+    assert payload["account_screen_name"] == "FixturePlayer"
     assert payload["draft_id"] == FIXTURE_DRAFT_ID
     assert len(payload["pool_grp_ids"]) == len(pick_events)
 
@@ -225,6 +227,8 @@ def test_two_account_stream_persists_separated_states_without_pool_leakage(
         draft_id="draft-b",
         app_dir=tmp_path,
     )
+    assert first_state.account_screen_name == "First"
+    assert second_state.account_screen_name == "Second"
     assert first_state.pool_grp_ids == (101, 102)
     assert second_state.pool_grp_ids == (201,)
     assert first_state.completed is True
