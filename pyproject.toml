@@ -8,6 +8,7 @@ license = "MIT"
 authors = [{ name = "Andrea Grandi" }]
 dependencies = [
     "textual>=8.2.8",
+    "textual-image>=0.13.2",
 ]
 
 [project.scripts]

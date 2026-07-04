@@ -9,3 +9,7 @@ Before making code or documentation changes in this repo:
 
 Do not start work from an old feature branch unless the user explicitly asks to continue that branch.
 
+## Verification Requirement
+
+Before claiming any implementation is done, perform end-to-end verification of the actual user-facing workflow, not just unit tests or isolated helpers. If true end-to-end verification is impossible in the current environment, say so explicitly, document what was verified instead, and do not present the work as complete.
+

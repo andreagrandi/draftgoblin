@@ -50,14 +50,17 @@ def test_scryfall_bulk_sample_builds_fixture_grp_id_lookup() -> None:
     assert split_card.types == ("Creature — Front // Creature — Back",)
 
 
-def test_scryfall_bulk_keeps_mana_cost_and_produced_mana(tmp_path: Path) -> None:
+def test_scryfall_bulk_keeps_mana_cost_produced_mana_and_image_uri(
+    tmp_path: Path,
+) -> None:
     bulk_path = tmp_path / "mana-fields.jsonl"
     bulk_path.write_text(
         "".join(
             (
                 '{"arena_id":1,"name":"Pip Spell","colors":["W"],'
                 '"cmc":2,"rarity":"common","type_line":"Creature",'
-                '"mana_cost":"{W}{W}"}\n',
+                '"mana_cost":"{W}{W}",'
+                '"image_uris":{"normal":"https://cards.example/pip.jpg"}}\n',
                 '{"arena_id":2,"name":"Dual Land","colors":[],'
                 '"cmc":0,"rarity":"common","type_line":"Land",'
                 '"produced_mana":["W","U"]}\n',
@@ -67,6 +70,13 @@ def test_scryfall_bulk_keeps_mana_cost_and_produced_mana(tmp_path: Path) -> None
                 '{"arena_id":4,"name":"Hybrid Fixer","colors":[],'
                 '"cmc":0,"rarity":"common","type_line":"Land",'
                 '"produced_mana":["C","G"]}\n',
+                '{"arena_id":5,"name":"Faced Preview","card_faces":[{"colors":["R"],'
+                '"type_line":"Creature","image_uris":'
+                '{"normal":"https://cards.example/face.jpg"}}],'
+                '"cmc":2,"rarity":"common","type_line":"Creature"}\n',
+                '{"name":"Bulk Only","colors":["B"],"cmc":1,"rarity":"common",'
+                '"type_line":"Creature","image_uris":'
+                '{"normal":"https://cards.example/bulk-only.jpg"}}\n',
             )
         ),
         encoding="utf-8",
@@ -74,10 +84,23 @@ def test_scryfall_bulk_keeps_mana_cost_and_produced_mana(tmp_path: Path) -> None
 
     database = build_card_database_from_bulk_file(path=bulk_path)
 
+    loaded = CardDatabase.from_json(data=database.to_json())
+
     assert database.lookup(grp_id=1).mana_cost == "{W}{W}"
+    assert database.lookup(grp_id=1).image_uri == "https://cards.example/pip.jpg"
+    assert database.image_uri_for_name(name="Pip Spell") == "https://cards.example/pip.jpg"
+    assert (
+        database.image_uri_for_name(name="Bulk Only")
+        == "https://cards.example/bulk-only.jpg"
+    )
+    assert (
+        loaded.image_uri_for_name(name="Faced Preview")
+        == "https://cards.example/face.jpg"
+    )
     assert database.lookup(grp_id=2).produced_mana == ("W", "U")
     assert database.lookup(grp_id=3).produced_mana == ()
     assert database.lookup(grp_id=4).produced_mana == ("G",)
+    assert database.lookup(grp_id=5).image_uri == "https://cards.example/face.jpg"
 
 
 def test_arena_local_data_builds_current_set_metadata(tmp_path: Path) -> None:
@@ -161,7 +184,8 @@ def test_cached_scryfall_data_is_augmented_with_arena_local_data(
     bulk_path = tmp_path / "stale-scryfall.jsonl"
     bulk_path.write_text(
         '{"arena_id":105097,"name":"Scryfall Spider","colors":["R"],'
-        '"cmc":2,"rarity":"common","type_line":"Creature — Fixture"}\n',
+        '"cmc":2,"rarity":"common","type_line":"Creature — Fixture",'
+        '"image_uris":{"normal":"https://cards.example/spider.jpg"}}\n',
         encoding="utf-8",
     )
     refresh_card_database(app_dir=app_dir, bulk_file=bulk_path)
@@ -173,6 +197,7 @@ def test_cached_scryfall_data_is_augmented_with_arena_local_data(
 
     assert database.lookup(grp_id=105097).name == "Arena Spider"
     assert database.lookup(grp_id=105097).colors == ("G",)
+    assert database.lookup(grp_id=105097).image_uri == "https://cards.example/spider.jpg"
     assert database.lookup(grp_id=105200).name == "Arena Dual"
     assert database.unresolved_grp_ids(grp_ids=(105097, 999999, 105200)) == (999999,)
 
@@ -207,6 +232,31 @@ def test_load_without_cache_raises_actionable_error(tmp_path: Path) -> None:
         load_card_database(app_dir=tmp_path)
 
     assert "Run refresh-data first" in str(error.value)
+
+
+def test_load_or_refresh_rebuilds_stale_image_index_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = card_database_cache_path(app_dir=tmp_path)
+    cache_path.write_text(
+        '{"schema_version":1,"source":"old","generated_at":"old","cards":{}}\n',
+        encoding="utf-8",
+    )
+    refreshed = CardDatabase(
+        cards={},
+        image_uris_by_name={"red room recruit": "https://cards.example/red.jpg"},
+    )
+
+    def fake_refresh_card_database(**kwargs: object) -> CardDatabase:
+        return refreshed
+
+    monkeypatch.setattr(
+        "draftgoblin.carddb.refresh_card_database",
+        fake_refresh_card_database,
+    )
+
+    assert load_or_refresh_card_database(app_dir=tmp_path) is refreshed
 
 
 def test_refresh_data_cli_builds_cache_from_vendored_bulk_sample(

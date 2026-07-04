@@ -8,7 +8,7 @@ Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists 
 
 See [docs/pick-scoring.md](docs/pick-scoring.md) for the 17Lands WR/grade display, the 0–100 Draftgoblin scoring model, and integer tie-display decision. The Textual watch view uses `q` to quit, `c` to toggle secondary columns, and `s` to cycle score/ALSA/mana-value sorting. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, 17Lands structure targets, mana-base defaults, relaxation order, and `--allow-splash`.
 
-Card metadata comes from the cached Scryfall bulk data and is automatically overlaid with MTG Arena's local `data_cards`/`data_loc` files when available, so newly released Arena grpIds can resolve before Scryfall publishes `arena_id` mappings.
+Card metadata comes from the cached Scryfall bulk data and is automatically overlaid with MTG Arena's local `data_cards`/`data_loc` files when available, so newly released Arena grpIds can resolve before Scryfall publishes `arena_id` mappings. In Kitty-compatible terminals such as Ghostty, the Textual watch sidebar can show Scryfall image previews for the focused card using image URLs indexed from the local Scryfall bulk cache; run `refresh-data` once after upgrading to populate that image index. Set `DRAFTGOBLIN_CARD_IMAGES=0` to keep the text-only fallback.
 
 ## Usage
 
