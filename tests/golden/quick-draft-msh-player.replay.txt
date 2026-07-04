@@ -658,43 +658,24 @@ Chosen card: Fixture Final Pick [R] (grpId 105182)
 
 Draft complete: 42 cards (explicit completion)
 
-Deck builder pair selection
+Suggested deck
+Set: MSH — Marvel Super Heroes
 Pool: replay 00000000-0000-4000-8000-000000000004
-Set: MSH
 Pool size: 42 cards
 Account: FIXTURECLIENTID1234567890
 Draft: 00000000-0000-4000-8000-000000000004
-Chosen pair: WU (automatic, score 50.00)
-Runner-up: WB (score 50.00)
-Score gap: 0.00
-Pair scores:
-- WU: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
-- WB: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 39
-- WR: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
-- WG: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
-- UB: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
-- UR: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 41
-- UG: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 41
-- BR: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
-- BG: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
-- RG: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 41
+Color pair: WU (automatic; 17Lands WR neutral 50.0%)
 
-Build sheet:
-Pair: WU (17Lands WR neutral 50.0%)
+Deck summary:
 Deck size: 40 cards (24 spells + 16 lands)
+Average mana value: 2.04
+Mana curve: 0: 0 | 1: 0 | 2: 23 | 3: 1 | 4: 0 | 5: 0 | 6+: 0
+Creatures: 23; Non-creatures: 1; Lands: 16
 Land count: 16 (aggressive curve: avg MV 2.04, 23 two-drops)
 Mana pips: W 0, U 1
 Sources: W 7, U 9 (floor 7)
 
-Spell selection:
-Eligible spells for WU: 40
-Selected spells: 24/24
-Creature count: 23 (target 14-23)
-Two-drops MV 2: 23 (minimum 5)
-Expensive spells MV >= 6: 0 (soft cap 3)
-Splash: disabled (--allow-splash not set; off-pair cards excluded)
-Relaxation order: expensive-spell cap -> minimum two-drop quota -> creature ceiling -> creature floor -> eligible-card shortage
-Applied relaxations: creature ceiling
+Selected spells:
 Creatures:
 - MV 2 | score 50 | Fixture Card 104983 (C)
 - MV 2 | score 50 | Fixture Card 104989 (C)
@@ -727,10 +708,37 @@ Nonbasic lands:
 Basics:
 - 7 Plains
 - 9 Island
+
+Structure checks:
+Eligible spells for WU: 40
+Selected spells: 24/24
+Creature count: 23 (target 14-23)
+Two-drops MV 2: 23 (minimum 5)
+Expensive spells MV >= 6: 0 (soft cap 3)
+Splash: disabled (--allow-splash not set; off-pair cards excluded)
+Relaxation order: expensive-spell cap -> minimum two-drop quota -> creature ceiling -> creature floor -> eligible-card shortage
+Applied relaxations: creature ceiling
 Bench:
 - MV 2 | score 50 | Fixture Card 105013 (C) (cut: creature ceiling)
 - MV 2 | score 50 | Fixture Card 104998 (C) (cut: creature ceiling)
 - MV 2 | score 50 | Fixture Card 105033 (C) (cut: creature ceiling)
 - MV 2 | score 50 | Fixture Card 105000 (C) (cut: creature ceiling)
 - MV 2 | score 50 | Fixture Card 105031 (C) (cut: creature ceiling)
+
+Color-pair reasoning:
+Diagnostic: compares playable-card quality with 17Lands color-pair context; it is not another decklist.
+Chosen pair: WU (automatic, strength 50.00)
+Runner-up: WB (strength 50.00)
+Strength gap: 0.00
+Pair strengths:
+- WU: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- WB: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 39
+- WR: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- WG: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- UB: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- UR: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 41
+- UG: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 41
+- BR: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- BG: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- RG: strength 50.00; top 23 playable quality sum 1150.00; 17Lands WR neutral 50.0%; playables 41
 Card data from 17Lands (17lands.com)

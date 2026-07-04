@@ -664,13 +664,18 @@ def test_format_build_result_reports_spell_selection_and_attribution(tmp_path: P
         config=config,
     )
 
+    assert output.startswith("Suggested deck\n")
+    assert "Set: TST" in output
+    assert "Average mana value:" in output
+    assert "Mana curve: 0:" in output
     assert "Chosen pair:" in output
     assert "Runner-up:" in output
-    assert "Score gap:" in output
-    assert "Pair scores:" in output
-    assert "Build sheet:" in output
+    assert "Strength gap:" in output
+    assert "Pair strengths:" in output
+    assert "Deck summary:" in output
     assert "Deck size: 40 cards" in output
-    assert "Spell selection:" in output
+    assert "Selected spells:" in output
+    assert "Structure checks:" in output
     assert "Selected spells: 4/23" in output
     assert "Lands:" in output
     assert "--allow-splash not set" in output

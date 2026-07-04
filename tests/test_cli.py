@@ -146,11 +146,14 @@ def test_build_pool_file_selects_pair_offline(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Deck builder pair selection" in captured.out
+    assert captured.out.startswith("Suggested deck\n")
+    assert "Color pair: WU (automatic" in captured.out
+    assert "Average mana value:" in captured.out
+    assert "Mana curve: 0:" in captured.out
     assert "Chosen pair: WU (automatic" in captured.out
     assert "Runner-up:" in captured.out
-    assert "Score gap:" in captured.out
-    assert "Spell selection:" in captured.out
+    assert "Strength gap:" in captured.out
+    assert "Structure checks:" in captured.out
     assert "Selected spells: 4/23" in captured.out
     assert "Card data from 17Lands" in captured.out
     assert captured.err == ""
