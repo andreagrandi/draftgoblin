@@ -1,32 +1,161 @@
-# draftgoblin
+<p align="center">
+  <img src="docs/assets/draftgoblin_logo.png" alt="Draftgoblin logo" width="220">
+</p>
 
-An unofficial Quick Draft assistant for MTG Arena.
+# Draftgoblin
+
+Draftgoblin is an unofficial terminal Quick Draft assistant for MTG Arena.
+
+It watches MTG Arena's local `Player.log`, identifies each Quick Draft pack and pick from logged numeric card IDs, and shows score-ranked recommendations using cached Scryfall metadata and 17Lands data. Draftgoblin is read-only: it does not write to, inject into, or automate the Arena client. It does not use OCR, screen capture, overlays, or accessibility permissions.
 
 ## Status
 
-Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with parser-backed `replay`, default Textual `watch`, and `watch --plain` commands, 17Lands win-rate and grade pick tables, a `refresh-data` command, a `build` subcommand with pair selection, constrained spells, mana base, and bench output, a `backtest` subcommand that compares saved post-draft recommendations to actual picks, and a `benchmark-picks` subcommand for offline 17Lands public-data calibration. Draft completion in replay and plain watch automatically prints the build sheet.
+Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with parser-backed `replay`, default Textual `watch`, and `watch --plain` commands, 17Lands win-rate and grade pick tables, a `refresh-data` command, a `refresh-structure-targets` command, a `build` subcommand with pair selection, constrained spells, mana base, and bench output, a `backtest` subcommand that compares saved post-draft recommendations to actual picks, and a `benchmark-picks` subcommand for offline 17Lands public-data calibration. Draft completion in replay and plain watch automatically prints the build sheet.
 
-See [docs/pick-scoring.md](docs/pick-scoring.md) for the 17Lands WR/grade display, the 0–100 Draftgoblin scoring model, and integer tie-display decision. See [docs/benchmarking.md](docs/benchmarking.md) for the offline 17Lands public-data workflow used to compare raw 17L WR against DG Score. The Textual watch view uses `q` to quit, `c` to toggle secondary columns, `s` to cycle ranking between DG Score (default), 17L WR, ALSA, and mana value, `b` to open the build view, `t` to open the post-draft backtest report, and `m` to toggle opt-in Mana font icons. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, 17Lands structure targets, mana-base defaults, relaxation order, and `--allow-splash`.
+See [docs/pick-scoring.md](docs/pick-scoring.md) for the 17Lands WR/grade display, the 0-100 Draftgoblin scoring model, and integer tie-display decision. See [docs/benchmarking.md](docs/benchmarking.md) for the offline 17Lands public-data workflow used to compare raw 17L WR against DG Score. The Textual watch view uses `q` to quit, `c` to toggle secondary columns, `s` to cycle ranking between DG Score (default), 17L WR, ALSA, and mana value, `b` to open the build view, `t` to open the post-draft backtest report, and `m` to toggle opt-in Mana font icons. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, 17Lands structure targets, mana-base defaults, relaxation order, and `--allow-splash`.
 
 Card metadata comes from the cached Scryfall bulk data and is automatically overlaid with MTG Arena's local `data_cards`/`data_loc` files when available, so newly released Arena grpIds can resolve before Scryfall publishes `arena_id` mappings. In Kitty-compatible terminals such as Ghostty, the Textual watch sidebar can show Scryfall image previews for the focused card using image URLs indexed from the local Scryfall bulk cache; run `refresh-data` once after upgrading to populate that image index. Set `DRAFTGOBLIN_CARD_IMAGES=0` to keep the text-only fallback.
 
-## Usage
+## Setup
+
+### 1. Install
+
+Draftgoblin requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). From a checkout:
+
+```bash
+git clone https://github.com/andreagrandi/draftgoblin.git
+cd draftgoblin
+uv sync
+uv run draftgoblin --help
+```
+
+To install the command from the checkout instead of prefixing examples with `uv run`:
+
+```bash
+uv tool install .
+draftgoblin --help
+```
+
+### 2. Enable MTG Arena detailed logs
+
+Draftgoblin can only see draft events after Arena writes plugin logs.
+
+1. Open MTG Arena.
+2. Go to **Settings** -> **Account**.
+3. Enable **Detailed Logs (Plugin Support)**.
+4. Restart MTG Arena so the setting takes effect.
+5. Start a Quick Draft, then run `draftgoblin watch` or `uv run draftgoblin watch`.
+
+The tool reads the current OS user's default `Player.log`. Use `--log-path` if Arena writes logs somewhere else.
+
+### 3. Refresh card metadata
+
+Run this once before live use, and again when you want to update cached card metadata:
+
+```bash
+uv run draftgoblin refresh-data
+```
+
+For repeatable local development or offline tests, pass a local Scryfall bulk file:
+
+```bash
+uv run draftgoblin refresh-data --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
+```
+
+## Platform support
+
+| OS | Default `Player.log` location | Support level |
+|---|---|---|
+| macOS | `~/Library/Logs/Wizards Of The Coast/MTGA/Player.log` | Primary — developed and tested here |
+| Windows | `%USERPROFILE%\AppData\LocalLow\Wizards Of The Coast\MTGA\Player.log` | Best-effort — path resolution implemented, untested until tried |
+| Linux (Wine/Proton) | inside the Wine prefix (varies) | Unsupported — works via `--log-path` override only |
+
+Both defaults derive from the running OS user's home directory, so separate OS user accounts naturally read separate Arena logs.
+
+## Command reference
+
+All examples use `uv run`. If you installed with `uv tool install .`, drop the `uv run` prefix.
+
+### `draftgoblin --version`
+
+Print the installed version and required Fan Content disclaimer.
 
 ```bash
 uv run draftgoblin --version
-uv run draftgoblin
-uv run draftgoblin --help
-uv run draftgoblin watch --help
-uv run draftgoblin refresh-data --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
-uv run draftgoblin refresh-structure-targets --set-code VOW --bulk-file path/to/scryfall-default-cards.jsonl --draft-data-file path/to/draft_data_public.VOW.QuickDraft.csv.gz
-uv run draftgoblin watch --log-path tests/fixtures/quick-draft-msh-player.log --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
-uv run draftgoblin watch --mana-icons --log-path tests/fixtures/quick-draft-msh-player.log --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
-uv run draftgoblin watch --plain --once --log-path tests/fixtures/quick-draft-msh-player.log --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
-uv run draftgoblin replay tests/fixtures/quick-draft-msh-player.log --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
-uv run draftgoblin backtest --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
-uv run draftgoblin benchmark-picks --set-code TMT --format PremierDraft --draft-data-file path/to/draft_data_public.TMT.PremierDraft.csv.gz
-uv run draftgoblin build --pool tests/fixtures/deckbuilder-constrained-pool.json --bulk-file tests/fixtures/deckbuilder-constrained-bulk.jsonl
 ```
+
+### `draftgoblin watch`
+
+Watch `Player.log` and show live draft recommendations. The default view is a Textual TUI; `--plain` streams replay-compatible text.
+
+```bash
+uv run draftgoblin watch
+uv run draftgoblin watch --mana-icons
+uv run draftgoblin watch --log-path ~/Library/Logs/Wizards\ Of\ The\ Coast/MTGA/Player.log
+uv run draftgoblin watch --plain --once --log-path tests/fixtures/quick-draft-msh-player.log --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
+```
+
+### `draftgoblin replay`
+
+Replay a captured `Player.log` fixture in deterministic plain-text mode.
+
+```bash
+uv run draftgoblin replay tests/fixtures/quick-draft-msh-player.log --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
+```
+
+### `draftgoblin build`
+
+Build a 40-card deck from a persisted draft pool or a JSON pool file. The builder selects a color pair, spells, lands, and the nearest bench cuts; `--pair` forces a two-color pair and `--allow-splash` enables the splash heuristic.
+
+```bash
+uv run draftgoblin build --pool tests/fixtures/deckbuilder-constrained-pool.json --bulk-file tests/fixtures/deckbuilder-constrained-bulk.jsonl
+uv run draftgoblin build --account example-account --draft-id example-draft --pair WU
+uv run draftgoblin build --pool pool.json --set-code TDM --allow-splash
+```
+
+### `draftgoblin backtest`
+
+Replay saved pick history from a persisted draft and compare current recommendations to the actual picks.
+
+```bash
+uv run draftgoblin backtest --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
+uv run draftgoblin backtest --account example-account --draft-id example-draft --ranking win_rate
+```
+
+### `draftgoblin benchmark-picks`
+
+Benchmark pick rankings against a local 17Lands public draft-data CSV or archive.
+
+```bash
+uv run draftgoblin benchmark-picks --set-code TMT --format PremierDraft --draft-data-file path/to/draft_data_public.TMT.PremierDraft.csv.gz
+uv run draftgoblin benchmark-picks --set-code TMT --draft-data-file path/to/draft_data_public.TMT.PremierDraft.csv.gz --max-drafts 100 --include-non-trophy
+```
+
+### `draftgoblin refresh-data`
+
+Refresh cached Scryfall card metadata and overlay local MTG Arena card data when available.
+
+```bash
+uv run draftgoblin refresh-data
+uv run draftgoblin refresh-data --bulk-file path/to/scryfall-default-cards.jsonl.gz
+```
+
+### `draftgoblin refresh-structure-targets`
+
+Compute cached per-pair deck-structure targets from a local 17Lands public draft-data dump.
+
+```bash
+uv run draftgoblin refresh-structure-targets --set-code VOW --draft-data-file path/to/draft_data_public.VOW.QuickDraft.csv.gz --bulk-file path/to/scryfall-default-cards.jsonl
+```
+
+## Known limitations
+
+- Live recommendations target Quick Draft. Premier Draft, Traditional Draft, Sealed, Cube, and other formats are out of scope for live mode.
+- Day-one or very new sets may have missing or thin 17Lands data. Draftgoblin falls back when possible, but recommendations may be weaker until enough public data exists.
+- GIH WR is biased by deck quality, player choices, and card context. DG Score normalizes and adds color-commitment logic, but it is still guidance, not a perfect pick order.
+- The deck builder prints a build sheet for manual use in Arena. It does not import decks or automate game input.
+- Windows support is best-effort until tested on real installations. Linux is unsupported except by pointing `--log-path` at a Wine or Proton log.
+- 17Lands endpoint shapes are not guaranteed stable; cached data keeps the tool useful offline, but fetch code may need updates after upstream changes.
 
 ## Optional Mana font icons
 
@@ -44,6 +173,9 @@ To enable icons, start the TUI with `--mana-icons` or press `m` inside the TUI. 
 
    Reload Ghostty or restart it after changing the config.
 
-## Disclaimer
+## Branding and compliance
+
+Draftgoblin uses Wizards of the Coast and 17Lands names only for descriptive attribution. The project is not affiliated with, sponsored by, approved by, or endorsed by Wizards of the Coast or 17Lands.
 
 Draftgoblin is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC. Card data from 17Lands (17lands.com); 17Lands does not endorse this tool.
+
