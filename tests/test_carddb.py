@@ -44,6 +44,29 @@ def test_scryfall_bulk_sample_builds_fixture_grp_id_lookup() -> None:
     assert split_card.types == ("Creature — Front // Creature — Back",)
 
 
+def test_scryfall_bulk_keeps_mana_cost_and_produced_mana(tmp_path: Path) -> None:
+    bulk_path = tmp_path / "mana-fields.jsonl"
+    bulk_path.write_text(
+        "".join(
+            (
+                '{"arena_id":1,"name":"Pip Spell","colors":["W"],'
+                '"cmc":2,"rarity":"common","type_line":"Creature",'
+                '"mana_cost":"{W}{W}"}\n',
+                '{"arena_id":2,"name":"Dual Land","colors":[],'
+                '"cmc":0,"rarity":"common","type_line":"Land",'
+                '"produced_mana":["W","U"]}\n',
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    database = build_card_database_from_bulk_file(path=bulk_path)
+
+    assert database.lookup(grp_id=1).mana_cost == "{W}{W}"
+    assert database.lookup(grp_id=2).produced_mana == ("W", "U")
+
+
+
 def test_unknown_grp_id_returns_explicit_marker() -> None:
     database = build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
 

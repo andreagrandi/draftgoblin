@@ -58,6 +58,8 @@ class CardInfo:
     mana_value: float | None
     rarity: str
     types: tuple[str, ...]
+    mana_cost: str | None = None
+    produced_mana: tuple[str, ...] = ()
     unknown: bool = False
 
     @classmethod
@@ -73,6 +75,8 @@ class CardInfo:
             mana_value=None,
             rarity="unknown",
             types=("Unknown",),
+            mana_cost=None,
+            produced_mana=(),
             unknown=True,
         )
 
@@ -92,6 +96,11 @@ class CardInfo:
             ),
             rarity=_required_str(data.get("rarity"), field_name="card.rarity"),
             types=_string_tuple(data.get("types"), field_name="card.types"),
+            mana_cost=_optional_str(data.get("mana_cost"), field_name="card.mana_cost"),
+            produced_mana=_string_tuple(
+                data.get("produced_mana", ()),
+                field_name="card.produced_mana",
+            ),
             unknown=bool(data.get("unknown", False)),
         )
 
@@ -107,6 +116,8 @@ class CardInfo:
             "mana_value": self.mana_value,
             "rarity": self.rarity,
             "types": list(self.types),
+            "mana_cost": self.mana_cost,
+            "produced_mana": list(self.produced_mana),
             "unknown": self.unknown,
         }
 
@@ -367,6 +378,8 @@ def _card_info_from_scryfall(*, card: Mapping[str, Any]) -> CardInfo | None:
         mana_value=mana_value,
         rarity=rarity,
         types=_card_types(card=card, grp_id=grp_id),
+        mana_cost=_card_mana_cost(card=card, grp_id=grp_id),
+        produced_mana=_card_produced_mana(card=card, grp_id=grp_id),
     )
 
 
@@ -412,6 +425,54 @@ def _card_types(*, card: Mapping[str, Any], grp_id: int) -> tuple[str, ...]:
         return tuple(face_types)
 
     raise CardDatabaseError(f"Scryfall card {grp_id} is missing type_line.")
+
+
+def _card_mana_cost(*, card: Mapping[str, Any], grp_id: int) -> str | None:
+    mana_cost_value = card.get("mana_cost")
+    if isinstance(mana_cost_value, str) and mana_cost_value:
+        return mana_cost_value
+
+    faces_value = card.get("card_faces")
+    face_costs: list[str] = []
+    if isinstance(faces_value, list):
+        for face in faces_value:
+            if not isinstance(face, dict):
+                continue
+
+            face_cost = face.get("mana_cost")
+            if isinstance(face_cost, str) and face_cost:
+                face_costs.append(face_cost)
+
+    if face_costs:
+        return " // ".join(face_costs)
+
+    return None
+
+
+def _card_produced_mana(*, card: Mapping[str, Any], grp_id: int) -> tuple[str, ...]:
+    produced_value = card.get("produced_mana")
+    if produced_value is not None:
+        return _color_tuple(produced_value, field_name=f"card {grp_id}.produced_mana")
+
+    faces_value = card.get("card_faces")
+    face_mana: list[str] = []
+    if isinstance(faces_value, list):
+        for face in faces_value:
+            if not isinstance(face, dict):
+                continue
+
+            face_value = face.get("produced_mana")
+            if face_value is None:
+                continue
+
+            face_mana.extend(
+                _color_tuple(
+                    face_value,
+                    field_name=f"card {grp_id}.card_faces[].produced_mana",
+                )
+            )
+
+    return _ordered_unique_colors(colors=face_mana)
 
 
 def _open_text_bulk_file(*, path: Path) -> io.TextIOBase:
@@ -549,6 +610,13 @@ def _required_str(value: Any, *, field_name: str) -> str:
         )
 
     return value
+
+
+def _optional_str(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+
+    return _required_str(value, field_name=field_name)
 
 
 def _required_int(value: Any, *, field_name: str) -> int:

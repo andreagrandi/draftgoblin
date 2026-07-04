@@ -21,11 +21,10 @@ from draftgoblin.carddb import (
 from draftgoblin.config import COLOR_PAIRS
 from draftgoblin.deckbuilder import (
     DeckBuilderError,
+    build_deck_from_pool,
     format_build_result,
     load_persisted_pool,
     load_pool_file,
-    select_color_pair,
-    select_deck_spells,
 )
 from draftgoblin.events import DraftLogParseError
 from draftgoblin.logfollow import LogFollowError
@@ -142,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser_command = subparsers.add_parser(
         name="build",
         help="Build a deck from a persisted or exported draft pool.",
-        description="Select a color pair and constrained spell list from a drafted pool.",
+        description="Select a color pair, spells, lands, and bench from a drafted pool.",
     )
     build_parser_command.add_argument(
         "--pool",
@@ -266,6 +265,7 @@ def handle_watch(args: argparse.Namespace) -> int:
         return 130
     except (
         CardDatabaseError,
+        DeckBuilderError,
         DraftLogParseError,
         DraftPoolError,
         LogFollowError,
@@ -300,6 +300,7 @@ def handle_replay(args: argparse.Namespace) -> int:
         )
     except (
         CardDatabaseError,
+        DeckBuilderError,
         DraftLogParseError,
         DraftPoolError,
         ReplayError,
@@ -324,7 +325,7 @@ def _load_replay_card_database(*, args: argparse.Namespace) -> CardDatabase:
 
 
 def handle_build(args: argparse.Namespace) -> int:
-    """Handle deck-builder pair selection and constrained spell fill.
+    """Handle deck-builder pair, spells, lands, and bench output.
     The command is fully offline, using persisted pools and local caches.
     """
 
@@ -343,17 +344,11 @@ def handle_build(args: argparse.Namespace) -> int:
             set_code=pool.set_code,
             app_dir=args.app_dir,
         )
-        selection = select_color_pair(
-            pool_grp_ids=pool.pool_grp_ids,
+        selection, build_sheet = build_deck_from_pool(
+            pool=pool,
             card_database=database,
             ratings_data=ratings_data,
             forced_pair=args.pair,
-        )
-        spell_selection = select_deck_spells(
-            pool_grp_ids=pool.pool_grp_ids,
-            card_database=database,
-            pair=selection.chosen.pair,
-            ratings_data=ratings_data,
             allow_splash=args.allow_splash,
         )
     except (CardDatabaseError, DeckBuilderError, DraftPoolError, SeventeenLandsError) as error:
@@ -364,7 +359,8 @@ def handle_build(args: argparse.Namespace) -> int:
         format_build_result(
             pool=pool,
             selection=selection,
-            spell_selection=spell_selection,
+            spell_selection=build_sheet.spell_selection,
+            mana_base=build_sheet.mana_base,
         ),
         end="",
     )

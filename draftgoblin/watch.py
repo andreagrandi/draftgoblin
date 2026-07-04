@@ -1,5 +1,5 @@
 """Live plain-text log watching.
-Follow Player.log, parse draft events, persist pools, and render incrementally.
+Completion events persist the pool and render the build sheet automatically.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from typing import TextIO, TypeAlias
 
 from draftgoblin.carddb import CardDatabase
 from draftgoblin.config import POLL_INTERVAL_SECONDS
+from draftgoblin.deckbuilder import BuildPool, build_deck_from_pool, format_build_result
 from draftgoblin.events import (
     AccountEvent,
     DraftCompletedEvent,
@@ -24,7 +25,7 @@ from draftgoblin.events import (
 )
 from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine
-from draftgoblin.pool import DraftPoolStore
+from draftgoblin.pool import DraftPoolStore, DraftState
 from draftgoblin.replay import (
     format_draft_completed_event,
     format_pack_offered_event,
@@ -63,6 +64,7 @@ class PlainLogWatcher:
         self.store = DraftPoolStore(app_dir=app_dir)
         self.ratings_loader = ratings_loader
         self._pick_engines_by_set: dict[str, PickEngine] = {}
+        self._ratings_data_by_set: dict[str, SeventeenLandsData | None] = {}
         self._account_labels: dict[str, str] = {}
         self._active_account_id: str | None = None
 
@@ -93,12 +95,17 @@ class PlainLogWatcher:
 
         output_lines: list[str] = []
         for event in events:
-            self.store.consume(event=event)
-            output_lines.extend(self._format_event(event=event))
+            state = self.store.consume(event=event)
+            output_lines.extend(self._format_event(event=event, state=state))
 
         return _join_output_lines(lines=output_lines)
 
-    def _format_event(self, *, event: DraftEvent) -> list[str]:
+    def _format_event(
+        self,
+        *,
+        event: DraftEvent,
+        state: DraftState | None,
+    ) -> list[str]:
         if isinstance(event, AccountEvent):
             return self._format_account_event(event=event)
 
@@ -144,6 +151,8 @@ class PlainLogWatcher:
             self._active_account_id = event.account_id or self._active_account_id
             lines = format_draft_completed_event(event=event)
             lines.append("")
+            if state is not None:
+                lines.extend(self._format_build_sheet(state=state))
             return lines
 
         return []
@@ -180,10 +189,38 @@ class PlainLogWatcher:
     def _known_account_label(self, client_id: str) -> str:
         return self._account_labels.get(client_id, client_id)
 
+    def _format_build_sheet(self, *, state: DraftState) -> list[str]:
+        pool = BuildPool(
+            set_code=state.set_code,
+            pool_grp_ids=state.pool_grp_ids,
+            source_label=f"watch {state.account_id}/{state.draft_id}",
+            account_id=state.account_id,
+            draft_id=state.draft_id,
+        )
+        selection, build_sheet = build_deck_from_pool(
+            pool=pool,
+            card_database=self.card_database,
+            ratings_data=self._ratings_data_for_set(set_code=state.set_code),
+        )
+        return format_build_result(
+            pool=pool,
+            selection=selection,
+            spell_selection=build_sheet.spell_selection,
+            mana_base=build_sheet.mana_base,
+        ).rstrip("\n").splitlines()
+
     def _pick_engine_for_set(self, *, set_code: str) -> PickEngine:
         engine = self._pick_engines_by_set.get(set_code)
         if engine is not None:
             return engine
+
+        engine = PickEngine(ratings_data=self._ratings_data_for_set(set_code=set_code))
+        self._pick_engines_by_set[set_code] = engine
+        return engine
+
+    def _ratings_data_for_set(self, *, set_code: str) -> SeventeenLandsData | None:
+        if set_code in self._ratings_data_by_set:
+            return self._ratings_data_by_set[set_code]
 
         ratings_data = None
         if self.ratings_loader is not None:
@@ -192,9 +229,8 @@ class PlainLogWatcher:
             except SeventeenLandsError:
                 ratings_data = None
 
-        engine = PickEngine(ratings_data=ratings_data)
-        self._pick_engines_by_set[set_code] = engine
-        return engine
+        self._ratings_data_by_set[set_code] = ratings_data
+        return ratings_data
 
 
 def run_plain_watch(

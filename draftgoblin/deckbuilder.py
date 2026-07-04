@@ -1,11 +1,12 @@
-"""Deck-builder pair selection, constrained spell fill, and text output.
-Stage 2 selects 23 spells under documented Limited structure defaults.
+"""Deck-builder pair selection, spells, mana base, and text output.
+Build sheets use documented Limited structure defaults for v1.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -26,6 +27,14 @@ SPELL_TYPE_MARKERS = (
     "Instant",
     "Sorcery",
 )
+BASIC_LANDS_BY_COLOR = {
+    "W": "Plains",
+    "U": "Island",
+    "B": "Swamp",
+    "R": "Mountain",
+    "G": "Forest",
+}
+MANA_SYMBOL_PATTERN = re.compile(r"\{([^}]+)\}")
 
 
 class DeckBuilderError(RuntimeError):
@@ -142,6 +151,66 @@ class SpellSelection:
     counts: SpellCounts
     applied_relaxations: tuple[str, ...]
     allow_splash_requested: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LandCard:
+    """One drafted nonbasic land selected for the mana base.
+    Source colors are separated from card colors because lands are colorless.
+    """
+
+    card: CardInfo
+    original_index: int
+    source_colors: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BasicLandCount:
+    """Count of one basic land name in the recommended mana base.
+    Colors stay explicit so source accounting is deterministic.
+    """
+
+    color: str
+    name: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ManaBase:
+    """Selected lands and source accounting for the final build sheet.
+    Basics are split by colored pips after drafted in-pair nonbasics.
+    """
+
+    pair: str
+    land_count: int
+    spell_count: int
+    deck_size: int
+    nonbasic_lands: tuple[LandCard, ...]
+    basic_lands: tuple[BasicLandCount, ...]
+    pip_counts: tuple[tuple[str, int], ...]
+    double_pip_counts: tuple[tuple[str, int], ...]
+    source_counts: tuple[tuple[str, int], ...]
+    average_mana_value: float
+    reason: str
+    caveats: tuple[str, ...]
+
+    @property
+    def total_cards(self) -> int:
+        """Return the spell-plus-land total for the proposed deck.
+        Build-sheet formatting uses this to prove the deck is exactly 40.
+        """
+
+        return self.spell_count + self.land_count
+
+
+@dataclass(frozen=True, slots=True)
+class BuildSheet:
+    """Final selected spells plus mana base.
+    The pair-selection context is formatted separately before this sheet.
+    """
+
+    spell_selection: SpellSelection
+    mana_base: ManaBase
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,15 +415,190 @@ def select_deck_spells(
 
 
 
+def select_build_sheet(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    pair: str,
+    ratings_data: SeventeenLandsData | None = None,
+    allow_splash: bool = False,
+    config: DeckBuilderConfig = DECK_BUILDER,
+) -> BuildSheet:
+    """Select spells and lands for an exactly sized Limited deck.
+    The spell count is reselected when 16- or 18-land curve rules apply.
+    """
+
+    _validate_deck_builder_config(config=config)
+    resolved_pair = _optional_pair(value=pair)
+    if resolved_pair is None:
+        raise DeckBuilderError("A color pair is required before selecting a build sheet.")
+
+    spell_selection = select_deck_spells(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        pair=resolved_pair,
+        ratings_data=ratings_data,
+        allow_splash=allow_splash,
+        config=config,
+    )
+    seen_targets = {spell_selection.counts.total}
+    for _ in range(config.land_count_iteration_limit):
+        land_count = _curve_land_count(selection=spell_selection, config=config)[0]
+        desired_spell_count = max(0, config.deck_size - land_count)
+        if desired_spell_count == spell_selection.counts.total:
+            break
+
+        if desired_spell_count in seen_targets:
+            break
+
+        seen_targets.add(desired_spell_count)
+        spell_selection = select_deck_spells(
+            pool_grp_ids=pool_grp_ids,
+            card_database=card_database,
+            pair=resolved_pair,
+            ratings_data=ratings_data,
+            allow_splash=allow_splash,
+            config=replace(config, target_spell_count=desired_spell_count),
+        )
+
+    mana_base = select_mana_base(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        pair=resolved_pair,
+        spell_selection=spell_selection,
+        config=config,
+    )
+    if mana_base.total_cards != config.deck_size:
+        mana_base = select_mana_base(
+            pool_grp_ids=pool_grp_ids,
+            card_database=card_database,
+            pair=resolved_pair,
+            spell_selection=spell_selection,
+            land_count=max(0, config.deck_size - spell_selection.counts.total),
+            reason="deck-size fill after spell-count relaxation",
+            config=config,
+        )
+
+    return BuildSheet(spell_selection=spell_selection, mana_base=mana_base)
+
+
+def build_deck_from_pool(
+    *,
+    pool: BuildPool,
+    card_database: CardDatabase,
+    ratings_data: SeventeenLandsData | None = None,
+    forced_pair: str | None = None,
+    allow_splash: bool = False,
+    config: DeckBuilderConfig = DECK_BUILDER,
+) -> tuple[PairSelection, BuildSheet]:
+    """Run pair selection, spell selection, and mana-base selection.
+    CLI, replay, and watch share this helper for identical build sheets.
+    """
+
+    selection = select_color_pair(
+        pool_grp_ids=pool.pool_grp_ids,
+        card_database=card_database,
+        ratings_data=ratings_data,
+        forced_pair=forced_pair,
+        config=config,
+    )
+    build_sheet = select_build_sheet(
+        pool_grp_ids=pool.pool_grp_ids,
+        card_database=card_database,
+        pair=selection.chosen.pair,
+        ratings_data=ratings_data,
+        allow_splash=allow_splash,
+        config=config,
+    )
+    return selection, build_sheet
+
+
+def select_mana_base(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    pair: str,
+    spell_selection: SpellSelection,
+    land_count: int | None = None,
+    reason: str | None = None,
+    config: DeckBuilderConfig = DECK_BUILDER,
+) -> ManaBase:
+    """Select drafted nonbasic lands and split basics by colored pips.
+    Per-main-color source floors are enforced when the land slots allow it.
+    """
+
+    _validate_deck_builder_config(config=config)
+    resolved_pair = _optional_pair(value=pair)
+    if resolved_pair is None:
+        raise DeckBuilderError("A color pair is required before selecting lands.")
+
+    curve_land_count, curve_reason = _curve_land_count(
+        selection=spell_selection,
+        config=config,
+    )
+    resolved_land_count = curve_land_count if land_count is None else land_count
+    if resolved_land_count < 0:
+        raise DeckBuilderError("Mana base land count must be non-negative.")
+
+    effective_reason = curve_reason if reason is None else reason
+    nonbasic_lands = _selected_nonbasic_lands(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        pair=resolved_pair,
+        land_count=resolved_land_count,
+    )
+    basic_slots = max(0, resolved_land_count - len(nonbasic_lands))
+    pip_counts, double_pip_counts = _spell_pip_counts(
+        cards=spell_selection.spells,
+        pair=resolved_pair,
+    )
+    source_counts = _source_counts(
+        pair=resolved_pair,
+        nonbasic_lands=nonbasic_lands,
+    )
+    basic_counts = _basic_land_counts(
+        pair=resolved_pair,
+        slots=basic_slots,
+        pip_counts=pip_counts,
+        double_pip_counts=double_pip_counts,
+        source_counts=source_counts,
+        config=config,
+    )
+    final_source_counts = _source_counts_with_basics(
+        pair=resolved_pair,
+        nonbasic_lands=nonbasic_lands,
+        basic_lands=basic_counts,
+    )
+    return ManaBase(
+        pair=resolved_pair,
+        land_count=resolved_land_count,
+        spell_count=spell_selection.counts.total,
+        deck_size=config.deck_size,
+        nonbasic_lands=nonbasic_lands,
+        basic_lands=basic_counts,
+        pip_counts=_ordered_color_items(values=pip_counts, pair=resolved_pair),
+        double_pip_counts=_ordered_color_items(values=double_pip_counts, pair=resolved_pair),
+        source_counts=_ordered_color_items(values=final_source_counts, pair=resolved_pair),
+        average_mana_value=_average_mana_value(cards=spell_selection.spells),
+        reason=effective_reason,
+        caveats=_mana_base_caveats(
+            land_count=resolved_land_count,
+            nonbasic_lands=nonbasic_lands,
+            config=config,
+        ),
+    )
+
+
 def format_build_result(
     *,
     pool: BuildPool,
     selection: PairSelection,
     spell_selection: SpellSelection | None = None,
+    mana_base: ManaBase | None = None,
     config: DeckBuilderConfig = DECK_BUILDER,
 ) -> str:
     """Format deterministic plain-text deck-builder output.
-    Pair selection remains first, followed by the constrained spell sheet.
+    Pair selection remains first, followed by the final build sheet.
     """
 
     lines = [
@@ -395,7 +639,16 @@ def format_build_result(
             )
         )
 
-    if spell_selection is not None:
+    if spell_selection is not None and mana_base is not None:
+        lines.extend(
+            _format_build_sheet(
+                pair_selection=selection,
+                spell_selection=spell_selection,
+                mana_base=mana_base,
+                config=config,
+            )
+        )
+    elif spell_selection is not None:
         lines.extend(_format_spell_selection(selection=spell_selection, config=config))
 
     lines.append(selection.attribution)
@@ -915,11 +1168,357 @@ def _applied_relaxations(
     return tuple(dict.fromkeys(relaxations))
 
 
+def _curve_land_count(
+    *,
+    selection: SpellSelection,
+    config: DeckBuilderConfig,
+) -> tuple[int, str]:
+    average_mana_value = _average_mana_value(cards=selection.spells)
+    if (
+        average_mana_value >= config.top_heavy_average_mana_value_min
+        or selection.counts.expensive > config.maximum_expensive_spells
+    ):
+        return (
+            config.top_heavy_land_count,
+            f"top-heavy curve: avg MV {average_mana_value:.2f}",
+        )
+
+    if (
+        average_mana_value <= config.aggressive_average_mana_value_max
+        and selection.counts.two_drops >= config.minimum_two_drops
+    ):
+        return (
+            config.aggressive_land_count,
+            "aggressive curve: "
+            f"avg MV {average_mana_value:.2f}, "
+            f"{selection.counts.two_drops} two-drops",
+        )
+
+    return (
+        config.default_land_count,
+        f"default curve: avg MV {average_mana_value:.2f}",
+    )
+
+
+def _selected_nonbasic_lands(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    pair: str,
+    land_count: int,
+) -> tuple[LandCard, ...]:
+    lands: list[LandCard] = []
+    for index, grp_id in enumerate(pool_grp_ids):
+        card = card_database.lookup(grp_id=grp_id)
+        if not _is_in_pair_nonbasic_land(card=card, pair=pair):
+            continue
+
+        lands.append(
+            LandCard(
+                card=card,
+                original_index=index,
+                source_colors=_land_source_colors(card=card),
+            )
+        )
+
+    return tuple(lands[:land_count])
+
+
+def _is_in_pair_nonbasic_land(*, card: CardInfo, pair: str) -> bool:
+    if not _is_land_card(card=card) or _is_basic_land_card(card=card):
+        return False
+
+    source_colors = _land_source_colors(card=card)
+    return bool(source_colors) and all(color in pair for color in source_colors)
+
+
+def _is_land_card(*, card: CardInfo) -> bool:
+    return any("Land" in type_line for type_line in card.types)
+
+
+def _is_basic_land_card(*, card: CardInfo) -> bool:
+    if card.name in set(BASIC_LANDS_BY_COLOR.values()):
+        return True
+
+    return any(
+        "Basic" in type_line and "Land" in type_line
+        for type_line in card.types
+    )
+
+
+def _land_source_colors(*, card: CardInfo) -> tuple[str, ...]:
+    source_colors = card.produced_mana or card.colors
+    source_set = set(source_colors)
+    return tuple(color for color in BASIC_LANDS_BY_COLOR if color in source_set)
+
+
+def _spell_pip_counts(
+    *,
+    cards: tuple[ScoredCard, ...],
+    pair: str,
+) -> tuple[dict[str, int], dict[str, int]]:
+    pip_counts = {color: 0 for color in pair}
+    double_pip_counts = {color: 0 for color in pair}
+    for scored_card in cards:
+        card_counts = _card_pip_counts(card=scored_card.card, pair=pair)
+        for color in pair:
+            pips = card_counts[color]
+            pip_counts[color] += pips
+            double_pip_counts[color] += max(0, pips - 1)
+
+    return pip_counts, double_pip_counts
+
+
+def _card_pip_counts(*, card: CardInfo, pair: str) -> dict[str, int]:
+    counts = {color: 0 for color in pair}
+    if card.mana_cost:
+        for symbol in MANA_SYMBOL_PATTERN.findall(card.mana_cost):
+            for color in pair:
+                if color in symbol:
+                    counts[color] += 1
+
+        return counts
+
+    for color in card.colors:
+        if color in counts:
+            counts[color] += 1
+
+    return counts
+
+
+def _source_counts(
+    *,
+    pair: str,
+    nonbasic_lands: tuple[LandCard, ...],
+) -> dict[str, int]:
+    counts = {color: 0 for color in pair}
+    for land in nonbasic_lands:
+        for color in land.source_colors:
+            if color in counts:
+                counts[color] += 1
+
+    return counts
+
+
+def _source_counts_with_basics(
+    *,
+    pair: str,
+    nonbasic_lands: tuple[LandCard, ...],
+    basic_lands: tuple[BasicLandCount, ...],
+) -> dict[str, int]:
+    counts = _source_counts(pair=pair, nonbasic_lands=nonbasic_lands)
+    for basic in basic_lands:
+        counts[basic.color] += basic.count
+
+    return counts
+
+
+def _basic_land_counts(
+    *,
+    pair: str,
+    slots: int,
+    pip_counts: dict[str, int],
+    double_pip_counts: dict[str, int],
+    source_counts: dict[str, int],
+    config: DeckBuilderConfig,
+) -> tuple[BasicLandCount, ...]:
+    if slots <= 0:
+        return ()
+
+    colors = tuple(pair)
+    desired_counts = _desired_basic_counts(
+        colors=colors,
+        slots=slots,
+        pip_counts=pip_counts,
+    )
+    double_heavy_color = max(
+        colors,
+        key=lambda color: (double_pip_counts[color], pip_counts[color], -colors.index(color)),
+    )
+    pip_heavy_color = max(
+        colors,
+        key=lambda color: (pip_counts[color], -colors.index(color)),
+    )
+    best_counts = min(
+        _two_color_basic_splits(colors=colors, slots=slots),
+        key=lambda counts: _basic_split_sort_key(
+            counts=counts,
+            colors=colors,
+            desired_counts=desired_counts,
+            source_counts=source_counts,
+            source_floor=config.main_color_source_floor,
+            double_heavy_color=double_heavy_color,
+            pip_heavy_color=pip_heavy_color,
+        ),
+    )
+    return tuple(
+        BasicLandCount(
+            color=color,
+            name=BASIC_LANDS_BY_COLOR[color],
+            count=best_counts[color],
+        )
+        for color in colors
+        if best_counts[color] > 0
+    )
+
+
+def _desired_basic_counts(
+    *,
+    colors: tuple[str, ...],
+    slots: int,
+    pip_counts: dict[str, int],
+) -> dict[str, float]:
+    total_pips = sum(pip_counts[color] for color in colors)
+    if total_pips <= 0:
+        return {color: slots / len(colors) for color in colors}
+
+    return {
+        color: slots * (pip_counts[color] / total_pips)
+        for color in colors
+    }
+
+
+def _two_color_basic_splits(
+    *,
+    colors: tuple[str, ...],
+    slots: int,
+) -> tuple[dict[str, int], ...]:
+    first, second = colors
+    return tuple(
+        {first: first_count, second: slots - first_count}
+        for first_count in range(slots + 1)
+    )
+
+
+def _basic_split_sort_key(
+    *,
+    counts: dict[str, int],
+    colors: tuple[str, ...],
+    desired_counts: dict[str, float],
+    source_counts: dict[str, int],
+    source_floor: int,
+    double_heavy_color: str,
+    pip_heavy_color: str,
+) -> tuple[float, float, int, int, int]:
+    shortage = sum(
+        max(0, source_floor - (source_counts[color] + counts[color]))
+        for color in colors
+    )
+    proportion_error = sum(
+        (counts[color] - desired_counts[color]) ** 2
+        for color in colors
+    )
+    return (
+        shortage,
+        proportion_error,
+        -counts[double_heavy_color],
+        -counts[pip_heavy_color],
+        counts[colors[0]],
+    )
+
+
+def _ordered_color_items(*, values: dict[str, int], pair: str) -> tuple[tuple[str, int], ...]:
+    return tuple((color, values[color]) for color in pair)
+
+
+def _average_mana_value(*, cards: tuple[ScoredCard, ...]) -> float:
+    if not cards:
+        return 0.0
+
+    return sum(card.card.mana_value or 0.0 for card in cards) / len(cards)
+
+
+def _mana_base_caveats(
+    *,
+    land_count: int,
+    nonbasic_lands: tuple[LandCard, ...],
+    config: DeckBuilderConfig,
+) -> tuple[str, ...]:
+    if land_count == config.aggressive_land_count and nonbasic_lands:
+        return (
+            "16-land caveat: prefer basics over slow taplands when curve pressure matters.",
+        )
+
+    return ()
+
+
+
+def _format_build_sheet(
+    *,
+    pair_selection: PairSelection,
+    spell_selection: SpellSelection,
+    mana_base: ManaBase,
+    config: DeckBuilderConfig,
+) -> list[str]:
+    lines = [
+        "",
+        "Build sheet:",
+        f"Pair: {spell_selection.pair} "
+        f"(17Lands WR {_format_win_rate(score=pair_selection.chosen)})",
+        "Deck size: "
+        f"{mana_base.total_cards} cards "
+        f"({spell_selection.counts.total} spells + {mana_base.land_count} lands)",
+        f"Land count: {mana_base.land_count} ({mana_base.reason})",
+        "Mana pips: " f"{_format_color_counts(mana_base.pip_counts)}",
+        "Sources: "
+        f"{_format_color_counts(mana_base.source_counts)} "
+        f"(floor {config.main_color_source_floor})",
+    ]
+    lines.extend(
+        _format_spell_selection(
+            selection=spell_selection,
+            config=config,
+            include_bench=False,
+        )
+    )
+    lines.extend(_format_land_section(mana_base=mana_base))
+    lines.extend(_format_bench_section(selection=spell_selection, config=config))
+    return lines
+
+
+def _format_land_section(*, mana_base: ManaBase) -> list[str]:
+    lines = ["Lands:", "Nonbasic lands:"]
+    if mana_base.nonbasic_lands:
+        lines.extend(_format_nonbasic_land(land=land) for land in mana_base.nonbasic_lands)
+    else:
+        lines.append("- none")
+
+    lines.append("Basics:")
+    if mana_base.basic_lands:
+        lines.extend(_format_basic_land(basic=basic) for basic in mana_base.basic_lands)
+    else:
+        lines.append("- none")
+
+    if mana_base.caveats:
+        lines.append("Mana notes:")
+        lines.extend(f"- {caveat}" for caveat in mana_base.caveats)
+
+    return lines
+
+
+def _format_nonbasic_land(*, land: LandCard) -> str:
+    return (
+        f"- 1 {land.card.name} "
+        f"({_format_colors(land.source_colors)} source; grpId {land.card.grp_id})"
+    )
+
+
+def _format_basic_land(*, basic: BasicLandCount) -> str:
+    return f"- {basic.count} {basic.name}"
+
+
+def _format_color_counts(counts: tuple[tuple[str, int], ...]) -> str:
+    if not counts:
+        return "none"
+
+    return ", ".join(f"{color} {count}" for color, count in counts)
+
 
 def _format_spell_selection(
     *,
     selection: SpellSelection,
     config: DeckBuilderConfig,
+    include_bench: bool = True,
 ) -> list[str]:
     counts = selection.counts
     constraints = selection.constraints
@@ -948,7 +1547,18 @@ def _format_spell_selection(
         _format_spell_card(card=card)
         for card in _sorted_spell_cards(cards=selection.spells, creatures=False)
     )
-    lines.append("Bench:")
+    if include_bench:
+        lines.extend(_format_bench_section(selection=selection, config=config))
+
+    return lines
+
+
+def _format_bench_section(
+    *,
+    selection: SpellSelection,
+    config: DeckBuilderConfig,
+) -> list[str]:
+    lines = ["Bench:"]
     if selection.bench:
         lines.extend(
             _format_bench_card(card=card, selection=selection, config=config)
@@ -1088,8 +1698,24 @@ def _blended_score(
 
 
 def _validate_deck_builder_config(*, config: DeckBuilderConfig) -> None:
+    if config.deck_size <= 0:
+        raise DeckBuilderError("Deck-builder deck size must be greater than zero.")
+
     if config.target_spell_count <= 0:
         raise DeckBuilderError("Deck-builder target spell count must be greater than zero.")
+
+    if min(
+        config.default_land_count,
+        config.aggressive_land_count,
+        config.top_heavy_land_count,
+    ) < 0:
+        raise DeckBuilderError("Deck-builder land counts must be non-negative.")
+
+    if config.land_count_iteration_limit <= 0:
+        raise DeckBuilderError("Deck-builder land-count iterations must be positive.")
+
+    if config.main_color_source_floor < 0:
+        raise DeckBuilderError("Deck-builder source floor must be non-negative.")
 
     if config.creature_floor < 0 or config.creature_ceiling < 0:
         raise DeckBuilderError("Deck-builder creature constraints must be non-negative.")
