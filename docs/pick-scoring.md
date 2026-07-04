@@ -1,6 +1,6 @@
 # Pick scoring
 
-Draftgoblin keeps the raw 17Lands GIH win rate visible for every card with a strong games-in-hand sample. The Textual watch table ranks by 17Lands WR by default. It also keeps a Draftgoblin `DG` score from 0 to 100 for optional ranking, color commitment, and deck-builder decisions.
+Draftgoblin keeps the raw 17Lands GIH win rate visible for every card with a strong games-in-hand sample. The Textual watch table ranks by DG Score by default after TMT PremierDraft, TMT TradDraft, and SOS PremierDraft trophy benchmarks showed better top-1/top-3/top-5 match rates and average actual-pick rank than raw 17L WR. It also keeps raw 17L WR visible and switchable for comparison.
 
 The base rating for `DG` is 17Lands GIH WR when the card has enough games-in-hand samples. If QuickDraft data is missing or thin, the resolver falls back to PremierDraft. If neither format has a strong GIH sample, the card uses a neutral prior, adjusted by ALSA when ALSA is available: earlier ALSA raises the prior, later ALSA lowers it.
 
@@ -23,6 +23,8 @@ The TUI pack table shows `17L WR` and `17L Grade` as primary columns. `17L WR` i
 
 Displayed `DG` scores are whole-number integers. We do not show one decimal for ties because the plain draft table should stay easy to scan; DG ties are resolved deterministically by raw score, base rating, and original pack order.
 
-The TUI is explicit about the active ranking in the title and status bar. Press `s` to cycle between 17Lands WR, DG score, ALSA, and mana value. Backtest reports also print the ranking used before listing recommended-vs-actual picks.
+The TUI is explicit about the active ranking in the title and status bar. Press `s` to cycle between DG Score, 17Lands WR, ALSA, and mana value. When the current recommendation is an early/open pick or the top two cards are very close in the active ranking, the status bar shows confidence copy such as `early/open pick — stay flexible` or `close pick` rather than overclaiming certainty. Backtest reports also print the ranking used before listing recommended-vs-actual picks.
+
+See [benchmarking.md](benchmarking.md) for the offline 17Lands public-data workflow and current calibration evidence. The known non-ML follow-up is reviewing building/locked DG Score misses where trophy drafters still took off-color cards, which may indicate set-specific color-ramp or off-color-penalty tuning.
 
 Rows marked `Prior*` did not have a strong GIH sample. The `Source` column shows whether a row used QuickDraft, Premier fallback, or the prior.

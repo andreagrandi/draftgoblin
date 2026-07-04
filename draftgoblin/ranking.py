@@ -10,8 +10,8 @@ from draftgoblin.pickengine import ScoredCard
 
 RankingMode: TypeAlias = Literal["win_rate", "score", "alsa", "mv"]
 
-DEFAULT_RANKING_MODE: RankingMode = "win_rate"
-RANKING_MODES: tuple[RankingMode, ...] = ("win_rate", "score", "alsa", "mv")
+DEFAULT_RANKING_MODE: RankingMode = "score"
+RANKING_MODES: tuple[RankingMode, ...] = ("score", "win_rate", "alsa", "mv")
 RANKING_LABELS: dict[RankingMode, str] = {
     "win_rate": "17L WR",
     "score": "DG Score",

@@ -42,6 +42,7 @@ def test_version_output_includes_required_disclaimer(
         ("replay", "Deterministic"),
         ("build", "Select"),
         ("backtest", "Dry-run"),
+        ("benchmark-picks", "Offline benchmark"),
         ("refresh-data", "Scryfall"),
         ("refresh-structure-targets", "17Lands"),
     ],

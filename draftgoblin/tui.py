@@ -91,6 +91,8 @@ CARD_IMAGE_PREVIEW_MAX_BYTES = 8 * 1024 * 1024
 CARD_IMAGE_PREVIEW_TIMEOUT_SECONDS = 10
 CARD_IMAGE_PREVIEW_ENV = "DRAFTGOBLIN_CARD_IMAGES"
 CARD_IMAGE_FILE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+CLOSE_DG_SCORE_THRESHOLD = 3.0
+CLOSE_WIN_RATE_THRESHOLD = 0.01
 MANA_ICON_GLYPHS = {
     "W": "\ue600",
     "U": "\ue601",
@@ -1540,6 +1542,12 @@ class DraftgoblinTuiApp(App[None]):
             sort_label = f"Backtest ranking: {SORT_LABELS[self.sort_mode]}"
         else:
             sort_label = f"Ranking: {SORT_LABELS[self.sort_mode]}"
+        confidence_label = self._recommendation_confidence_label()
+        confidence_text = (
+            f"Confidence: {confidence_label} | "
+            if confidence_label is not None
+            else ""
+        )
         icon_label = "on" if self.mana_icons_enabled else "off"
         text = (
             f"Account: {self._active_account_label} | "
@@ -1549,6 +1557,7 @@ class DraftgoblinTuiApp(App[None]):
             f"Pool: {self._pool_size} | "
             f"Data: {self._data_source} | "
             f"{sort_label} | "
+            f"{confidence_text}"
             f"Mana icons: {icon_label} | "
             f"{SEVENTEEN_LANDS_ATTRIBUTION}"
         )
@@ -1596,6 +1605,16 @@ class DraftgoblinTuiApp(App[None]):
         return rank_scored_cards(
             cards=self._current_pack.cards,
             ranking_mode=self.sort_mode,
+        )
+
+    def _recommendation_confidence_label(self) -> str | None:
+        if self._view_mode != "pack" or self._current_pack is None:
+            return None
+
+        return _recommendation_confidence_label(
+            cards=self._sorted_cards(),
+            ranking_mode=self.sort_mode,
+            phase=self._current_pack.commitment.phase,
         )
 
     def _current_build_pool(self) -> BuildPool | None:
@@ -2691,6 +2710,51 @@ def run_tui_watch(
         return _ERROR_EXIT_CODE
 
     return 0
+
+
+def _recommendation_confidence_label(
+    *,
+    cards: tuple[ScoredCard, ...],
+    ranking_mode: str,
+    phase: str,
+) -> str | None:
+    close_label = _close_pick_label(cards=cards, ranking_mode=ranking_mode)
+    if phase == "open":
+        if close_label is not None:
+            return f"early/open {close_label}; stay flexible"
+
+        return "early/open pick — stay flexible"
+
+    return close_label
+
+
+def _close_pick_label(
+    *,
+    cards: tuple[ScoredCard, ...],
+    ranking_mode: str,
+) -> str | None:
+    if len(cards) < 2:
+        return None
+
+    top_card, second_card = cards[:2]
+    if ranking_mode == "score":
+        score_delta = max(0.0, top_card.raw_score - second_card.raw_score)
+        if score_delta <= CLOSE_DG_SCORE_THRESHOLD:
+            return f"close pick — top two within {score_delta:.1f} DG points"
+
+        return None
+
+    if ranking_mode == "win_rate":
+        top_win_rate = top_card.rating.gih_win_rate
+        second_win_rate = second_card.rating.gih_win_rate
+        if top_win_rate is None or second_win_rate is None:
+            return None
+
+        win_rate_delta = max(0.0, top_win_rate - second_win_rate)
+        if win_rate_delta <= CLOSE_WIN_RATE_THRESHOLD:
+            return f"close pick — top two within {win_rate_delta * 100:.1f}pp WR"
+
+    return None
 
 
 def _row_cells(
