@@ -20,7 +20,13 @@ from draftgoblin.seventeen import (
     SeventeenLandsData,
     SeventeenLandsFormatData,
 )
-from draftgoblin.tui import DraftgoblinTuiApp
+from draftgoblin.tui import (
+    MANA_CARD_TYPE_GLYPHS,
+    MANA_ICON_GLYPHS,
+    DraftgoblinTuiApp,
+    _format_card_colors,
+    _format_card_types,
+)
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
 FIXTURE_ACCOUNT_ID = "FIXTURECLIENTID1234567890"
@@ -251,6 +257,52 @@ def test_tui_sidebar_updates_pool_distribution_and_curve(
     asyncio.run(_assert_sidebar_updates_pool_summary(tmp_path=tmp_path))
 
 
+def test_tui_mana_icon_mapping_preserves_plain_fallback() -> None:
+    multicolor = CardInfo(
+        grp_id=1,
+        name="Azorius Fixture",
+        colors=("W", "U"),
+        mana_value=2.0,
+        rarity="common",
+        types=("Creature — Wizard",),
+    )
+    colorless = CardInfo(
+        grp_id=2,
+        name="Colorless Fixture",
+        colors=(),
+        mana_value=3.0,
+        rarity="common",
+        types=("Artifact",),
+    )
+    unknown = CardInfo.unknown_card(grp_id=3)
+
+    assert _format_card_colors(card=multicolor) == "WU"
+    assert _format_card_colors(card=colorless) == "Colorless"
+    assert _format_card_colors(card=unknown) == "Unknown"
+    assert _format_card_colors(
+        card=multicolor,
+        mana_icons_enabled=True,
+    ) == f"{MANA_ICON_GLYPHS['W']}{MANA_ICON_GLYPHS['U']}"
+    assert _format_card_colors(
+        card=colorless,
+        mana_icons_enabled=True,
+    ) == f"{MANA_ICON_GLYPHS['C']} Colorless"
+    assert _format_card_colors(
+        card=colorless,
+        mana_icons_enabled=True,
+        long_colorless=False,
+    ) == f"{MANA_ICON_GLYPHS['C']} C"
+    assert _format_card_colors(card=unknown, mana_icons_enabled=True) == "Unknown"
+    assert _format_card_types(
+        card=multicolor,
+        mana_icons_enabled=True,
+    ) == f"{MANA_CARD_TYPE_GLYPHS['Creature']} Creature — Wizard"
+
+
+def test_tui_mana_icons_toggle_updates_tui_surfaces(tmp_path: Path) -> None:
+    asyncio.run(_assert_mana_icons_toggle_updates_surfaces(tmp_path=tmp_path))
+
+
 async def _assert_sidebar_updates_pool_summary(tmp_path: Path) -> None:
     app = _tui_app(tmp_path=tmp_path)
 
@@ -266,6 +318,53 @@ async def _assert_sidebar_updates_pool_summary(tmp_path: Path) -> None:
         assert "Set: MSH — Marvel Super Heroes" in summary
         assert "Curve:" in summary
         assert "4█1" in summary
+
+
+async def _assert_mana_icons_toggle_updates_surfaces(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        app.process_lines(lines=_first_pick_lines())
+        await pilot.pause()
+
+        table = app.query_one("#pack-table", DataTable)
+        rows = [table.get_row_at(index) for index in range(table.row_count)]
+        card_index = app.visible_column_keys.index("card")
+        colors_index = app.visible_column_keys.index("colors")
+        blue_row = next(
+            row for row in rows if "Fixture Blue Card" in str(row[card_index])
+        )
+
+        assert str(blue_row[colors_index]) == "U"
+        assert "Mana icons: off" in _status_text(app=app)
+
+        await pilot.press("m")
+        await pilot.pause()
+
+        rows = [table.get_row_at(index) for index in range(table.row_count)]
+        blue_row = next(
+            row for row in rows if "Fixture Blue Card" in str(row[card_index])
+        )
+        blue_icon = MANA_ICON_GLYPHS["U"]
+        green_icon = MANA_ICON_GLYPHS["G"]
+
+        assert str(blue_row[colors_index]) == blue_icon
+        assert f"{green_icon} █████ 1" in _pool_summary_text(app=app)
+        assert "Mana icons: on" in _status_text(app=app)
+
+        await pilot.press("b")
+        await pilot.pause()
+
+        assert green_icon in app.build_view_text
+        assert any(
+            MANA_ICON_GLYPHS[color] in _status_text(app=app)
+            for color in ("W", "U", "B", "R", "G")
+        )
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert f"01. Fixture Spider | Colors {green_icon} | MV 4" in app.build_view_text
 
 
 def test_tui_build_view_lists_full_picked_pool_with_card_details(
@@ -821,6 +920,7 @@ def _tui_app(
     card_database: CardDatabase | None = None,
     ratings_loader: Callable[[str], SeventeenLandsData] | None = None,
     image_preview_enabled: bool | None = None,
+    mana_icons_enabled: bool = False,
     card_image_fetcher: Callable[[str, Path], Path] | None = None,
 ) -> DraftgoblinTuiApp:
     return DraftgoblinTuiApp(
@@ -832,6 +932,7 @@ def _tui_app(
         ratings_loader=ratings_loader,
         poll_enabled=False,
         image_preview_enabled=image_preview_enabled,
+        mana_icons_enabled=mana_icons_enabled,
         card_image_fetcher=card_image_fetcher,
     )
 

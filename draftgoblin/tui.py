@@ -91,6 +91,23 @@ CARD_IMAGE_PREVIEW_MAX_BYTES = 8 * 1024 * 1024
 CARD_IMAGE_PREVIEW_TIMEOUT_SECONDS = 10
 CARD_IMAGE_PREVIEW_ENV = "DRAFTGOBLIN_CARD_IMAGES"
 CARD_IMAGE_FILE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+MANA_ICON_GLYPHS = {
+    "W": "\ue600",
+    "U": "\ue601",
+    "B": "\ue602",
+    "R": "\ue603",
+    "G": "\ue604",
+    "C": "\ue904",
+}
+MANA_CARD_TYPE_GLYPHS = {
+    "Artifact": "\ue61e",
+    "Creature": "\ue61f",
+    "Enchantment": "\ue620",
+    "Instant": "\ue621",
+    "Land": "\ue622",
+    "Planeswalker": "\ue623",
+    "Sorcery": "\ue624",
+}
 
 COLOR_STYLES = {
     "W": "bold bright_white",
@@ -225,6 +242,7 @@ class DraftgoblinTuiApp(App[None]):
         Binding("t", "open_backtest_report", "Backtest", show=True),
         Binding("a", "cycle_account", "Account", show=True),
         Binding("p", "rebuild_with_pair_override", "Pair", show=True),
+        Binding("m", "toggle_mana_icons", "Mana", show=True),
         Binding("up", "navigate_previous_card", "Previous", show=False, priority=True),
         Binding("left", "navigate_previous_card", "Previous", show=False, priority=True),
         Binding("k", "navigate_previous_card", "Previous", show=False, priority=True),
@@ -250,6 +268,7 @@ class DraftgoblinTuiApp(App[None]):
         once: bool = False,
         poll_enabled: bool = True,
         image_preview_enabled: bool | None = None,
+        mana_icons_enabled: bool = False,
         card_image_fetcher: CardImageFetcher | None = None,
     ) -> None:
         super().__init__()
@@ -275,6 +294,7 @@ class DraftgoblinTuiApp(App[None]):
             if image_preview_enabled is None
             else image_preview_enabled
         )
+        self.mana_icons_enabled = mana_icons_enabled
         self._card_image_paths_by_uri: dict[str, Path] = {}
         self._card_image_failures_by_uri: dict[str, str] = {}
         self._loading_card_image_uris: set[str] = set()
@@ -422,6 +442,17 @@ class DraftgoblinTuiApp(App[None]):
             self._rebuild_build_view()
         else:
             self.show_secondary_columns = not self.show_secondary_columns
+
+        self._render_all()
+
+    def action_toggle_mana_icons(self) -> None:
+        """Toggle opt-in Mana font icon rendering.
+        Terminals need Andrew Gioia's Mana font installed before enabling it.
+        """
+
+        self.mana_icons_enabled = not self.mana_icons_enabled
+        if self._view_mode == "build":
+            self._rebuild_build_view()
 
         self._render_all()
 
@@ -996,12 +1027,21 @@ class DraftgoblinTuiApp(App[None]):
                 title.update("Build view unavailable — metadata or playable count issue")
                 return
 
-            override = (
-                "automatic" if self._forced_pair is None else f"forced {self._forced_pair}"
+            build_pair_label = _format_pair_label(
+                pair=self._build_pair_label,
+                mana_icons_enabled=self.mana_icons_enabled,
             )
+            override = "automatic"
+            if self._forced_pair is not None:
+                forced_pair = _format_pair_label(
+                    pair=self._forced_pair,
+                    mana_icons_enabled=self.mana_icons_enabled,
+                )
+                override = f"forced {forced_pair}"
+
             detail = "details" if self._build_show_details else "compact"
             title.update(
-                f"Build view — pair {self._build_pair_label} ({override}); "
+                f"Build view — pair {build_pair_label} ({override}); "
                 f"spells {self._build_spell_sort_mode}; {detail}; "
                 "scroll ↑/↓ PgUp/PgDn"
             )
@@ -1064,6 +1104,7 @@ class DraftgoblinTuiApp(App[None]):
                 rank=rank,
                 scored_card=scored_card,
                 column_keys=column_keys,
+                mana_icons_enabled=self.mana_icons_enabled,
             )
             table.add_row(
                 *row,
@@ -1151,21 +1192,34 @@ class DraftgoblinTuiApp(App[None]):
             color_bar = _pool_color_distribution_bar(
                 pool_grp_ids=self._pool_grp_ids,
                 card_database=self.card_database,
+                mana_icons_enabled=self.mana_icons_enabled,
             )
             curve = _pool_curve_sparkline(
                 pool_grp_ids=self._pool_grp_ids,
                 card_database=self.card_database,
             )
             override_label = self._build_override_label()
+            inferred_pair = _format_pair_label(
+                pair=self._pair_label,
+                mana_icons_enabled=self.mana_icons_enabled,
+            )
+            build_pair = _format_pair_label(
+                pair=self._build_pair_label,
+                mana_icons_enabled=self.mana_icons_enabled,
+            )
+            override = _format_pair_label(
+                pair=override_label,
+                mana_icons_enabled=self.mana_icons_enabled,
+            )
             pool_summary.update(
                 "Pool summary\n"
                 f"Set: {format_set_label(set_code=self._set_code)}\n"
                 f"Event: {event_text}\n"
                 f"Draft: {draft_text}\n"
                 f"Pool size: {self._pool_size}\n"
-                f"Inferred pair: {self._pair_label}\n"
-                f"Build pair: {self._build_pair_label}\n"
-                f"Override: {override_label}\n"
+                f"Inferred pair: {inferred_pair}\n"
+                f"Build pair: {build_pair}\n"
+                f"Override: {override}\n"
                 f"Build action: {self._build_action_label()}\n"
                 f"{self._metadata_status_text()}\n"
                 f"{color_bar}\n"
@@ -1192,14 +1246,22 @@ class DraftgoblinTuiApp(App[None]):
         section, rank, total_count, scored_card, quantity = selected
         card = scored_card.card
         self._render_card_image_preview(card=card)
-        type_line = " ".join(card.types) if card.types else "Unknown"
+        type_line = _format_card_types(
+            card=card,
+            mana_icons_enabled=self.mana_icons_enabled,
+        )
         quantity_line = f"Quantity: {quantity}\n" if quantity > 1 else ""
+        color_label = _format_card_colors(
+            card=card,
+            mana_icons_enabled=self.mana_icons_enabled,
+            long_colorless=True,
+        )
         focused_card.update(
             "Focused card details\n"
             f"{section} {rank}/{total_count}\n"
             f"{_format_card_name(card=card)}\n"
             f"{quantity_line}"
-            f"Colors: {_format_plain_colors(card.colors)}\n"
+            f"Colors: {color_label}\n"
             f"Mana value: {_format_mana_value(card=card)}\n"
             f"Type: {type_line}\n"
             f"17L WR: {_format_win_rate(scored_card=scored_card)}\n"
@@ -1467,6 +1529,10 @@ class DraftgoblinTuiApp(App[None]):
         pair_label = self._pair_label
         if self._view_mode == "build" and self._build_pair_label != "—":
             pair_label = self._build_pair_label
+        pair_label = _format_pair_label(
+            pair=pair_label,
+            mana_icons_enabled=self.mana_icons_enabled,
+        )
 
         if self._view_mode == "build":
             sort_label = f"Build sort: {self._build_spell_sort_mode}"
@@ -1474,6 +1540,7 @@ class DraftgoblinTuiApp(App[None]):
             sort_label = f"Backtest ranking: {SORT_LABELS[self.sort_mode]}"
         else:
             sort_label = f"Ranking: {SORT_LABELS[self.sort_mode]}"
+        icon_label = "on" if self.mana_icons_enabled else "off"
         text = (
             f"Account: {self._active_account_label} | "
             f"View: {self._view_mode} | "
@@ -1482,10 +1549,15 @@ class DraftgoblinTuiApp(App[None]):
             f"Pool: {self._pool_size} | "
             f"Data: {self._data_source} | "
             f"{sort_label} | "
+            f"Mana icons: {icon_label} | "
             f"{SEVENTEEN_LANDS_ATTRIBUTION}"
         )
         if self._forced_pair is not None:
-            text = f"Override: {self._forced_pair} | {text}"
+            override = _format_pair_label(
+                pair=self._forced_pair,
+                mana_icons_enabled=self.mana_icons_enabled,
+            )
+            text = f"Override: {override} | {text}"
 
         unresolved_count = self._unresolved_metadata_count()
         if unresolved_count > 0:
@@ -1637,6 +1709,7 @@ class DraftgoblinTuiApp(App[None]):
                 card_database=self.card_database,
                 error=str(error),
                 width=self._build_text_width(),
+                mana_icons_enabled=self.mana_icons_enabled,
             )
             self._build_pair_label = "—"
             self._last_build_signature = None
@@ -1685,6 +1758,7 @@ class DraftgoblinTuiApp(App[None]):
             show_details=self._build_show_details,
             focused_card_index=self._build_focused_card_index,
             width=self._build_text_width(),
+            mana_icons_enabled=self.mana_icons_enabled,
         )
 
     def _clear_build_render_state(self) -> None:
@@ -1827,14 +1901,19 @@ def _format_tui_build_result(
     show_details: bool,
     focused_card_index: int,
     width: int,
+    mana_icons_enabled: bool = False,
 ) -> str:
     chosen_label = "forced" if selection.forced_pair is not None else "automatic"
+    color_pair = _format_pair_label(
+        pair=selection.chosen.pair,
+        mana_icons_enabled=mana_icons_enabled,
+    )
     counts = spell_selection.counts
     lines = [
         "[bold]Suggested deck[/bold]",
         "",
         f"Set: {format_set_label(set_code=pool.set_code)}",
-        f"Color pair: {selection.chosen.pair} ({chosen_label})",
+        f"Color pair: {color_pair} ({chosen_label})",
         (
             f"Deck: {mana_base.deck_size} cards — "
             f"{mana_base.spell_count} spells, {mana_base.land_count} lands"
@@ -1850,7 +1929,8 @@ def _format_tui_build_result(
         ),
         (
             "Keys: b checks build status; ↑/↓/←/→ or j/k browse cards; "
-            "PgUp/PgDn page; s changes spell sort; c shows details/pool; p changes pair"
+            "PgUp/PgDn page; s changes spell sort; c shows details/pool; "
+            "p changes pair; m toggles Mana icons"
         ),
         "",
     ]
@@ -1860,10 +1940,16 @@ def _format_tui_build_result(
             spell_sort_mode=spell_sort_mode,
             focused_card_index=focused_card_index,
             width=width,
+            mana_icons_enabled=mana_icons_enabled,
         )
     )
     lines.append("")
-    lines.extend(_format_tui_lands(mana_base=mana_base))
+    lines.extend(
+        _format_tui_lands(
+            mana_base=mana_base,
+            mana_icons_enabled=mana_icons_enabled,
+        )
+    )
     if show_details:
         lines.append("")
         lines.extend(
@@ -1872,22 +1958,40 @@ def _format_tui_build_result(
                 selection=selection,
                 spell_selection=spell_selection,
                 mana_base=mana_base,
+                mana_icons_enabled=mana_icons_enabled,
             )
         )
         lines.append("")
-        lines.extend(_format_tui_spell_counts(spell_selection=spell_selection))
+        lines.extend(
+            _format_tui_spell_counts(
+                spell_selection=spell_selection,
+                mana_icons_enabled=mana_icons_enabled,
+            )
+        )
         lines.append("")
         lines.extend(
             _format_tui_picked_pool(
                 pool=pool,
                 card_database=card_database,
                 width=width,
+                mana_icons_enabled=mana_icons_enabled,
             )
         )
         lines.append("")
-        lines.extend(_format_tui_pair_scores(selection=selection))
+        lines.extend(
+            _format_tui_pair_scores(
+                selection=selection,
+                mana_icons_enabled=mana_icons_enabled,
+            )
+        )
         lines.append("")
-        lines.extend(_format_tui_bench(selection=spell_selection, width=width))
+        lines.extend(
+            _format_tui_bench(
+                selection=spell_selection,
+                width=width,
+                mana_icons_enabled=mana_icons_enabled,
+            )
+        )
     else:
         lines.append("")
         lines.append(
@@ -1904,6 +2008,7 @@ def _format_tui_build_context(
     selection: PairSelection,
     spell_selection: SpellSelection,
     mana_base: ManaBase,
+    mana_icons_enabled: bool = False,
 ) -> list[str]:
     lines = [
         "Build context",
@@ -1917,9 +2022,17 @@ def _format_tui_build_context(
     if pool.draft_id is not None:
         lines.append(f"Draft: {pool.draft_id}")
 
+    mana_pips = _format_plain_color_counts(
+        mana_base.pip_counts,
+        mana_icons_enabled=mana_icons_enabled,
+    )
+    mana_sources = _format_plain_color_counts(
+        mana_base.source_counts,
+        mana_icons_enabled=mana_icons_enabled,
+    )
     lines.extend([
-        f"Mana pips: {_format_plain_color_counts(mana_base.pip_counts)}",
-        f"Mana sources: {_format_plain_color_counts(mana_base.source_counts)}",
+        f"Mana pips: {mana_pips}",
+        f"Mana sources: {mana_sources}",
     ])
     return lines
 
@@ -1930,6 +2043,7 @@ def _format_tui_build_error(
     card_database: CardDatabase,
     error: str,
     width: int,
+    mana_icons_enabled: bool = False,
 ) -> str:
     lines = [
         f"Build view unavailable: {error}",
@@ -1940,6 +2054,7 @@ def _format_tui_build_error(
             pool=pool,
             card_database=card_database,
             width=width,
+            mana_icons_enabled=mana_icons_enabled,
         )
     )
     return "\n".join(lines) + "\n"
@@ -1950,6 +2065,7 @@ def _format_tui_picked_pool(
     pool: BuildPool,
     card_database: CardDatabase,
     width: int,
+    mana_icons_enabled: bool = False,
 ) -> list[str]:
     lines = [f"Picked pool ({len(pool.pool_grp_ids)})"]
     if not pool.pool_grp_ids:
@@ -1958,15 +2074,31 @@ def _format_tui_picked_pool(
     for index, grp_id in enumerate(pool.pool_grp_ids, start=1):
         card = card_database.lookup(grp_id=grp_id)
         lines.append(
-            _clip(text=_format_tui_picked_card(index=index, card=card), width=width)
+            _clip(
+                text=_format_tui_picked_card(
+                    index=index,
+                    card=card,
+                    mana_icons_enabled=mana_icons_enabled,
+                ),
+                width=width,
+            )
         )
 
     return lines
 
 
-def _format_tui_picked_card(*, index: int, card: CardInfo) -> str:
+def _format_tui_picked_card(
+    *,
+    index: int,
+    card: CardInfo,
+    mana_icons_enabled: bool = False,
+) -> str:
     marker = "[unresolved] " if card.unknown else ""
-    color_label = "Unknown" if card.unknown else _format_plain_colors(card.colors)
+    color_label = _format_card_colors(
+        card=card,
+        mana_icons_enabled=mana_icons_enabled,
+        long_colorless=True,
+    )
     mana_value = _format_mana_value(card=card)
     card_name = _format_card_name(card=card)
     return f"{index:02d}. {marker}{card_name} | Colors {color_label} | MV {mana_value}"
@@ -1999,6 +2131,7 @@ def _format_tui_selected_spells(
     spell_sort_mode: str,
     focused_card_index: int,
     width: int,
+    mana_icons_enabled: bool = False,
 ) -> list[str]:
     groups = _tui_selected_spell_groups(
         spell_selection=spell_selection,
@@ -2011,6 +2144,7 @@ def _format_tui_selected_spells(
             total_count=len(spell_selection.spells),
             focused_card_index=focused_card_index,
             width=width,
+            mana_icons_enabled=mana_icons_enabled,
         )
 
     if spell_sort_mode == "name":
@@ -2020,6 +2154,7 @@ def _format_tui_selected_spells(
             total_count=len(spell_selection.spells),
             focused_card_index=focused_card_index,
             width=width,
+            mana_icons_enabled=mana_icons_enabled,
         )
 
     return _format_tui_spell_curve(
@@ -2027,6 +2162,7 @@ def _format_tui_selected_spells(
         total_count=len(spell_selection.spells),
         focused_card_index=focused_card_index,
         width=width,
+        mana_icons_enabled=mana_icons_enabled,
     )
 
 
@@ -2066,6 +2202,7 @@ def _format_tui_spell_curve(
     total_count: int,
     focused_card_index: int,
     width: int,
+    mana_icons_enabled: bool = False,
 ) -> list[str]:
     groups_by_bucket: dict[str, list[tuple[int, TuiCardQuantityGroup]]] = {}
     for index, group in enumerate(groups):
@@ -2087,6 +2224,7 @@ def _format_tui_spell_curve(
                 quantity=quantity,
                 focused=index == focused_card_index,
                 show_focus_marker=True,
+                mana_icons_enabled=mana_icons_enabled,
             )
             for index, (card, quantity) in indexed_groups
         )
@@ -2105,6 +2243,7 @@ def _format_tui_spell_columns(
     total_count: int,
     focused_card_index: int,
     width: int,
+    mana_icons_enabled: bool = False,
 ) -> list[str]:
     blocks = [
         [
@@ -2113,6 +2252,7 @@ def _format_tui_spell_columns(
                 quantity=quantity,
                 focused=index == focused_card_index,
                 show_focus_marker=True,
+                mana_icons_enabled=mana_icons_enabled,
             )
         ]
         for index, (card, quantity) in enumerate(groups)
@@ -2153,7 +2293,11 @@ def _columnize_blocks(*, blocks: list[list[str]], width: int) -> list[str]:
     return lines
 
 
-def _format_tui_lands(*, mana_base: ManaBase) -> list[str]:
+def _format_tui_lands(
+    *,
+    mana_base: ManaBase,
+    mana_icons_enabled: bool = False,
+) -> list[str]:
     lines = [f"Lands: {mana_base.land_count} ({mana_base.reason})"]
     basics = ", ".join(
         f"{basic.count} {basic.name}" for basic in mana_base.basic_lands
@@ -2164,23 +2308,36 @@ def _format_tui_lands(*, mana_base: ManaBase) -> list[str]:
         lines.append("Basics: none")
 
     if mana_base.nonbasic_lands:
-        nonbasics = "; ".join(
-            f"{land.card.name} ({_format_plain_colors(land.source_colors)} source)"
-            for land in mana_base.nonbasic_lands
-        )
-        lines.append(f"Nonbasics: {nonbasics}")
+        nonbasic_parts = []
+        for land in mana_base.nonbasic_lands:
+            source_label = _format_color_label(
+                colors=land.source_colors,
+                mana_icons_enabled=mana_icons_enabled,
+                long_colorless=False,
+            )
+            nonbasic_parts.append(f"{land.card.name} ({source_label} source)")
+
+        lines.append(f"Nonbasics: {'; '.join(nonbasic_parts)}")
     else:
         lines.append("Nonbasics: none")
 
     return lines
 
 
-def _format_tui_spell_counts(*, spell_selection: SpellSelection) -> list[str]:
+def _format_tui_spell_counts(
+    *,
+    spell_selection: SpellSelection,
+    mana_icons_enabled: bool = False,
+) -> list[str]:
     counts = spell_selection.counts
     constraints = spell_selection.constraints
+    pair = _format_pair_label(
+        pair=spell_selection.pair,
+        mana_icons_enabled=mana_icons_enabled,
+    )
     return [
         "Structure checks",
-        f"Eligible spells for {spell_selection.pair}: {spell_selection.eligible_count}",
+        f"Eligible spells for {pair}: {spell_selection.eligible_count}",
         f"Selected spells: {counts.total}/{spell_selection.requested_spell_count}",
         (
             f"Creatures: {counts.creatures} "
@@ -2192,7 +2349,11 @@ def _format_tui_spell_counts(*, spell_selection: SpellSelection) -> list[str]:
     ]
 
 
-def _format_tui_pair_scores(*, selection: PairSelection) -> list[str]:
+def _format_tui_pair_scores(
+    *,
+    selection: PairSelection,
+    mana_icons_enabled: bool = False,
+) -> list[str]:
     lines = [
         "Color-pair reasoning",
         (
@@ -2201,8 +2362,12 @@ def _format_tui_pair_scores(*, selection: PairSelection) -> list[str]:
         ),
     ]
     for score in selection.ranked_scores:
+        pair = _format_pair_label(
+            pair=score.pair,
+            mana_icons_enabled=mana_icons_enabled,
+        )
         lines.append(
-            f"- {score.pair}: {score.playable_count} playable cards; "
+            f"- {pair}: {score.playable_count} playable cards; "
             f"pair strength {score.blended_score:.2f}; "
             f"17Lands WR {_format_tui_win_rate(score.pair_win_rate)}; "
             f"top {selection.target_spell_count} sum {score.playable_score_sum:.2f}"
@@ -2211,7 +2376,12 @@ def _format_tui_pair_scores(*, selection: PairSelection) -> list[str]:
     return lines
 
 
-def _format_tui_bench(*, selection: SpellSelection, width: int) -> list[str]:
+def _format_tui_bench(
+    *,
+    selection: SpellSelection,
+    width: int,
+    mana_icons_enabled: bool = False,
+) -> list[str]:
     lines = ["Bench"]
     if not selection.bench:
         return lines + ["- none"]
@@ -2219,7 +2389,11 @@ def _format_tui_bench(*, selection: SpellSelection, width: int) -> list[str]:
     for card, quantity in _group_tui_spell_cards(cards=selection.bench):
         lines.append(
             _clip(
-                text=_format_tui_spell_card(card=card, quantity=quantity),
+                text=_format_tui_spell_card(
+                    card=card,
+                    quantity=quantity,
+                    mana_icons_enabled=mana_icons_enabled,
+                ),
                 width=width,
             )
         )
@@ -2233,18 +2407,24 @@ def _format_tui_spell_card(
     quantity: int = 1,
     focused: bool = False,
     show_focus_marker: bool = False,
+    mana_icons_enabled: bool = False,
 ) -> str:
     quantity_suffix = _format_tui_quantity_suffix(quantity=quantity)
     focus_marker = ""
     if show_focus_marker:
         focus_marker = "▶ " if focused else "  "
 
+    color_label = _format_card_colors(
+        card=card.card,
+        mana_icons_enabled=mana_icons_enabled,
+        long_colorless=False,
+    )
     return (
         f"{focus_marker}"
         f"{_format_win_rate(scored_card=card):>6} "
         f"{_format_letter_grade(scored_card=card):>2} "
         f"{card.score:>2} "
-        f"{card.card.name} ({_format_plain_colors(card.card.colors)})"
+        f"{card.card.name} ({color_label})"
         f"{quantity_suffix}"
     )
 
@@ -2305,15 +2485,129 @@ def _ordered_mana_buckets(*, groups: dict[str, list[ScoredCard]]) -> tuple[str, 
     return ordered
 
 
-def _format_plain_color_counts(counts: tuple[tuple[str, int], ...]) -> str:
+def _format_plain_color_counts(
+    counts: tuple[tuple[str, int], ...],
+    *,
+    mana_icons_enabled: bool = False,
+) -> str:
     if not counts:
         return "none"
 
-    return ", ".join(f"{color} {count}" for color, count in counts)
+    parts = []
+    for color, count in counts:
+        label = _format_color_count_label(
+            color=color,
+            mana_icons_enabled=mana_icons_enabled,
+        )
+        parts.append(f"{label} {count}")
+
+    return ", ".join(parts)
 
 
 def _format_plain_colors(colors: tuple[str, ...]) -> str:
-    return "".join(colors) if colors else "Colorless"
+    return _format_color_label(colors=colors, mana_icons_enabled=False)
+
+
+def _format_card_colors(
+    *,
+    card: CardInfo,
+    mana_icons_enabled: bool = False,
+    long_colorless: bool = True,
+) -> str:
+    if card.unknown:
+        return "Unknown"
+
+    return _format_color_label(
+        colors=card.colors,
+        mana_icons_enabled=mana_icons_enabled,
+        long_colorless=long_colorless,
+    )
+
+
+def _format_color_label(
+    *,
+    colors: tuple[str, ...],
+    mana_icons_enabled: bool = False,
+    long_colorless: bool = True,
+) -> str:
+    if not colors:
+        return _format_colorless_label(
+            mana_icons_enabled=mana_icons_enabled,
+            long_colorless=long_colorless,
+        )
+
+    if not mana_icons_enabled:
+        return "".join(colors)
+
+    return "".join(
+        _format_mana_symbol(symbol=color, mana_icons_enabled=mana_icons_enabled)
+        for color in colors
+    )
+
+
+def _format_pair_label(*, pair: str, mana_icons_enabled: bool = False) -> str:
+    if not mana_icons_enabled:
+        return pair
+
+    if not pair or any(symbol not in MANA_ICON_GLYPHS for symbol in pair):
+        return pair
+
+    return "".join(
+        _format_mana_symbol(symbol=symbol, mana_icons_enabled=mana_icons_enabled)
+        for symbol in pair
+    )
+
+
+def _format_color_count_label(*, color: str, mana_icons_enabled: bool = False) -> str:
+    if color == UNKNOWN_COLOR_KEY:
+        return UNKNOWN_COLOR_KEY
+
+    if color == COLORLESS_KEY:
+        return _format_colorless_label(
+            mana_icons_enabled=mana_icons_enabled,
+            long_colorless=False,
+        )
+
+    return _format_pair_label(pair=color, mana_icons_enabled=mana_icons_enabled)
+
+
+def _format_colorless_label(
+    *,
+    mana_icons_enabled: bool,
+    long_colorless: bool,
+) -> str:
+    if not mana_icons_enabled:
+        return "Colorless"
+
+    fallback = "Colorless" if long_colorless else COLORLESS_KEY
+    return f"{MANA_ICON_GLYPHS[COLORLESS_KEY]} {fallback}"
+
+
+def _format_mana_symbol(*, symbol: str, mana_icons_enabled: bool) -> str:
+    if not mana_icons_enabled:
+        return symbol
+
+    return MANA_ICON_GLYPHS.get(symbol, symbol)
+
+
+def _format_card_types(
+    *,
+    card: CardInfo,
+    mana_icons_enabled: bool = False,
+) -> str:
+    type_line = " ".join(card.types) if card.types else "Unknown"
+    if card.unknown or not mana_icons_enabled:
+        return type_line
+
+    icons = [
+        glyph
+        for card_type, glyph in MANA_CARD_TYPE_GLYPHS.items()
+        if any(card_type in type_part for type_part in card.types)
+    ]
+    if not icons:
+        return type_line
+
+    return f"{''.join(icons)} {type_line}"
 
 
 def _format_tui_relaxations(relaxations: tuple[str, ...]) -> str:
@@ -2373,6 +2667,7 @@ def run_tui_watch(
     once: bool = False,
     startup_scan: bool = False,
     ratings_loader: RatingsLoader | None = None,
+    mana_icons_enabled: bool = False,
 ) -> int:
     """Run Textual watch mode and return a process-style exit code.
     Tests can pass once=True to mount, poll once, and exit headlessly.
@@ -2386,6 +2681,7 @@ def run_tui_watch(
         ratings_loader=ratings_loader,
         startup_scan=startup_scan,
         once=once,
+        mana_icons_enabled=mana_icons_enabled,
     )
     try:
         app.run(headless=once)
@@ -2402,6 +2698,7 @@ def _row_cells(
     rank: int,
     scored_card: ScoredCard,
     column_keys: tuple[str, ...],
+    mana_icons_enabled: bool = False,
 ) -> tuple[object, ...]:
     values = {
         "rank": f"{rank:02d}",
@@ -2409,7 +2706,10 @@ def _row_cells(
         "grade": _format_letter_grade(scored_card=scored_card),
         "score": str(scored_card.score),
         "card": _format_card_name(card=scored_card.card),
-        "colors": _styled_colors(card=scored_card.card),
+        "colors": _styled_colors(
+            card=scored_card.card,
+            mana_icons_enabled=mana_icons_enabled,
+        ),
         "fit": _format_color_fit(scored_card=scored_card),
         "gih": _format_win_rate(scored_card=scored_card),
         "alsa": _format_alsa(scored_card=scored_card),
@@ -2441,16 +2741,24 @@ def _format_card_name(*, card: CardInfo) -> str:
     return card.name
 
 
-def _styled_colors(*, card: CardInfo) -> Text:
+def _styled_colors(*, card: CardInfo, mana_icons_enabled: bool = False) -> Text:
     if card.unknown:
         return Text("Unknown", style="bold yellow")
 
     if not card.colors:
-        return Text("Colorless", style="grey50")
+        colorless = _format_colorless_label(
+            mana_icons_enabled=mana_icons_enabled,
+            long_colorless=False,
+        )
+        return Text(colorless, style="grey50")
 
     text = Text()
     for color in card.colors:
-        text.append(color, style=COLOR_STYLES.get(color, "bold"))
+        symbol = _format_mana_symbol(
+            symbol=color,
+            mana_icons_enabled=mana_icons_enabled,
+        )
+        text.append(symbol, style=COLOR_STYLES.get(color, "bold"))
     return text
 
 
@@ -2511,6 +2819,7 @@ def _pool_color_distribution_bar(
     *,
     pool_grp_ids: tuple[int, ...],
     card_database: CardDatabase,
+    mana_icons_enabled: bool = False,
 ) -> str:
     if not pool_grp_ids:
         return "Colors: none"
@@ -2524,7 +2833,11 @@ def _pool_color_distribution_bar(
     parts = []
     for color in keys:
         bar = _scaled_bar(count=counts[color], max_count=max_count)
-        parts.append(f"{color} {bar} {counts[color]}")
+        label = _format_color_count_label(
+            color=color,
+            mana_icons_enabled=mana_icons_enabled,
+        )
+        parts.append(f"{label} {bar} {counts[color]}")
     if counts[UNKNOWN_COLOR_KEY] > 0:
         parts.append(
             f"? {_scaled_bar(count=counts[UNKNOWN_COLOR_KEY], max_count=max_count)} "
