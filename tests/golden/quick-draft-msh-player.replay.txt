@@ -657,3 +657,80 @@ Offered cards:
 Chosen card: Fixture Final Pick [R] (grpId 105182)
 
 Draft complete: 42 cards (explicit completion)
+
+Deck builder pair selection
+Pool: replay 00000000-0000-4000-8000-000000000004
+Set: MSH
+Pool size: 42 cards
+Account: FIXTURECLIENTID1234567890
+Draft: 00000000-0000-4000-8000-000000000004
+Chosen pair: WU (automatic, score 50.00)
+Runner-up: WB (score 50.00)
+Score gap: 0.00
+Pair scores:
+- WU: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- WB: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 39
+- WR: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- WG: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- UB: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- UR: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 41
+- UG: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 41
+- BR: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- BG: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 40
+- RG: score 50.00; top 23 sum 1150.00; 17Lands WR neutral 50.0%; playables 41
+
+Build sheet:
+Pair: WU (17Lands WR neutral 50.0%)
+Deck size: 40 cards (24 spells + 16 lands)
+Land count: 16 (aggressive curve: avg MV 2.04, 23 two-drops)
+Mana pips: W 0, U 1
+Sources: W 7, U 9 (floor 7)
+
+Spell selection:
+Eligible spells for WU: 40
+Selected spells: 24/24
+Creature count: 23 (target 14-23)
+Two-drops MV 2: 23 (minimum 5)
+Expensive spells MV >= 6: 0 (soft cap 3)
+Splash: disabled (--allow-splash is inert in v1; off-pair cards excluded)
+Relaxation order: expensive-spell cap -> minimum two-drop quota -> creature ceiling -> creature floor -> eligible-card shortage
+Applied relaxations: creature ceiling
+Creatures:
+- MV 2 | score 50 | Fixture Card 104983 (C)
+- MV 2 | score 50 | Fixture Card 104989 (C)
+- MV 2 | score 50 | Fixture Card 104996 (C)
+- MV 2 | score 50 | Fixture Card 104997 (C)
+- MV 2 | score 50 | Fixture Card 105003 (C)
+- MV 2 | score 50 | Fixture Card 105003 (C)
+- MV 2 | score 50 | Fixture Card 105003 (C)
+- MV 2 | score 50 | Fixture Card 105005 (C)
+- MV 2 | score 50 | Fixture Card 105006 (C)
+- MV 2 | score 50 | Fixture Card 105014 (C)
+- MV 2 | score 50 | Fixture Card 105017 (C)
+- MV 2 | score 50 | Fixture Card 105030 (C)
+- MV 2 | score 50 | Fixture Card 105032 (C)
+- MV 2 | score 50 | Fixture Card 105034 (C)
+- MV 2 | score 50 | Fixture Card 105037 (C)
+- MV 2 | score 50 | Fixture Card 105037 (C)
+- MV 2 | score 50 | Fixture Card 105047 (C)
+- MV 2 | score 50 | Fixture Card 105049 (C)
+- MV 2 | score 50 | Fixture Card 105054 (C)
+- MV 2 | score 50 | Fixture Card 105054 (C)
+- MV 2 | score 50 | Fixture Card 105070 (C)
+- MV 2 | score 50 | Fixture Card 105084 (C)
+- MV 2 | score 50 | Fixture Card 105117 (C)
+Non-creatures:
+- MV 3 | score 50 | Fixture Blue Card (U)
+Lands:
+Nonbasic lands:
+- none
+Basics:
+- 7 Plains
+- 9 Island
+Bench:
+- MV 2 | score 50 | Fixture Card 105013 (C) (cut: creature ceiling)
+- MV 2 | score 50 | Fixture Card 104998 (C) (cut: creature ceiling)
+- MV 2 | score 50 | Fixture Card 105033 (C) (cut: creature ceiling)
+- MV 2 | score 50 | Fixture Card 105000 (C) (cut: creature ceiling)
+- MV 2 | score 50 | Fixture Card 105031 (C) (cut: creature ceiling)
+Card data from 17Lands (17lands.com)

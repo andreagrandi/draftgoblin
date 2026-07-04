@@ -237,10 +237,13 @@ def test_build_rejects_invalid_pair(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_config_exposes_documented_tunables() -> None:
+    assert config.DECK_BUILDER.deck_size == 40
     assert config.DECK_BUILDER.target_spell_count == 23
     assert config.DECK_BUILDER.pair_score_card_weight == 0.85
     assert config.DECK_BUILDER.pair_score_win_rate_weight == 0.15
     assert config.DECK_BUILDER.default_land_count == 17
+    assert config.DECK_BUILDER.aggressive_land_count == 16
+    assert config.DECK_BUILDER.top_heavy_land_count == 18
     assert config.DECK_BUILDER.creature_floor == 14
     assert config.DECK_BUILDER.creature_ceiling == 17
     assert config.DECK_BUILDER.minimum_two_drops == 5
@@ -248,6 +251,7 @@ def test_config_exposes_documented_tunables() -> None:
     assert config.DECK_BUILDER.two_drop_mana_value == 2.0
     assert config.DECK_BUILDER.expensive_spell_mana_value == 6.0
     assert config.DECK_BUILDER.near_tie_creature_preference_points == 2.0
+    assert config.DECK_BUILDER.main_color_source_floor == 7
     assert "minimum two-drop quota" in config.DECK_BUILDER.relaxation_order
     assert config.PICK_ENGINE.thin_sample_minimum == 500
     assert config.PICK_ENGINE.neutral_prior_win_rate == 0.55

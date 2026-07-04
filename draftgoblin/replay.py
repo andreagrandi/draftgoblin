@@ -1,5 +1,5 @@
 """Deterministic plain-text replay rendering.
-Wire parsed draft events through pool validation and card metadata lookup.
+Completion events append the same build sheet used by live plain watch.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TypeAlias
 
 from draftgoblin.carddb import CardDatabase, CardInfo
+from draftgoblin.deckbuilder import BuildPool, build_deck_from_pool, format_build_result
 from draftgoblin.events import (
     EXPECTED_PICKS_PER_PACK,
     AccountEvent,
@@ -121,6 +122,15 @@ def render_replay_events(
             lines.append("")
         elif isinstance(event, DraftCompletedEvent):
             lines.extend(format_draft_completed_event(event=event))
+            lines.append("")
+            lines.extend(
+                _format_completed_build_sheet(
+                    event=event,
+                    header=header,
+                    card_database=card_database,
+                    ratings_data=loaded_ratings,
+                )
+            )
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -144,6 +154,33 @@ def _ratings_data_for_replay(
         return None
 
     return ratings_loader(header.set_code)
+
+
+def _format_completed_build_sheet(
+    *,
+    event: DraftCompletedEvent,
+    header: _ReplayHeader,
+    card_database: CardDatabase,
+    ratings_data: SeventeenLandsData | None,
+) -> list[str]:
+    pool = BuildPool(
+        set_code=event.set_code,
+        pool_grp_ids=event.picked_grp_ids,
+        source_label=f"replay {header.draft_id or event.event_name}",
+        account_id=header.account_id,
+        draft_id=header.draft_id,
+    )
+    selection, build_sheet = build_deck_from_pool(
+        pool=pool,
+        card_database=card_database,
+        ratings_data=ratings_data,
+    )
+    return format_build_result(
+        pool=pool,
+        selection=selection,
+        spell_selection=build_sheet.spell_selection,
+        mana_base=build_sheet.mana_base,
+    ).rstrip("\n").splitlines()
 
 
 def _header_from_events(*, events: tuple[DraftEvent, ...]) -> _ReplayHeader:

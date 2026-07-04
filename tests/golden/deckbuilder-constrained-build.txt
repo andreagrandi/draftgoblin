@@ -17,6 +17,13 @@ Pair scores:
 - BG: score 7.50; top 23 sum 0.00; 17Lands WR neutral 50.0%; playables 0
 - RG: score 7.50; top 23 sum 0.00; 17Lands WR neutral 50.0%; playables 0
 
+Build sheet:
+Pair: WU (17Lands WR neutral 50.0%)
+Deck size: 40 cards (23 spells + 17 lands)
+Land count: 17 (default curve: avg MV 3.17)
+Mana pips: W 12, U 11
+Sources: W 9, U 8 (floor 7)
+
 Spell selection:
 Eligible spells for WU: 28
 Selected spells: 23/23
@@ -51,6 +58,12 @@ Non-creatures:
 - MV 3 | score 50 | Dazzling Denial (U)
 - MV 3 | score 50 | Essence Scatter (W)
 - MV 3 | score 50 | Frost Trick (U)
+Lands:
+Nonbasic lands:
+- none
+Basics:
+- 9 Plains
+- 8 Island
 Bench:
 - MV 6 | score 50 | Skyline Colossus (U) (cut: expensive-spell cap)
 - MV 3 | score 50 | Guiding Light (W) (cut: lower score)

@@ -13,6 +13,7 @@ class DeckBuilderConfig:
     Keep values aligned with Limited consensus until data-backed tuning exists.
     """
 
+    deck_size: int = 40
     target_spell_count: int = 23
     pair_score_card_weight: float = 0.85
     pair_score_win_rate_weight: float = 0.15
@@ -21,6 +22,8 @@ class DeckBuilderConfig:
     default_land_count: int = 17
     aggressive_land_count: int = 16
     top_heavy_land_count: int = 18
+    aggressive_average_mana_value_max: float = 2.7
+    top_heavy_average_mana_value_min: float = 3.4
     creature_floor: int = 14
     creature_ceiling: int = 17
     minimum_two_drops: int = 5
@@ -29,6 +32,7 @@ class DeckBuilderConfig:
     expensive_spell_mana_value: float = 6.0
     near_tie_creature_preference_points: float = 2.0
     bench_card_count: int = 5
+    land_count_iteration_limit: int = 4
     relaxation_order: tuple[str, ...] = (
         "expensive-spell cap",
         "minimum two-drop quota",

@@ -10,11 +10,15 @@ from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_
 from draftgoblin.config import DECK_BUILDER
 from draftgoblin.deckbuilder import (
     DeckBuilderError,
+    ManaBase,
+    build_deck_from_pool,
     format_build_result,
     load_persisted_pool,
     load_pool_file,
+    select_build_sheet,
     select_color_pair,
     select_deck_spells,
+    select_mana_base,
 )
 from draftgoblin.pool import DraftState, save_draft_state
 from draftgoblin.seventeen import (
@@ -128,6 +132,108 @@ def test_select_deck_spells_fills_exact_23_with_structural_constraints() -> None
     assert selection.counts.two_drops >= DECK_BUILDER.minimum_two_drops
     assert selection.counts.expensive <= DECK_BUILDER.maximum_expensive_spells
     assert selection.applied_relaxations == ()
+
+
+
+def test_build_sheet_reselects_aggressive_spell_count_to_keep_40_cards() -> None:
+    database = _curve_card_database(mana_value=2.0, count=30)
+
+    build_sheet = select_build_sheet(
+        pool_grp_ids=tuple(range(401, 431)),
+        card_database=database,
+        pair="WU",
+    )
+
+    assert build_sheet.spell_selection.counts.total == 24
+    assert build_sheet.mana_base.land_count == DECK_BUILDER.aggressive_land_count
+    assert build_sheet.mana_base.total_cards == DECK_BUILDER.deck_size
+
+
+
+def test_build_sheet_reselects_top_heavy_spell_count_to_keep_40_cards() -> None:
+    database = _curve_card_database(mana_value=4.0, count=30)
+
+    build_sheet = select_build_sheet(
+        pool_grp_ids=tuple(range(401, 431)),
+        card_database=database,
+        pair="WU",
+    )
+
+    assert build_sheet.spell_selection.counts.total == 22
+    assert build_sheet.mana_base.land_count == DECK_BUILDER.top_heavy_land_count
+    assert build_sheet.mana_base.total_cards == DECK_BUILDER.deck_size
+
+
+
+def test_mana_base_splits_basics_by_pips_with_source_floor() -> None:
+    database = _pip_card_database(white_pips=20, blue_pips=3)
+    spell_selection = select_deck_spells(
+        pool_grp_ids=tuple(range(501, 524)),
+        card_database=database,
+        pair="WU",
+    )
+
+    mana_base = select_mana_base(
+        pool_grp_ids=tuple(range(501, 524)),
+        card_database=database,
+        pair="WU",
+        spell_selection=spell_selection,
+    )
+
+    assert _basic_count(mana_base=mana_base, name="Plains") == 10
+    assert _basic_count(mana_base=mana_base, name="Island") == 7
+    assert dict(mana_base.source_counts) == {"W": 10, "U": 7}
+
+
+
+def test_mana_base_rounds_toward_double_pip_heavy_color() -> None:
+    database = _rounding_card_database()
+    spell_selection = select_deck_spells(
+        pool_grp_ids=tuple(range(601, 624)),
+        card_database=database,
+        pair="WU",
+    )
+
+    mana_base = select_mana_base(
+        pool_grp_ids=tuple(range(601, 624)),
+        card_database=database,
+        pair="WU",
+        spell_selection=spell_selection,
+    )
+
+    assert dict(mana_base.pip_counts) == {"W": 9, "U": 9}
+    assert dict(mana_base.double_pip_counts) == {"W": 0, "U": 1}
+    assert _basic_count(mana_base=mana_base, name="Plains") == 8
+    assert _basic_count(mana_base=mana_base, name="Island") == 9
+
+
+
+def test_mana_base_slots_in_pair_nonbasics_before_basics() -> None:
+    database = _pip_card_database(white_pips=12, blue_pips=12)
+    database.cards[524] = _card(
+        grp_id=524,
+        name="Tranquil Cove",
+        colors=(),
+        mana_value=0.0,
+        types=("Land",),
+        produced_mana=("W", "U"),
+    )
+    spell_selection = select_deck_spells(
+        pool_grp_ids=tuple(range(501, 524)) + (524,),
+        card_database=database,
+        pair="WU",
+    )
+
+    mana_base = select_mana_base(
+        pool_grp_ids=tuple(range(501, 524)) + (524,),
+        card_database=database,
+        pair="WU",
+        spell_selection=spell_selection,
+    )
+
+    assert [land.card.name for land in mana_base.nonbasic_lands] == ["Tranquil Cove"]
+    assert sum(basic.count for basic in mana_base.basic_lands) == 16
+    assert dict(mana_base.source_counts) == {"W": 9, "U": 9}
 
 
 
@@ -298,7 +404,7 @@ def test_format_build_result_reports_spell_selection_and_attribution(tmp_path: P
         ratings_data=_ratings_data(),
         config=config,
     )
-    spell_selection = select_deck_spells(
+    build_sheet = select_build_sheet(
         pool_grp_ids=pool.pool_grp_ids,
         card_database=_card_database(),
         pair=selection.chosen.pair,
@@ -309,7 +415,8 @@ def test_format_build_result_reports_spell_selection_and_attribution(tmp_path: P
     output = format_build_result(
         pool=pool,
         selection=selection,
-        spell_selection=spell_selection,
+        spell_selection=build_sheet.spell_selection,
+        mana_base=build_sheet.mana_base,
         config=config,
     )
 
@@ -317,8 +424,11 @@ def test_format_build_result_reports_spell_selection_and_attribution(tmp_path: P
     assert "Runner-up:" in output
     assert "Score gap:" in output
     assert "Pair scores:" in output
+    assert "Build sheet:" in output
+    assert "Deck size: 40 cards" in output
     assert "Spell selection:" in output
-    assert "Selected spells: 4/4" in output
+    assert "Selected spells: 4/23" in output
+    assert "Lands:" in output
     assert "--allow-splash is inert in v1" in output
     assert "Card data from 17Lands" in output
 
@@ -329,20 +439,16 @@ def test_constrained_build_output_matches_golden_fixture() -> None:
     database = build_card_database_from_bulk_file(
         path=FIXTURES_DIR / "deckbuilder-constrained-bulk.jsonl"
     )
-    selection = select_color_pair(
-        pool_grp_ids=pool.pool_grp_ids,
+    selection, build_sheet = build_deck_from_pool(
+        pool=pool,
         card_database=database,
-    )
-    spell_selection = select_deck_spells(
-        pool_grp_ids=pool.pool_grp_ids,
-        card_database=database,
-        pair=selection.chosen.pair,
     )
 
     output = format_build_result(
         pool=pool,
         selection=selection,
-        spell_selection=spell_selection,
+        spell_selection=build_sheet.spell_selection,
+        mana_base=build_sheet.mana_base,
     )
 
     assert output == (GOLDEN_DIR / "deckbuilder-constrained-build.txt").read_text(
@@ -534,6 +640,105 @@ def _constrained_card_database() -> CardDatabase:
 
 
 
+def _curve_card_database(*, mana_value: float, count: int) -> CardDatabase:
+    cards: dict[int, CardInfo] = {}
+    for offset in range(count):
+        grp_id = 401 + offset
+        cards[grp_id] = _card(
+            grp_id=grp_id,
+            name=f"Curve Fixture {grp_id}",
+            colors=("W",) if offset % 2 == 0 else ("U",),
+            mana_value=mana_value,
+            types=("Creature — Fixture",) if offset < 18 else ("Instant",),
+            mana_cost="{W}" if offset % 2 == 0 else "{U}",
+        )
+
+    return CardDatabase(cards=cards)
+
+
+
+def _pip_card_database(*, white_pips: int, blue_pips: int) -> CardDatabase:
+    cards: dict[int, CardInfo] = {}
+    for offset in range(23):
+        grp_id = 501 + offset
+        if offset < 10:
+            colors = ("W",)
+            mana_cost = "{W}{W}" if white_pips >= 20 else "{W}"
+        elif offset < 13:
+            colors = ("U",)
+            mana_cost = "{U}"
+        else:
+            colors = ()
+            mana_cost = None
+
+        cards[grp_id] = _card(
+            grp_id=grp_id,
+            name=f"Pip Fixture {grp_id}",
+            colors=colors,
+            mana_value=3.0,
+            types=("Creature — Fixture",) if offset < 14 else ("Instant",),
+            mana_cost=mana_cost,
+        )
+
+    if white_pips == 12:
+        cards[501] = _card(
+            grp_id=501,
+            name="Double White Fixture",
+            colors=("W",),
+            mana_value=3.0,
+            types=("Creature — Fixture",),
+            mana_cost="{W}{W}{W}",
+        )
+
+    if blue_pips == 12:
+        cards[511] = _card(
+            grp_id=511,
+            name="Double Blue Fixture",
+            colors=("U",),
+            mana_value=3.0,
+            types=("Creature — Fixture",),
+            mana_cost="{U}{U}{U}{U}{U}{U}{U}{U}{U}{U}",
+        )
+
+    return CardDatabase(cards=cards)
+
+
+
+def _rounding_card_database() -> CardDatabase:
+    cards: dict[int, CardInfo] = {}
+    for offset in range(23):
+        grp_id = 601 + offset
+        if offset < 9:
+            colors = ("W",)
+            mana_cost = "{W}"
+        elif offset < 16:
+            colors = ("U",)
+            mana_cost = "{U}"
+        elif offset == 16:
+            colors = ("U",)
+            mana_cost = "{U}{U}"
+        else:
+            colors = ()
+            mana_cost = None
+
+        cards[grp_id] = _card(
+            grp_id=grp_id,
+            name=f"Rounding Fixture {grp_id}",
+            colors=colors,
+            mana_value=3.0,
+            types=("Creature — Fixture",) if offset < 14 else ("Instant",),
+            mana_cost=mana_cost,
+        )
+
+    return CardDatabase(cards=cards)
+
+
+
+def _basic_count(*, mana_base: ManaBase, name: str) -> int:
+    return sum(basic.count for basic in mana_base.basic_lands if basic.name == name)
+
+
+
 def _card(
     *,
     grp_id: int,
@@ -541,6 +746,8 @@ def _card(
     colors: tuple[str, ...],
     mana_value: float = 2.0,
     types: tuple[str, ...] = ("Creature",),
+    mana_cost: str | None = None,
+    produced_mana: tuple[str, ...] = (),
 ) -> CardInfo:
     return CardInfo(
         grp_id=grp_id,
@@ -549,6 +756,8 @@ def _card(
         mana_value=mana_value,
         rarity="common",
         types=types,
+        mana_cost=mana_cost,
+        produced_mana=produced_mana,
     )
 
 

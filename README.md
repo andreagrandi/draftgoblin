@@ -4,9 +4,9 @@ An unofficial Quick Draft assistant for MTG Arena.
 
 ## Status
 
-Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with parser-backed `replay` and `watch --plain` commands, score-sorted pick tables, a `refresh-data` command, and a `build` subcommand with pair selection plus constrained 23-spell selection.
+Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with parser-backed `replay` and `watch --plain` commands, score-sorted pick tables, a `refresh-data` command, and a `build` subcommand with pair selection, constrained spells, mana base, and bench output. Draft completion in replay and plain watch automatically prints the build sheet.
 
-See [docs/pick-scoring.md](docs/pick-scoring.md) for the initial 0–100 scoring model and integer tie-display decision. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, relaxation order, and the inert v1 `--allow-splash` flag.
+See [docs/pick-scoring.md](docs/pick-scoring.md) for the initial 0–100 scoring model and integer tie-display decision. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, mana-base defaults, relaxation order, and the inert v1 `--allow-splash` flag.
 
 ## Usage
 
