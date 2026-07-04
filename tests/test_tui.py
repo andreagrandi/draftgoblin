@@ -12,7 +12,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import DataTable, Static
 
 from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
-from draftgoblin.pool import DraftState, save_draft_state
+from draftgoblin.pool import DraftPick, DraftState, draft_state_path, save_draft_state
 from draftgoblin.seventeen import (
     QUICK_DRAFT_FORMAT,
     RatingSampleCounts,
@@ -23,6 +23,8 @@ from draftgoblin.seventeen import (
 from draftgoblin.tui import DraftgoblinTuiApp
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
+FIXTURE_ACCOUNT_ID = "FIXTURECLIENTID1234567890"
+FIXTURE_DRAFT_ID = "00000000-0000-4000-8000-000000000004"
 SCRYFALL_BULK_SAMPLE_PATH = (
     Path(__file__).parent / "fixtures" / "scryfall-default-cards-sample.jsonl"
 )
@@ -172,13 +174,20 @@ async def _assert_keybindings_toggle_columns_and_sort(tmp_path: Path) -> None:
             "colors",
         )
 
+        assert app.sort_mode == "win_rate"
+        assert "Ranking: 17L WR" in _status_text(app=app)
+
+        await pilot.press("s")
+        assert app.sort_mode == "score"
+        assert "Ranking: DG Score" in _status_text(app=app)
+
         await pilot.press("s")
         assert app.sort_mode == "alsa"
-        assert "Sort: ALSA" in _status_text(app=app)
+        assert "Ranking: ALSA" in _status_text(app=app)
 
         await pilot.press("s")
         assert app.sort_mode == "mv"
-        assert "Sort: MV" in _status_text(app=app)
+        assert "Ranking: MV" in _status_text(app=app)
 
         await pilot.press("q")
 
@@ -467,6 +476,100 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         assert "Override: WB" in _status_text(app=app)
 
 
+def test_tui_backtest_keybinding_opens_recommendation_report(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_backtest_keybinding_opens_report(tmp_path=tmp_path))
+
+
+async def _assert_backtest_keybinding_opens_report(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.process_lines(lines=_full_fixture_lines())
+        await pilot.pause()
+        state_path = draft_state_path(
+            account_id=FIXTURE_ACCOUNT_ID,
+            draft_id=FIXTURE_DRAFT_ID,
+            app_dir=tmp_path / "app",
+        )
+        before = state_path.read_text(encoding="utf-8")
+
+        await pilot.press("t")
+        await pilot.pause()
+
+        title = app.query_one("#pack-title", Static)
+        table = app.query_one("#pack-table", DataTable)
+        build_scroll = app.query_one("#build-scroll", VerticalScroll)
+        pool_summary = app.query_one("#pool-summary", Static)
+
+        assert str(title.render()).startswith("Backtest view — 17L WR recommendations")
+        assert table.display is False
+        assert build_scroll.display is True
+        assert pool_summary.display is False
+        assert app.focused == build_scroll
+        assert app.backtest_view_text.startswith("Draftgoblin backtest\n")
+        assert "Ranking: 17L WR" in app.backtest_view_text
+        assert "Picks: 42 chosen, 42 compared, 0 skipped" in app.backtest_view_text
+        assert "Pack  Pick  Pool  17L WR  DG" in app.backtest_view_text
+        assert "Recommended" in app.backtest_view_text
+        assert "Actual" in app.backtest_view_text
+        assert "Match" in app.backtest_view_text
+        assert "Fixture Spider [G] (grpId 105097)" in app.backtest_view_text
+        assert "Summary:" in app.backtest_view_text
+        assert "View: backtest" in _status_text(app=app)
+        assert "Backtest action: rebuilt 17L WR recommendation comparison" in _status_text(
+            app=app,
+        )
+        assert state_path.read_text(encoding="utf-8") == before
+
+
+
+def test_tui_backtest_view_reports_missing_history_without_mutating_state(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_backtest_missing_history_is_read_only(tmp_path=tmp_path))
+
+
+async def _assert_backtest_missing_history_is_read_only(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    state = _draft_state(
+        account_id=FIXTURE_ACCOUNT_ID,
+        draft_id="missing-history-draft",
+        event_name="QuickDraft_MSH_20260702",
+        pool_grp_ids=(105097,),
+        picks=(
+            DraftPick(
+                pack_number=0,
+                pick_number=0,
+                offered_grp_ids=None,
+                pool_before_pick=(),
+                chosen_grp_id=105097,
+            ),
+        ),
+    )
+    save_draft_state(state=state, app_dir=tmp_path / "app")
+    state_path = draft_state_path(
+        account_id=state.account_id,
+        draft_id=state.draft_id,
+        app_dir=tmp_path / "app",
+    )
+    before = state_path.read_text(encoding="utf-8")
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_account_lines())
+        await pilot.pause()
+
+        await pilot.press("t")
+        await pilot.pause()
+
+        assert "Picks: 1 chosen, 0 compared, 1 skipped" in app.backtest_view_text
+        assert "skipped: missing offered-card history" in app.backtest_view_text
+        assert "Summary: no comparable picks; 1 skipped." in app.backtest_view_text
+        assert state_path.read_text(encoding="utf-8") == before
+
+
+
 def test_tui_card_image_preserves_ratio_with_auto_height(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -683,7 +786,7 @@ async def _assert_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
             assert "MSH" in app.loading_rating_sets
 
             await pilot.press("s")
-            assert app.sort_mode == "alsa"
+            assert app.sort_mode == "score"
 
             release.set()
             for _ in range(10):
@@ -728,6 +831,7 @@ def _draft_state(
     event_name: str,
     pool_grp_ids: tuple[int, ...],
     account_screen_name: str | None = None,
+    picks: tuple[DraftPick, ...] = (),
 ) -> DraftState:
     now = datetime(2026, 7, 4, 12, 0, tzinfo=UTC).isoformat()
     return DraftState(
@@ -740,7 +844,7 @@ def _draft_state(
         updated_at=now,
         completed_at=now,
         completed=True,
-        picks=(),
+        picks=picks,
         pool_grp_ids=pool_grp_ids,
         account_screen_name=account_screen_name,
     )

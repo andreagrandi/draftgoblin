@@ -185,7 +185,7 @@ Both defaults derive from the running OS user's home directory, which is what gu
 
 - FR-6.1 **Live mode is a TUI** (full-screen terminal app): pack panel (score-sorted table, FR-4.6), sidebar with pool summary (color distribution bar, mana curve sparkline, last picks), footer status bar (account, pair, pick counter, data source, 17lands attribution).
 - FR-6.2 On draft completion, the TUI switches to the **build view** (build sheet + bench), with a keybind to force a rebuild with another pair.
-- FR-6.3 Minimal keybindings: quit, toggle secondary stat columns, cycle sort (score / ALSA / MV), open build view, rebuild with pair override.
+- FR-6.3 Minimal keybindings: quit, toggle secondary stat columns, cycle ranking (17L WR / DG score / ALSA / MV), open build view, rebuild with pair override.
 - FR-6.4 `replay <logfile>` and `build --pool <file>` run in **plain-text mode** (deterministic, pipe-friendly, no TUI) for testing and scripting. `watch --plain` also available for minimal environments.
 - FR-6.5 Graceful degradation on narrow terminals (hide secondary columns first).
 

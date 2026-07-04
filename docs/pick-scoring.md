@@ -1,6 +1,6 @@
 # Pick scoring
 
-Draftgoblin keeps the raw 17Lands GIH win rate visible for every card with a strong games-in-hand sample. It also keeps a Draftgoblin `DG` score from 0 to 100 for sorting, color commitment, and deck-builder decisions.
+Draftgoblin keeps the raw 17Lands GIH win rate visible for every card with a strong games-in-hand sample. The Textual watch table ranks by 17Lands WR by default. It also keeps a Draftgoblin `DG` score from 0 to 100 for optional ranking, color commitment, and deck-builder decisions.
 
 The base rating for `DG` is 17Lands GIH WR when the card has enough games-in-hand samples. If QuickDraft data is missing or thin, the resolver falls back to PremierDraft. If neither format has a strong GIH sample, the card uses a neutral prior, adjusted by ALSA when ALSA is available: earlier ALSA raises the prior, later ALSA lowers it.
 
@@ -21,6 +21,8 @@ Rows show a `Fit` marker: `On` for cards inside the inferred pair, `Off!` for of
 
 The TUI pack table shows `17L WR` and `17L Grade` as primary columns. `17L WR` is the raw Games-in-Hand win rate from the resolved 17Lands source. `17L Grade` follows the methodology published on the 17Lands Card Data page for the Grades view: grades are centered at `C` on the selected win-rate metric distribution, and each grade step is a deterministic `0.33` standard-deviation band. Draftgoblin computes those grades from the cached 17Lands GIH distribution for the same source and format/filter context the row uses (QuickDraft for Quick Drafts, PremierDraft when the row is a Premier fallback, or pair-filtered data when used); cards without a strong GIH sample show `—`.
 
-Displayed `DG` scores are whole-number integers. We do not show one decimal for ties because the plain draft table should stay easy to scan; ties are resolved deterministically by raw score, base rating, and original pack order.
+Displayed `DG` scores are whole-number integers. We do not show one decimal for ties because the plain draft table should stay easy to scan; DG ties are resolved deterministically by raw score, base rating, and original pack order.
+
+The TUI is explicit about the active ranking in the title and status bar. Press `s` to cycle between 17Lands WR, DG score, ALSA, and mana value. Backtest reports also print the ranking used before listing recommended-vs-actual picks.
 
 Rows marked `Prior*` did not have a strong GIH sample. The `Source` column shows whether a row used QuickDraft, Premier fallback, or the prior.
