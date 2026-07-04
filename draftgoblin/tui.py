@@ -39,7 +39,7 @@ from draftgoblin.events import (
 )
 from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
-from draftgoblin.pool import DraftPoolStore, DraftState
+from draftgoblin.pool import DraftPoolStore, DraftState, list_draft_states
 from draftgoblin.seventeen import SEVENTEEN_LANDS_ATTRIBUTION, SeventeenLandsData
 
 PathInput: TypeAlias = str | PathLike[str]
@@ -155,6 +155,7 @@ class DraftgoblinTuiApp(App[None]):
         Binding("c", "toggle_secondary_columns", "Columns", show=True),
         Binding("s", "cycle_sort", "Sort", show=True),
         Binding("b", "open_build_view", "Build", show=True),
+        Binding("a", "cycle_account", "Account", show=True),
         Binding("p", "rebuild_with_pair_override", "Pair", show=True),
     ]
 
@@ -215,6 +216,7 @@ class DraftgoblinTuiApp(App[None]):
         self._ratings_data_by_set: dict[str, SeventeenLandsData | None] = {}
         self._rating_errors_by_set: dict[str, str] = {}
         self._loading_rating_sets: set[str] = set()
+        self._draft_states_by_key: dict[tuple[str, str], DraftState] = {}
 
     @property
     def visible_column_keys(self) -> tuple[str, ...]:
@@ -310,6 +312,26 @@ class DraftgoblinTuiApp(App[None]):
             self._view_mode = "build"
         self._render_all()
 
+    def action_cycle_account(self) -> None:
+        """Cycle through recovered drafts for other accounts.
+        This lets users pick a just-finished draft after an account switch.
+        """
+
+        states = self._available_draft_states()
+        if not states:
+            self._record_error("no recovered drafts to switch to")
+            return
+
+        current_key = (self._active_account_id, self._draft_id)
+        keys = tuple((state.account_id, state.draft_id) for state in states)
+        if current_key in keys:
+            index = (keys.index(current_key) + 1) % len(states)
+        else:
+            index = 0
+
+        self._select_draft_state(state=states[index])
+        self._render_all()
+
     def action_rebuild_with_pair_override(self) -> None:
         """Force the next color pair and refresh the build view.
         Repeated presses cycle through all configured color pairs.
@@ -329,6 +351,8 @@ class DraftgoblinTuiApp(App[None]):
             events_tuple = tuple(self.parser.parse_lines(lines=lines))
             for event in events_tuple:
                 state = self.store.consume(event=event)
+                if state is not None:
+                    self._remember_draft_state(state=state)
                 self._consume_event(event=event, state=state)
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self._last_error = str(error)
@@ -531,6 +555,71 @@ class DraftgoblinTuiApp(App[None]):
             self._rebuild_build_view()
 
         self._render_all()
+
+    def _remember_draft_state(self, *, state: DraftState) -> None:
+        self._draft_states_by_key[(state.account_id, state.draft_id)] = state
+
+    def _available_draft_states(self) -> tuple[DraftState, ...]:
+        states = {
+            (state.account_id, state.draft_id): state
+            for state in list_draft_states(app_dir=self.store.app_dir)
+        }
+        states.update(self._draft_states_by_key)
+        values = tuple(states.values())
+        if not values:
+            return ()
+
+        matching_event = tuple(
+            state
+            for state in values
+            if self._event_name is not None
+            and state.event_name == self._event_name
+            and state.set_code == self._set_code
+        )
+        if len(matching_event) > 1:
+            return tuple(sorted(matching_event, key=self._draft_state_sort_key))
+
+        matching_set = tuple(
+            state
+            for state in values
+            if self._set_code is not None and state.set_code == self._set_code
+        )
+        if len(matching_set) > 1:
+            return tuple(sorted(matching_set, key=self._draft_state_sort_key))
+
+        return tuple(sorted(values, key=self._draft_state_sort_key))
+
+    def _draft_state_sort_key(self, state: DraftState) -> tuple[str, str, str, str]:
+        return (
+            self._account_label(account_id=state.account_id),
+            state.set_code,
+            state.event_name,
+            state.draft_id,
+        )
+
+    def _select_draft_state(self, *, state: DraftState) -> None:
+        self._remember_draft_state(state=state)
+        self._active_account_id = state.account_id
+        self._active_account_label = self._account_label(account_id=state.account_id)
+        self._event_name = state.event_name
+        self._set_code = state.set_code
+        self._draft_id = state.draft_id
+        self._pick_label = "complete" if state.completed else "recovered"
+        self._pool_grp_ids = state.pool_grp_ids
+        self._pool_size = len(state.pool_grp_ids)
+        self._current_pack_event = None
+        self._current_pack = None
+        self._pair_label = "open"
+        self._commitment_label = "0% recovered"
+        self._forced_pair = None
+        self._last_picks = [
+            _format_card_name(card=self.card_database.lookup(grp_id=grp_id))
+            for grp_id in state.pool_grp_ids[-5:]
+        ]
+        self._ensure_ratings_load_started(set_code=state.set_code)
+        if self._rebuild_build_view():
+            self._view_mode = "build"
+
 
     def _score_current_pack(self) -> None:
         event = self._current_pack_event

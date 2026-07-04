@@ -1,10 +1,11 @@
 """Deck-builder pair selection, spells, mana base, and text output.
-Build sheets use documented Limited structure defaults for v1.
+Cached 17Lands structure targets override consensus defaults when present.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, replace
 from os import PathLike
@@ -15,7 +16,11 @@ from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.config import COLOR_PAIRS, DECK_BUILDER, DeckBuilderConfig
 from draftgoblin.pickengine import PickEngine, ScoredCard
 from draftgoblin.pool import DraftState, list_draft_states
-from draftgoblin.seventeen import SEVENTEEN_LANDS_ATTRIBUTION, SeventeenLandsData
+from draftgoblin.seventeen import (
+    SEVENTEEN_LANDS_ATTRIBUTION,
+    SeventeenLandsData,
+    StructuralTargets,
+)
 
 PathInput: TypeAlias = str | PathLike[str]
 SPELL_TYPE_MARKERS = (
@@ -105,6 +110,7 @@ class SpellCounts:
     creatures: int
     two_drops: int
     expensive: int
+    splashes: int = 0
 
     @property
     def noncreatures(self) -> int:
@@ -134,6 +140,7 @@ class SpellConstraints:
     creature_ceiling: int
     minimum_two_drops: int
     maximum_expensive_spells: int
+    maximum_splash_spells: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +158,8 @@ class SpellSelection:
     counts: SpellCounts
     applied_relaxations: tuple[str, ...]
     allow_splash_requested: bool
+    splash_fixing_sources: int = 0
+    structure_targets: StructuralTargets | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,7 +365,7 @@ def select_deck_spells(
     config: DeckBuilderConfig = DECK_BUILDER,
 ) -> SpellSelection:
     """Select deck spells for a chosen pair under structural constraints.
-    The v1 splash flag is accepted but intentionally does not alter eligibility.
+    Cached pair targets and explicit splash eligibility are applied here.
     """
 
     _validate_deck_builder_config(config=config)
@@ -364,6 +373,21 @@ def select_deck_spells(
     if resolved_pair is None:
         raise DeckBuilderError("A color pair is required before selecting spells.")
 
+    structure_targets = _structure_targets_for_pair(
+        ratings_data=ratings_data,
+        pair=resolved_pair,
+    )
+    effective_config = _config_with_structure_targets(
+        config=config,
+        structure_targets=structure_targets,
+    )
+    _validate_deck_builder_config(config=effective_config)
+    splash_fixing_counts = _splash_fixing_counts_by_color(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        pair=resolved_pair,
+    )
+    splash_fixing_sources = max(splash_fixing_counts.values(), default=0)
     scored_pool = PickEngine(ratings_data=ratings_data).score_pack(
         offered_grp_ids=pool_grp_ids,
         card_database=card_database,
@@ -373,42 +397,57 @@ def select_deck_spells(
     candidates = tuple(
         card
         for card in scored_pool.cards
-        if _is_eligible_spell_for_pair(card=card, pair=resolved_pair)
+        if _is_eligible_spell_for_pair(
+            card=card,
+            pair=resolved_pair,
+            allow_splash=allow_splash,
+            splash_fixing_counts=splash_fixing_counts,
+            config=effective_config,
+        )
     )
 
     for plan in _constraint_plans():
         constraints = _constraints_for_plan(
             candidates=candidates,
+            pair=resolved_pair,
+            allow_splash=allow_splash,
             plan=plan,
-            config=config,
+            config=effective_config,
         )
         selected = _select_with_constraints(
             candidates=candidates,
+            pair=resolved_pair,
             constraints=constraints,
-            config=config,
+            config=effective_config,
         )
         if selected is None:
             continue
 
-        counts = _spell_counts(cards=selected, config=config)
+        counts = _spell_counts(
+            cards=selected,
+            pair=resolved_pair,
+            config=effective_config,
+        )
         return SpellSelection(
             pair=resolved_pair,
             spells=selected,
             bench=_bench_cards(
                 candidates=candidates,
                 selected=selected,
-                config=config,
+                config=effective_config,
             ),
             eligible_count=len(candidates),
-            requested_spell_count=config.target_spell_count,
+            requested_spell_count=effective_config.target_spell_count,
             constraints=constraints,
             counts=counts,
             applied_relaxations=_applied_relaxations(
                 plan=plan,
                 constraints=constraints,
-                config=config,
+                config=effective_config,
             ),
             allow_splash_requested=allow_splash,
+            splash_fixing_sources=splash_fixing_sources,
+            structure_targets=structure_targets,
         )
 
     raise DeckBuilderError("Could not select deck spells with the configured constraints.")
@@ -433,18 +472,30 @@ def select_build_sheet(
     if resolved_pair is None:
         raise DeckBuilderError("A color pair is required before selecting a build sheet.")
 
+    structure_targets = _structure_targets_for_pair(
+        ratings_data=ratings_data,
+        pair=resolved_pair,
+    )
+    effective_config = _config_with_structure_targets(
+        config=config,
+        structure_targets=structure_targets,
+    )
+    _validate_deck_builder_config(config=effective_config)
     spell_selection = select_deck_spells(
         pool_grp_ids=pool_grp_ids,
         card_database=card_database,
         pair=resolved_pair,
         ratings_data=ratings_data,
         allow_splash=allow_splash,
-        config=config,
+        config=effective_config,
     )
     seen_targets = {spell_selection.counts.total}
-    for _ in range(config.land_count_iteration_limit):
-        land_count = _curve_land_count(selection=spell_selection, config=config)[0]
-        desired_spell_count = max(0, config.deck_size - land_count)
+    for _ in range(effective_config.land_count_iteration_limit):
+        land_count = _curve_land_count(
+            selection=spell_selection,
+            config=effective_config,
+        )[0]
+        desired_spell_count = max(0, effective_config.deck_size - land_count)
         if desired_spell_count == spell_selection.counts.total:
             break
 
@@ -458,7 +509,7 @@ def select_build_sheet(
             pair=resolved_pair,
             ratings_data=ratings_data,
             allow_splash=allow_splash,
-            config=replace(config, target_spell_count=desired_spell_count),
+            config=replace(effective_config, target_spell_count=desired_spell_count),
         )
 
     mana_base = select_mana_base(
@@ -466,17 +517,17 @@ def select_build_sheet(
         card_database=card_database,
         pair=resolved_pair,
         spell_selection=spell_selection,
-        config=config,
+        config=effective_config,
     )
-    if mana_base.total_cards != config.deck_size:
+    if mana_base.total_cards != effective_config.deck_size:
         mana_base = select_mana_base(
             pool_grp_ids=pool_grp_ids,
             card_database=card_database,
             pair=resolved_pair,
             spell_selection=spell_selection,
-            land_count=max(0, config.deck_size - spell_selection.counts.total),
+            land_count=max(0, effective_config.deck_size - spell_selection.counts.total),
             reason="deck-size fill after spell-count relaxation",
-            config=config,
+            config=effective_config,
         )
 
     return BuildSheet(spell_selection=spell_selection, mana_base=mana_base)
@@ -546,6 +597,10 @@ def select_mana_base(
         card_database=card_database,
         pair=resolved_pair,
         land_count=resolved_land_count,
+        splash_colors=_selected_splash_colors(
+            cards=spell_selection.spells,
+            pair=resolved_pair,
+        ),
     )
     basic_slots = max(0, resolved_land_count - len(nonbasic_lands))
     pip_counts, double_pip_counts = _spell_pip_counts(
@@ -743,7 +798,7 @@ def _score_pair(
     config: DeckBuilderConfig,
 ) -> PairScore:
     playable_cards = tuple(
-        card for card in scored_cards if _is_eligible_spell_for_pair(card=card, pair=pair)
+        card for card in scored_cards if _is_base_eligible_spell_for_pair(card=card, pair=pair)
     )
     top_cards = playable_cards[: config.target_spell_count]
     playable_score_sum = sum(card.raw_score for card in top_cards)
@@ -767,16 +822,52 @@ def _score_pair(
 
 
 
-def _is_eligible_spell_for_pair(*, card: ScoredCard, pair: str) -> bool:
+def _is_base_eligible_spell_for_pair(*, card: ScoredCard, pair: str) -> bool:
     return _is_spell_card(card=card.card) and _is_playable_in_pair(card=card, pair=pair)
 
 
 
-def _is_playable_in_pair(*, card: ScoredCard, pair: str) -> bool:
-    if not card.card.colors:
+def _is_eligible_spell_for_pair(
+    *,
+    card: ScoredCard,
+    pair: str,
+    allow_splash: bool,
+    splash_fixing_counts: dict[str, int],
+    config: DeckBuilderConfig,
+) -> bool:
+    if _is_base_eligible_spell_for_pair(card=card, pair=pair):
         return True
 
-    return all(color in pair for color in card.card.colors)
+    if not allow_splash:
+        return False
+
+    if not _is_spell_card(card=card.card):
+        return False
+
+    if card.raw_score < config.splash_elite_score_minimum:
+        return False
+
+    splash_colors = _card_splash_colors(card=card.card, pair=pair)
+    if not splash_colors:
+        return False
+
+    return all(
+        splash_fixing_counts.get(color, 0) >= config.splash_minimum_fixing_sources
+        for color in splash_colors
+    )
+
+
+
+def _is_playable_in_pair(*, card: ScoredCard, pair: str) -> bool:
+    return _card_is_playable_in_pair(card=card.card, pair=pair)
+
+
+
+def _card_is_playable_in_pair(*, card: CardInfo, pair: str) -> bool:
+    if not card.colors:
+        return True
+
+    return all(color in pair for color in card.colors)
 
 
 
@@ -814,14 +905,134 @@ def _is_expensive_spell(*, card: ScoredCard, config: DeckBuilderConfig) -> bool:
 
 
 
+def _structure_targets_for_pair(
+    *,
+    ratings_data: SeventeenLandsData | None,
+    pair: str,
+) -> StructuralTargets | None:
+    if ratings_data is None:
+        return None
+
+    return ratings_data.structure_targets_for(pair=pair)
+
+
+
+def _config_with_structure_targets(
+    *,
+    config: DeckBuilderConfig,
+    structure_targets: StructuralTargets | None,
+) -> DeckBuilderConfig:
+    if structure_targets is None:
+        return config
+
+    land_count = _clamp_int(
+        value=_round_half_up(structure_targets.average_land_count),
+        lower=0,
+        upper=config.deck_size,
+    )
+    creature_center = _round_half_up(structure_targets.average_creature_count)
+    creature_floor = _clamp_int(
+        value=math.floor(structure_targets.average_creature_count),
+        lower=0,
+        upper=config.target_spell_count,
+    )
+    creature_ceiling = _clamp_int(
+        value=max(creature_center, math.ceil(structure_targets.average_creature_count)),
+        lower=creature_floor,
+        upper=config.target_spell_count,
+    )
+    target_spell_count = config.target_spell_count
+    if config.target_spell_count == DECK_BUILDER.target_spell_count:
+        target_spell_count = config.deck_size - land_count
+
+    return replace(
+        config,
+        target_spell_count=target_spell_count,
+        default_land_count=land_count,
+        creature_floor=creature_floor,
+        creature_ceiling=creature_ceiling,
+        minimum_two_drops=_clamp_int(
+            value=_round_half_up(structure_targets.average_two_drop_count),
+            lower=0,
+            upper=target_spell_count,
+        ),
+        maximum_expensive_spells=_clamp_int(
+            value=math.ceil(structure_targets.average_expensive_spell_count),
+            lower=0,
+            upper=target_spell_count,
+        ),
+    )
+
+
+
+def _round_half_up(value: float) -> int:
+    return int(math.floor(value + 0.5))
+
+
+
+def _clamp_int(*, value: int, lower: int, upper: int) -> int:
+    return min(max(value, lower), upper)
+
+
+
+def _card_splash_colors(*, card: CardInfo, pair: str) -> tuple[str, ...]:
+    return tuple(color for color in card.colors if color not in pair)
+
+
+
+def _is_splash_card(*, card: CardInfo, pair: str) -> bool:
+    return bool(_card_splash_colors(card=card, pair=pair))
+
+
+
+def _selected_splash_colors(
+    *,
+    cards: tuple[ScoredCard, ...],
+    pair: str,
+) -> tuple[str, ...]:
+    splash_colors = {
+        color
+        for scored_card in cards
+        for color in _card_splash_colors(card=scored_card.card, pair=pair)
+    }
+    return tuple(color for color in BASIC_LANDS_BY_COLOR if color in splash_colors)
+
+
+
+def _splash_fixing_counts_by_color(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    pair: str,
+) -> dict[str, int]:
+    counts = {color: 0 for color in BASIC_LANDS_BY_COLOR if color not in pair}
+    for grp_id in pool_grp_ids:
+        card = card_database.lookup(grp_id=grp_id)
+        if not _card_is_playable_in_pair(card=card, pair=pair):
+            continue
+
+        produced_colors = _land_source_colors(card=card)
+        for color in counts:
+            if color in produced_colors:
+                counts[color] += 1
+
+    return counts
+
+
+
 def _constraints_for_plan(
     *,
     candidates: tuple[ScoredCard, ...],
+    pair: str,
+    allow_splash: bool,
     plan: _ConstraintPlan,
     config: DeckBuilderConfig,
 ) -> SpellConstraints:
-    target = min(config.target_spell_count, len(candidates))
-    pool_counts = _spell_counts(cards=candidates, config=config)
+    requested_target = min(config.target_spell_count, len(candidates))
+    pool_counts = _spell_counts(cards=candidates, pair=pair, config=config)
+    splash_limit = min(config.splash_max_cards, requested_target) if allow_splash else 0
+    non_splash_count = pool_counts.total - pool_counts.splashes
+    target = min(requested_target, non_splash_count + splash_limit)
 
     creature_floor = (
         min(config.creature_floor, pool_counts.creatures, target)
@@ -856,6 +1067,7 @@ def _constraints_for_plan(
         creature_ceiling=creature_ceiling,
         minimum_two_drops=minimum_two_drops,
         maximum_expensive_spells=maximum_expensive_spells,
+        maximum_splash_spells=min(splash_limit, target),
     )
 
 
@@ -899,13 +1111,14 @@ def _constraint_plans() -> tuple[_ConstraintPlan, ...]:
 def _select_with_constraints(
     *,
     candidates: tuple[ScoredCard, ...],
+    pair: str,
     constraints: SpellConstraints,
     config: DeckBuilderConfig,
 ) -> tuple[ScoredCard, ...] | None:
     selected: list[ScoredCard] = []
     remaining = list(candidates)
     while len(selected) < constraints.spell_count and remaining:
-        counts = _spell_counts(cards=tuple(selected), config=config)
+        counts = _spell_counts(cards=tuple(selected), pair=pair, config=config)
         floor_unmet = counts.creatures < constraints.creature_floor
         ordered_indices = sorted(
             range(len(remaining)),
@@ -920,6 +1133,7 @@ def _select_with_constraints(
             selected=tuple(selected),
             remaining=tuple(remaining),
             constraints=constraints,
+            pair=pair,
             config=config,
         )
         if picked_index is None:
@@ -929,7 +1143,7 @@ def _select_with_constraints(
 
     result = tuple(selected)
     if _counts_satisfy_constraints(
-        counts=_spell_counts(cards=result, config=config),
+        counts=_spell_counts(cards=result, pair=pair, config=config),
         constraints=constraints,
     ):
         return result
@@ -944,6 +1158,7 @@ def _first_feasible_index(
     selected: tuple[ScoredCard, ...],
     remaining: tuple[ScoredCard, ...],
     constraints: SpellConstraints,
+    pair: str,
     config: DeckBuilderConfig,
 ) -> int | None:
     for index in ordered_indices:
@@ -955,6 +1170,7 @@ def _first_feasible_index(
             selected=selected,
             remaining_after=remaining_after,
             constraints=constraints,
+            pair=pair,
             config=config,
         ):
             return index
@@ -969,10 +1185,11 @@ def _can_add_spell(
     selected: tuple[ScoredCard, ...],
     remaining_after: tuple[ScoredCard, ...],
     constraints: SpellConstraints,
+    pair: str,
     config: DeckBuilderConfig,
 ) -> bool:
     next_selected = (*selected, candidate)
-    counts = _spell_counts(cards=next_selected, config=config)
+    counts = _spell_counts(cards=next_selected, pair=pair, config=config)
     if counts.total > constraints.spell_count:
         return False
 
@@ -982,10 +1199,14 @@ def _can_add_spell(
     if counts.expensive > constraints.maximum_expensive_spells:
         return False
 
+    if counts.splashes > constraints.maximum_splash_spells:
+        return False
+
     return _can_complete_selection(
         counts=counts,
         remaining=remaining_after,
         constraints=constraints,
+        pair=pair,
         config=config,
     )
 
@@ -996,6 +1217,7 @@ def _can_complete_selection(
     counts: SpellCounts,
     remaining: tuple[ScoredCard, ...],
     constraints: SpellConstraints,
+    pair: str,
     config: DeckBuilderConfig,
 ) -> bool:
     slots_remaining = constraints.spell_count - counts.total
@@ -1005,21 +1227,27 @@ def _can_complete_selection(
     if len(remaining) < slots_remaining:
         return False
 
-    states = {(0, 0, 0, 0)}
+    states = {(0, 0, 0, 0, 0)}
     creature_room = constraints.creature_ceiling - counts.creatures
     expensive_room = constraints.maximum_expensive_spells - counts.expensive
+    splash_room = constraints.maximum_splash_spells - counts.splashes
     for card in remaining:
         creature = 1 if _is_creature_card(card=card.card) else 0
         two_drop = 1 if _is_two_drop(card=card, config=config) else 0
         expensive = 1 if _is_expensive_spell(card=card, config=config) else 0
+        splash = 1 if _is_splash_card(card=card.card, pair=pair) else 0
         next_states = set(states)
-        for selected_count, creatures, two_drops, expensive_spells in states:
+        for selected_count, creatures, two_drops, expensive_spells, splashes in states:
             if selected_count >= slots_remaining:
                 continue
 
             next_creatures = creatures + creature
             next_expensive = expensive_spells + expensive
+            next_splashes = splashes + splash
             if next_creatures > creature_room or next_expensive > expensive_room:
+                continue
+
+            if next_splashes > splash_room:
                 continue
 
             next_states.add(
@@ -1028,12 +1256,13 @@ def _can_complete_selection(
                     next_creatures,
                     min(constraints.minimum_two_drops, two_drops + two_drop),
                     next_expensive,
+                    next_splashes,
                 )
             )
 
         states = next_states
 
-    for selected_count, creatures, two_drops, expensive_spells in states:
+    for selected_count, creatures, two_drops, expensive_spells, splashes in states:
         if selected_count != slots_remaining:
             continue
 
@@ -1042,6 +1271,7 @@ def _can_complete_selection(
             creatures=counts.creatures + creatures,
             two_drops=counts.two_drops + two_drops,
             expensive=counts.expensive + expensive_spells,
+            splashes=counts.splashes + splashes,
         )
         if _counts_satisfy_constraints(counts=final_counts, constraints=constraints):
             return True
@@ -1100,6 +1330,7 @@ def _spell_counts(
     *,
     cards: tuple[ScoredCard, ...],
     config: DeckBuilderConfig,
+    pair: str | None = None,
 ) -> SpellCounts:
     return SpellCounts(
         total=len(cards),
@@ -1107,6 +1338,11 @@ def _spell_counts(
         two_drops=sum(1 for card in cards if _is_two_drop(card=card, config=config)),
         expensive=sum(
             1 for card in cards if _is_expensive_spell(card=card, config=config)
+        ),
+        splashes=(
+            0
+            if pair is None
+            else sum(1 for card in cards if _is_splash_card(card=card.card, pair=pair))
         ),
     )
 
@@ -1123,6 +1359,7 @@ def _counts_satisfy_constraints(
         and counts.creatures <= constraints.creature_ceiling
         and counts.two_drops >= constraints.minimum_two_drops
         and counts.expensive <= constraints.maximum_expensive_spells
+        and counts.splashes <= constraints.maximum_splash_spells
     )
 
 
@@ -1206,11 +1443,16 @@ def _selected_nonbasic_lands(
     card_database: CardDatabase,
     pair: str,
     land_count: int,
+    splash_colors: tuple[str, ...],
 ) -> tuple[LandCard, ...]:
     lands: list[LandCard] = []
     for index, grp_id in enumerate(pool_grp_ids):
         card = card_database.lookup(grp_id=grp_id)
-        if not _is_in_pair_nonbasic_land(card=card, pair=pair):
+        if not _is_selected_nonbasic_land(
+            card=card,
+            pair=pair,
+            splash_colors=splash_colors,
+        ):
             continue
 
         lands.append(
@@ -1221,15 +1463,52 @@ def _selected_nonbasic_lands(
             )
         )
 
-    return tuple(lands[:land_count])
+    return tuple(sorted(lands, key=lambda land: _nonbasic_land_sort_key(
+        land=land,
+        pair=pair,
+        splash_colors=splash_colors,
+    ))[:land_count])
 
 
-def _is_in_pair_nonbasic_land(*, card: CardInfo, pair: str) -> bool:
+def _is_selected_nonbasic_land(
+    *,
+    card: CardInfo,
+    pair: str,
+    splash_colors: tuple[str, ...],
+) -> bool:
     if not _is_land_card(card=card) or _is_basic_land_card(card=card):
         return False
 
     source_colors = _land_source_colors(card=card)
-    return bool(source_colors) and all(color in pair for color in source_colors)
+    if not source_colors:
+        return False
+
+    if all(color in pair for color in source_colors):
+        return True
+
+    return bool(splash_colors) and any(color in splash_colors for color in source_colors)
+
+
+def _nonbasic_land_sort_key(
+    *,
+    land: LandCard,
+    pair: str,
+    splash_colors: tuple[str, ...],
+) -> tuple[int, int]:
+    fixes_splash = any(color in splash_colors for color in land.source_colors)
+    supports_pair = any(color in pair for color in land.source_colors)
+    if fixes_splash and supports_pair:
+        priority = 0
+    elif supports_pair:
+        priority = 1
+    else:
+        priority = 2
+
+    return (priority, land.original_index)
+
+
+def _is_in_pair_nonbasic_land(*, card: CardInfo, pair: str) -> bool:
+    return _is_selected_nonbasic_land(card=card, pair=pair, splash_colors=())
 
 
 def _is_land_card(*, card: CardInfo) -> bool:
@@ -1464,6 +1743,12 @@ def _format_build_sheet(
         f"{_format_color_counts(mana_base.source_counts)} "
         f"(floor {config.main_color_source_floor})",
     ]
+    similarity_line = _format_similarity_line(
+        spell_selection=spell_selection,
+        mana_base=mana_base,
+    )
+    if similarity_line is not None:
+        lines.append(similarity_line)
     lines.extend(
         _format_spell_selection(
             selection=spell_selection,
@@ -1474,6 +1759,26 @@ def _format_build_sheet(
     lines.extend(_format_land_section(mana_base=mana_base))
     lines.extend(_format_bench_section(selection=spell_selection, config=config))
     return lines
+
+
+def _format_similarity_line(
+    *,
+    spell_selection: SpellSelection,
+    mana_base: ManaBase,
+) -> str | None:
+    targets = spell_selection.structure_targets
+    if targets is None:
+        return None
+
+    return (
+        "Similarity: "
+        f"17Lands trophy {targets.pair} decks in {targets.set_code} "
+        f"(n={targets.sample_size}): avg "
+        f"{targets.average_creature_count:.1f} creatures / "
+        f"{targets.average_land_count:.1f} lands; your build: "
+        f"{spell_selection.counts.creatures} / {mana_base.land_count}."
+    )
+
 
 
 def _format_land_section(*, mana_base: ManaBase) -> list[str]:
@@ -1533,7 +1838,7 @@ def _format_spell_selection(
         f"(minimum {constraints.minimum_two_drops})",
         f"Expensive spells MV >= {config.expensive_spell_mana_value:g}: "
         f"{counts.expensive} (soft cap {constraints.maximum_expensive_spells})",
-        _format_splash_note(selection=selection),
+        _format_splash_note(selection=selection, config=config),
         f"Relaxation order: {' -> '.join(config.relaxation_order)}",
         f"Applied relaxations: {_format_relaxations(selection.applied_relaxations)}",
         "Creatures:",
@@ -1571,11 +1876,24 @@ def _format_bench_section(
 
 
 
-def _format_splash_note(*, selection: SpellSelection) -> str:
-    if selection.allow_splash_requested:
-        return "Splash: --allow-splash accepted but inert in v1; off-pair cards excluded"
+def _format_splash_note(*, selection: SpellSelection, config: DeckBuilderConfig) -> str:
+    if not selection.allow_splash_requested:
+        return "Splash: disabled (--allow-splash not set; off-pair cards excluded)"
 
-    return "Splash: disabled (--allow-splash is inert in v1; off-pair cards excluded)"
+    if selection.splash_fixing_sources < config.splash_minimum_fixing_sources:
+        return (
+            "Splash: enabled but unavailable "
+            f"({selection.splash_fixing_sources}/"
+            f"{config.splash_minimum_fixing_sources} fixing sources; "
+            "off-pair cards excluded)"
+        )
+
+    return (
+        "Splash: enabled "
+        f"({selection.splash_fixing_sources} fixing sources; "
+        f"selected {selection.counts.splashes}/"
+        f"{selection.constraints.maximum_splash_spells} elite off-pair cards)"
+    )
 
 
 
@@ -1640,6 +1958,12 @@ def _bench_reason(
         and selection.counts.creatures >= selection.constraints.creature_ceiling
     ):
         return "cut: creature ceiling"
+
+    if (
+        _is_splash_card(card=card.card, pair=selection.pair)
+        and selection.counts.splashes >= selection.constraints.maximum_splash_spells
+    ):
+        return "cut: splash cap"
 
     return "cut: lower score"
 
@@ -1728,6 +2052,21 @@ def _validate_deck_builder_config(*, config: DeckBuilderConfig) -> None:
 
     if config.near_tie_creature_preference_points < 0:
         raise DeckBuilderError("Deck-builder near-tie preference must be non-negative.")
+
+    if config.splash_max_cards < 0:
+        raise DeckBuilderError("Deck-builder splash maximum must be non-negative.")
+
+    if config.splash_minimum_fixing_sources < 0:
+        raise DeckBuilderError("Deck-builder splash fixing minimum must be non-negative.")
+
+    if config.splash_elite_score_minimum < 0:
+        raise DeckBuilderError("Deck-builder splash score threshold must be non-negative.")
+
+    if config.structure_maindeck_rate_threshold < 0:
+        raise DeckBuilderError("Deck-builder structure threshold must be non-negative.")
+
+    if config.structure_min_land_count > config.structure_max_land_count:
+        raise DeckBuilderError("Deck-builder structure land range is invalid.")
 
     if len(config.relaxation_order) < 5:
         raise DeckBuilderError("Deck-builder relaxation order must describe all stages.")

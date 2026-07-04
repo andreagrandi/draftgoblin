@@ -28,6 +28,7 @@ GOLDEN_REPLAY_PATH = (
 
 
 def test_replay_fixture_matches_committed_golden_output(
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     exit_code = main(
@@ -36,6 +37,8 @@ def test_replay_fixture_matches_committed_golden_output(
             str(FIXTURE_LOG_PATH),
             "--bulk-file",
             str(SCRYFALL_BULK_SAMPLE_PATH),
+            "--app-dir",
+            str(tmp_path),
         ]
     )
 

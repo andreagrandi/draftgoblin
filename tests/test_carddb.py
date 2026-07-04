@@ -55,6 +55,12 @@ def test_scryfall_bulk_keeps_mana_cost_and_produced_mana(tmp_path: Path) -> None
                 '{"arena_id":2,"name":"Dual Land","colors":[],'
                 '"cmc":0,"rarity":"common","type_line":"Land",'
                 '"produced_mana":["W","U"]}\n',
+                '{"arena_id":3,"name":"Colorless Land","colors":[],'
+                '"cmc":0,"rarity":"common","type_line":"Land",'
+                '"produced_mana":["C"]}\n',
+                '{"arena_id":4,"name":"Hybrid Fixer","colors":[],'
+                '"cmc":0,"rarity":"common","type_line":"Land",'
+                '"produced_mana":["C","G"]}\n',
             )
         ),
         encoding="utf-8",
@@ -64,6 +70,8 @@ def test_scryfall_bulk_keeps_mana_cost_and_produced_mana(tmp_path: Path) -> None
 
     assert database.lookup(grp_id=1).mana_cost == "{W}{W}"
     assert database.lookup(grp_id=2).produced_mana == ("W", "U")
+    assert database.lookup(grp_id=3).produced_mana == ()
+    assert database.lookup(grp_id=4).produced_mana == ("G",)
 
 
 

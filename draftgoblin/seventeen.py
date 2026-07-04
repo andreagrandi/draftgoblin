@@ -4,12 +4,17 @@ Keep network access isolated so CI can exercise recorded responses only.
 
 from __future__ import annotations
 
+import csv
+import gzip
+import io
 import json
+import shutil
+import tarfile
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from os import PathLike
@@ -17,7 +22,14 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 from draftgoblin import __version__
-from draftgoblin.config import COLOR_PAIRS, PICK_ENGINE, RATINGS_CACHE_TTL_HOURS
+from draftgoblin.carddb import CardDatabase, CardInfo
+from draftgoblin.config import (
+    COLOR_PAIRS,
+    DECK_BUILDER,
+    PICK_ENGINE,
+    RATINGS_CACHE_TTL_HOURS,
+    DeckBuilderConfig,
+)
 from draftgoblin.paths import app_data_dir
 
 PathInput: TypeAlias = str | PathLike[str]
@@ -28,6 +40,10 @@ SEVENTEEN_LANDS_ATTRIBUTION = "Card data from 17Lands (17lands.com)"
 SEVENTEEN_LANDS_BASE_URL = "https://www.17lands.com"
 CARD_RATINGS_ENDPOINT = f"{SEVENTEEN_LANDS_BASE_URL}/card_ratings/data"
 COLOR_RATINGS_ENDPOINT = f"{SEVENTEEN_LANDS_BASE_URL}/color_ratings/data"
+PUBLIC_DRAFT_DATA_URL_TEMPLATE = (
+    "https://17lands-public.s3.amazonaws.com/analysis_data/draft_data/"
+    "draft_data_public.{set_code}.{event_format}.csv.gz"
+)
 SEVENTEEN_LANDS_USER_AGENT = (
     f"draftgoblin/{__version__} "
     "(+https://github.com/andreagrandi/draftgoblin)"
@@ -37,7 +53,10 @@ PREMIER_DRAFT_FORMAT = "PremierDraft"
 FORMAT_RATING_SOURCE = "format"
 NEUTRAL_PRIOR_SOURCE = "neutral-prior"
 CACHE_SCHEMA_VERSION = 1
+STRUCTURE_CACHE_SCHEMA_VERSION = 1
 SEVENTEEN_CACHE_DIRECTORY_NAME = "17lands"
+STRUCTURE_TARGET_SOURCE = "17lands-public-draft-data"
+CURVE_BUCKETS = ("0-1", "2", "3", "4", "5", "6+")
 HTTP_TIMEOUT_SECONDS = 60
 ALL_TIME_START_DATE = date(year=2020, month=1, day=1)
 
@@ -212,6 +231,212 @@ class ColorPairWinRate:
 
 
 @dataclass(frozen=True, slots=True)
+class StructuralTargets:
+    """Empirical deck-structure targets for one set and color pair.
+    They are derived from 17Lands public draft dumps, not scraped pages.
+    """
+
+    set_code: str
+    event_format: str
+    pair: str
+    sample_size: int
+    average_creature_count: float
+    average_land_count: float
+    average_spell_count: float
+    average_two_drop_count: float
+    average_expensive_spell_count: float
+    average_curve: tuple[tuple[str, float], ...]
+    source: str
+    source_url: str | None
+    computed_at: datetime
+
+    def to_json(self) -> dict[str, object]:
+        """Convert structural targets to Draftgoblin's cache shape.
+        Curve buckets are sorted in the configured display order.
+        """
+
+        return {
+            "set_code": self.set_code,
+            "event_format": self.event_format,
+            "pair": self.pair,
+            "sample_size": self.sample_size,
+            "average_creature_count": self.average_creature_count,
+            "average_land_count": self.average_land_count,
+            "average_spell_count": self.average_spell_count,
+            "average_two_drop_count": self.average_two_drop_count,
+            "average_expensive_spell_count": self.average_expensive_spell_count,
+            "average_curve": dict(self.average_curve),
+            "source": self.source,
+            "source_url": self.source_url,
+            "computed_at": self.computed_at.astimezone(UTC).isoformat(),
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> StructuralTargets:
+        """Load structural targets from the cache shape.
+        Parsing is strict so bad target caches never affect deck building.
+        """
+
+        curve_value = data.get("average_curve")
+        if not isinstance(curve_value, dict):
+            raise SeventeenLandsError("17Lands structure target is missing average_curve.")
+
+        pair = _required_pair(data.get("pair"), field_name="structure.pair")
+        average_curve = tuple(
+            (
+                bucket,
+                _required_float(
+                    curve_value.get(bucket),
+                    field_name=f"structure.average_curve.{bucket}",
+                ),
+            )
+            for bucket in CURVE_BUCKETS
+        )
+        sample_size = _required_int(
+            data.get("sample_size"),
+            field_name="structure.sample_size",
+        )
+        _ensure_non_negative(value=sample_size, field_name="structure.sample_size")
+        return cls(
+            set_code=_required_str(data.get("set_code"), field_name="structure.set_code"),
+            event_format=_required_str(
+                data.get("event_format"),
+                field_name="structure.event_format",
+            ),
+            pair=pair,
+            sample_size=sample_size,
+            average_creature_count=_required_float(
+                data.get("average_creature_count"),
+                field_name="structure.average_creature_count",
+            ),
+            average_land_count=_required_float(
+                data.get("average_land_count"),
+                field_name="structure.average_land_count",
+            ),
+            average_spell_count=_required_float(
+                data.get("average_spell_count"),
+                field_name="structure.average_spell_count",
+            ),
+            average_two_drop_count=_required_float(
+                data.get("average_two_drop_count"),
+                field_name="structure.average_two_drop_count",
+            ),
+            average_expensive_spell_count=_required_float(
+                data.get("average_expensive_spell_count"),
+                field_name="structure.average_expensive_spell_count",
+            ),
+            average_curve=average_curve,
+            source=_required_str(data.get("source"), field_name="structure.source"),
+            source_url=_optional_str(
+                data.get("source_url"),
+                field_name="structure.source_url",
+            ),
+            computed_at=_required_datetime(
+                data.get("computed_at"),
+                field_name="structure.computed_at",
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SeventeenLandsStructureTargets:
+    """Cached empirical structural targets for one set and format.
+    The target table is keyed by canonical two-color pair.
+    """
+
+    set_code: str
+    event_format: str
+    computed_at: datetime
+    source: str
+    source_url: str | None
+    total_decks: int
+    targets: dict[str, StructuralTargets]
+
+    def to_json(self) -> dict[str, object]:
+        """Convert this structure-target cache to stable JSON.
+        Pair keys stay sorted for inspectable cache files.
+        """
+
+        return {
+            "schema_version": STRUCTURE_CACHE_SCHEMA_VERSION,
+            "source": self.source,
+            "source_url": self.source_url,
+            "set_code": self.set_code,
+            "event_format": self.event_format,
+            "computed_at": self.computed_at.astimezone(UTC).isoformat(),
+            "total_decks": self.total_decks,
+            "targets": {
+                pair: target.to_json()
+                for pair, target in sorted(self.targets.items())
+            },
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> SeventeenLandsStructureTargets:
+        """Load one cached structure-target table.
+        Pair keys and embedded pair values must agree.
+        """
+
+        schema_version = _required_int(
+            data.get("schema_version"),
+            field_name="schema_version",
+        )
+        if schema_version != STRUCTURE_CACHE_SCHEMA_VERSION:
+            raise SeventeenLandsError(
+                "Unsupported 17Lands structure cache schema "
+                f"{schema_version}; expected {STRUCTURE_CACHE_SCHEMA_VERSION}."
+            )
+
+        targets_value = data.get("targets")
+        if not isinstance(targets_value, dict):
+            raise SeventeenLandsError("17Lands structure cache is missing targets object.")
+
+        targets: dict[str, StructuralTargets] = {}
+        for key, value in targets_value.items():
+            pair = _required_pair(key, field_name="structure targets key")
+            if not isinstance(value, dict):
+                raise SeventeenLandsError(
+                    f"17Lands structure target {key!r} is not an object."
+                )
+
+            target = StructuralTargets.from_json(data=value)
+            if target.pair != pair:
+                raise SeventeenLandsError(
+                    f"17Lands structure key {pair} does not match entry pair "
+                    f"{target.pair}."
+                )
+
+            targets[pair] = target
+
+        total_decks = _required_int(data.get("total_decks"), field_name="total_decks")
+        _ensure_non_negative(value=total_decks, field_name="total_decks")
+        return cls(
+            set_code=_required_str(data.get("set_code"), field_name="set_code"),
+            event_format=_required_str(data.get("event_format"), field_name="event_format"),
+            computed_at=_required_datetime(data.get("computed_at"), field_name="computed_at"),
+            source=_required_str(data.get("source"), field_name="source"),
+            source_url=_optional_str(data.get("source_url"), field_name="source_url"),
+            total_decks=total_decks,
+            targets=targets,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _DeckStructureMetrics:
+    """Per-deck structure facts before pair-level averaging.
+    Keeping this private avoids exposing unfinished analysis details.
+    """
+
+    pair: str
+    creature_count: int
+    land_count: int
+    spell_count: int
+    two_drop_count: int
+    expensive_spell_count: int
+    curve: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
 class SeventeenLandsFormatData:
     """Cached 17Lands data for one set and event format.
     It contains both card ratings and two-color pair win rates.
@@ -371,6 +596,7 @@ class SeventeenLandsData:
     requested_format: str
     primary: SeventeenLandsFormatData
     fallback: SeventeenLandsFormatData | None
+    structure_targets: dict[str, StructuralTargets] = field(default_factory=dict)
     pair_card_ratings: dict[str, SeventeenLandsFormatData] = field(default_factory=dict)
     pair_card_ratings_loader: Callable[[str], SeventeenLandsFormatData | None] | None = field(
         default=None,
@@ -456,6 +682,13 @@ class SeventeenLandsData:
             fallback_reason=neutral_reason,
         )
 
+    def structure_targets_for(self, *, pair: str) -> StructuralTargets | None:
+        """Return empirical build targets for a pair when cached.
+        Deck building falls back to consensus defaults when this is None.
+        """
+
+        return self.structure_targets.get(pair)
+
     def pair_rating_for(self, *, grp_id: int, pair: str) -> ResolvedCardRating:
         """Resolve a card through locked-pair data when it is strong enough.
         Missing or thin pair rows fall back to all-decks resolution.
@@ -531,6 +764,35 @@ def seventeen_lands_pair_card_cache_path(
         f"{_required_pair(pair, field_name='pair')}-cards.json"
     )
     return root / SEVENTEEN_CACHE_DIRECTORY_NAME / filename
+
+
+def seventeen_lands_structure_targets_cache_path(
+    *,
+    set_code: str,
+    event_format: str,
+    app_dir: PathInput | None = None,
+) -> Path:
+    """Return the cache path for empirical structure targets.
+    Targets are loaded opportunistically by the deck builder when present.
+    """
+
+    root = Path(app_data_dir() if app_dir is None else app_dir)
+    filename = (
+        f"{_path_segment(set_code.upper())}-"
+        f"{_path_segment(event_format)}-structure-targets.json"
+    )
+    return root / SEVENTEEN_CACHE_DIRECTORY_NAME / filename
+
+
+def public_draft_data_url(*, set_code: str, event_format: str) -> str:
+    """Return the preferred 17Lands public draft dump URL.
+    Public dumps are CC BY and preferred by the usage guidelines.
+    """
+
+    return PUBLIC_DRAFT_DATA_URL_TEMPLATE.format(
+        set_code=set_code.upper(),
+        event_format=event_format,
+    )
 
 
 def card_ratings_url(
@@ -621,11 +883,19 @@ def load_or_refresh_17lands_data(
         except SeventeenLandsError:
             fallback = None
 
+    structure_targets = _load_optional_structure_targets(
+        set_code=set_code,
+        event_format=event_format,
+        app_dir=app_dir,
+    )
     return SeventeenLandsData(
         set_code=set_code.upper(),
         requested_format=event_format,
         primary=primary,
         fallback=fallback,
+        structure_targets=(
+            {} if structure_targets is None else structure_targets.targets
+        ),
         pair_card_ratings_loader=lambda pair: load_or_refresh_17lands_pair_card_data(
             set_code=set_code,
             event_format=event_format,
@@ -666,11 +936,19 @@ def load_cached_17lands_data(
             app_dir=app_dir,
         )
 
+    structure_targets = _load_optional_structure_targets(
+        set_code=set_code,
+        event_format=event_format,
+        app_dir=app_dir,
+    )
     return SeventeenLandsData(
         set_code=set_code.upper(),
         requested_format=event_format,
         primary=primary,
         fallback=fallback,
+        structure_targets=(
+            {} if structure_targets is None else structure_targets.targets
+        ),
         pair_card_ratings_loader=lambda pair: _load_optional_pair_card_data(
             set_code=set_code,
             event_format=event_format,
@@ -817,6 +1095,251 @@ def load_17lands_format_data(
         )
 
     return dataset
+
+
+def load_17lands_structure_targets(
+    *,
+    set_code: str,
+    event_format: str = QUICK_DRAFT_FORMAT,
+    app_dir: PathInput | None = None,
+    cache_path: PathInput | None = None,
+) -> SeventeenLandsStructureTargets:
+    """Load cached empirical structure targets without network access.
+    Missing caches are intentionally optional for normal deck building.
+    """
+
+    path = _structure_cache_path(
+        set_code=set_code,
+        event_format=event_format,
+        app_dir=app_dir,
+        cache_path=cache_path,
+    )
+    if not path.exists():
+        raise SeventeenLandsCacheMissingError(
+            f"17Lands structure cache does not exist at {path}."
+        )
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise SeventeenLandsError(
+            f"Malformed 17Lands structure cache {path}: {error}"
+        ) from error
+
+    if not isinstance(data, dict):
+        raise SeventeenLandsError(
+            f"Malformed 17Lands structure cache {path}: expected object."
+        )
+
+    targets = SeventeenLandsStructureTargets.from_json(data=data)
+    if targets.set_code != set_code.upper():
+        raise SeventeenLandsError(
+            f"17Lands structure cache {path} is for set {targets.set_code}, "
+            f"not {set_code.upper()}."
+        )
+
+    if targets.event_format != event_format:
+        raise SeventeenLandsError(
+            f"17Lands structure cache {path} is for format {targets.event_format}, "
+            f"not {event_format}."
+        )
+
+    return targets
+
+
+def save_17lands_structure_targets(
+    targets: SeventeenLandsStructureTargets,
+    *,
+    app_dir: PathInput | None = None,
+    cache_path: PathInput | None = None,
+) -> Path:
+    """Write empirical structure targets atomically.
+    The file is small because it stores only per-pair aggregates.
+    """
+
+    path = _structure_cache_path(
+        set_code=targets.set_code,
+        event_format=targets.event_format,
+        app_dir=app_dir,
+        cache_path=cache_path,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(targets.to_json(), indent=2, sort_keys=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        delete=False,
+        dir=path.parent,
+        encoding="utf-8",
+    ) as temporary_file:
+        temporary_file.write(payload)
+        temporary_file.write("\n")
+        temporary_path = Path(temporary_file.name)
+
+    temporary_path.replace(path)
+    return path
+
+
+def refresh_17lands_structure_targets(
+    *,
+    set_code: str,
+    event_format: str = QUICK_DRAFT_FORMAT,
+    card_database: CardDatabase,
+    app_dir: PathInput | None = None,
+    cache_path: PathInput | None = None,
+    draft_data_file: PathInput | None = None,
+    draft_data_url: str | None = None,
+    computed_at: datetime | None = None,
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+    config: DeckBuilderConfig = DECK_BUILDER,
+) -> SeventeenLandsStructureTargets:
+    """Compute and cache structure targets from public draft data.
+    Public dumps are the usage-guideline-compliant source for deck-level data.
+    """
+
+    source_url = draft_data_url or public_draft_data_url(
+        set_code=set_code,
+        event_format=event_format,
+    )
+    if draft_data_file is None:
+        with tempfile.TemporaryDirectory(prefix="draftgoblin-17lands-") as directory:
+            temporary_path = Path(directory) / "draft-data.csv.gz"
+            _download_public_draft_data(
+                url=source_url,
+                path=temporary_path,
+                timeout_seconds=timeout_seconds,
+            )
+            targets = compute_17lands_structure_targets(
+                set_code=set_code,
+                event_format=event_format,
+                card_database=card_database,
+                draft_data_file=temporary_path,
+                source_url=source_url,
+                computed_at=computed_at,
+                config=config,
+            )
+    else:
+        targets = compute_17lands_structure_targets(
+            set_code=set_code,
+            event_format=event_format,
+            card_database=card_database,
+            draft_data_file=draft_data_file,
+            source_url=source_url if draft_data_url is not None else None,
+            computed_at=computed_at,
+            config=config,
+        )
+
+    save_17lands_structure_targets(
+        targets,
+        app_dir=app_dir,
+        cache_path=cache_path,
+    )
+    return targets
+
+
+def compute_17lands_structure_targets(
+    *,
+    set_code: str,
+    event_format: str = QUICK_DRAFT_FORMAT,
+    card_database: CardDatabase,
+    draft_data_file: PathInput,
+    source_url: str | None = None,
+    computed_at: datetime | None = None,
+    config: DeckBuilderConfig = DECK_BUILDER,
+) -> SeventeenLandsStructureTargets:
+    """Compute per-pair targets from a 17Lands public draft dump.
+    Only trophy drafts are included, grouped by draft id.
+    """
+
+    timestamp = datetime.now(tz=UTC) if computed_at is None else computed_at.astimezone(UTC)
+    decks = _trophy_decks_from_draft_data(
+        path=draft_data_file,
+        set_code=set_code,
+        event_format=event_format,
+        card_database=card_database,
+        config=config,
+    )
+    metrics_by_pair: dict[str, list[_DeckStructureMetrics]] = {
+        pair: [] for pair in COLOR_PAIRS
+    }
+    for cards in decks.values():
+        metrics = _deck_structure_metrics(cards=tuple(cards), config=config)
+        if metrics is not None:
+            metrics_by_pair[metrics.pair].append(metrics)
+
+    targets = {
+        pair: _structural_targets_from_metrics(
+            set_code=set_code.upper(),
+            event_format=event_format,
+            pair=pair,
+            metrics=tuple(metrics),
+            source_url=source_url,
+            computed_at=timestamp,
+        )
+        for pair, metrics in metrics_by_pair.items()
+        if metrics
+    }
+    return SeventeenLandsStructureTargets(
+        set_code=set_code.upper(),
+        event_format=event_format,
+        computed_at=timestamp,
+        source=STRUCTURE_TARGET_SOURCE,
+        source_url=source_url,
+        total_decks=sum(len(metrics) for metrics in metrics_by_pair.values()),
+        targets=targets,
+    )
+
+
+def build_17lands_structure_targets_from_draft_rows(
+    *,
+    set_code: str,
+    event_format: str = QUICK_DRAFT_FORMAT,
+    card_database: CardDatabase,
+    rows: Iterable[Mapping[str, str]],
+    source_url: str | None = None,
+    computed_at: datetime | None = None,
+    config: DeckBuilderConfig = DECK_BUILDER,
+) -> SeventeenLandsStructureTargets:
+    """Build structure targets from already-loaded draft rows.
+    Tests use this to exercise parsing without network or compressed files.
+    """
+
+    timestamp = datetime.now(tz=UTC) if computed_at is None else computed_at.astimezone(UTC)
+    decks = _trophy_decks_from_rows(
+        rows=rows,
+        set_code=set_code,
+        event_format=event_format,
+        card_database=card_database,
+        config=config,
+    )
+    metrics_by_pair: dict[str, list[_DeckStructureMetrics]] = {
+        pair: [] for pair in COLOR_PAIRS
+    }
+    for cards in decks.values():
+        metrics = _deck_structure_metrics(cards=tuple(cards), config=config)
+        if metrics is not None:
+            metrics_by_pair[metrics.pair].append(metrics)
+
+    targets = {
+        pair: _structural_targets_from_metrics(
+            set_code=set_code.upper(),
+            event_format=event_format,
+            pair=pair,
+            metrics=tuple(metrics),
+            source_url=source_url,
+            computed_at=timestamp,
+        )
+        for pair, metrics in metrics_by_pair.items()
+        if metrics
+    }
+    return SeventeenLandsStructureTargets(
+        set_code=set_code.upper(),
+        event_format=event_format,
+        computed_at=timestamp,
+        source=STRUCTURE_TARGET_SOURCE,
+        source_url=source_url,
+        total_decks=sum(len(metrics) for metrics in metrics_by_pair.values()),
+        targets=targets,
+    )
 
 
 def save_17lands_format_data(
@@ -1082,6 +1605,350 @@ def _load_optional_pair_card_data(
         )
     except SeventeenLandsCacheMissingError:
         return None
+
+
+def _load_optional_structure_targets(
+    *,
+    set_code: str,
+    event_format: str,
+    app_dir: PathInput | None,
+) -> SeventeenLandsStructureTargets | None:
+    try:
+        return load_17lands_structure_targets(
+            set_code=set_code,
+            event_format=event_format,
+            app_dir=app_dir,
+        )
+    except SeventeenLandsCacheMissingError:
+        return None
+
+
+def _trophy_decks_from_draft_data(
+    *,
+    path: PathInput,
+    set_code: str,
+    event_format: str,
+    card_database: CardDatabase,
+    config: DeckBuilderConfig,
+) -> dict[str, list[CardInfo]]:
+    return _trophy_decks_from_rows(
+        rows=_iter_draft_data_rows(path=path),
+        set_code=set_code,
+        event_format=event_format,
+        card_database=card_database,
+        config=config,
+    )
+
+
+def _trophy_decks_from_rows(
+    *,
+    rows: Iterable[Mapping[str, str]],
+    set_code: str,
+    event_format: str,
+    card_database: CardDatabase,
+    config: DeckBuilderConfig,
+) -> dict[str, list[CardInfo]]:
+    name_index = _card_name_index(card_database=card_database)
+    decks: dict[str, list[CardInfo]] = {}
+    for row in rows:
+        if not _draft_row_matches(
+            row=row,
+            set_code=set_code,
+            event_format=event_format,
+        ):
+            continue
+
+        if _optional_int(
+            row.get("event_match_wins"),
+            field_name="event_match_wins",
+        ) != _trophy_wins(event_format=event_format):
+            continue
+
+        maindeck_rate = _optional_float(
+            row.get("pick_maindeck_rate"),
+            field_name="pick_maindeck_rate",
+        )
+        if maindeck_rate is None or maindeck_rate < config.structure_maindeck_rate_threshold:
+            continue
+
+        draft_id = _required_str(row.get("draft_id"), field_name="draft_id")
+        pick_name = _required_str(row.get("pick"), field_name="pick")
+        card = name_index.get(_normalize_card_name(pick_name))
+        if card is None:
+            continue
+
+        decks.setdefault(draft_id, []).append(card)
+
+    return decks
+
+
+def _draft_row_matches(
+    *,
+    row: Mapping[str, str],
+    set_code: str,
+    event_format: str,
+) -> bool:
+    row_set = row.get("expansion")
+    if row_set not in {None, "", set_code.upper()}:
+        return False
+
+    row_format = row.get("event_type")
+    return row_format in {None, "", event_format}
+
+
+def _iter_draft_data_rows(*, path: PathInput) -> Iterable[Mapping[str, str]]:
+    draft_path = Path(path)
+    if tarfile.is_tarfile(draft_path):
+        with tarfile.open(draft_path, mode="r:*") as archive:
+            member = _first_regular_tar_member(archive=archive)
+            if member is None:
+                raise SeventeenLandsError(
+                    f"17Lands draft data archive {draft_path} contains no files."
+                )
+
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                raise SeventeenLandsError(
+                    f"Could not read {member.name} from {draft_path}."
+                )
+
+            with extracted:
+                with io.TextIOWrapper(
+                    extracted,
+                    encoding="utf-8",
+                    newline="",
+                ) as text_file:
+                    yield from csv.DictReader(text_file)
+
+        return
+
+    if draft_path.suffix == ".gz":
+        with gzip.open(draft_path, mode="rt", encoding="utf-8", newline="") as csv_file:
+            yield from csv.DictReader(csv_file)
+        return
+
+    with draft_path.open(mode="rt", encoding="utf-8", newline="") as csv_file:
+        yield from csv.DictReader(csv_file)
+
+
+def _first_regular_tar_member(*, archive: tarfile.TarFile) -> tarfile.TarInfo | None:
+    for member in archive:
+        if member.isfile():
+            return member
+
+    return None
+
+
+def _download_public_draft_data(
+    *,
+    url: str,
+    path: Path,
+    timeout_seconds: int,
+) -> None:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/gzip,application/octet-stream;q=0.9,*/*;q=0.8",
+            "User-Agent": SEVENTEEN_LANDS_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            with path.open(mode="wb") as output_file:
+                shutil.copyfileobj(response, output_file)
+    except urllib.error.URLError as error:
+        raise SeventeenLandsError(
+            f"Failed to download 17Lands public draft data: {error}"
+        ) from error
+
+
+def _card_name_index(*, card_database: CardDatabase) -> dict[str, CardInfo]:
+    index: dict[str, CardInfo] = {}
+    for card in card_database.cards.values():
+        for name in _card_lookup_names(card=card):
+            index.setdefault(_normalize_card_name(name), card)
+
+    return index
+
+
+def _card_lookup_names(*, card: CardInfo) -> tuple[str, ...]:
+    names = [card.name]
+    names.extend(part.strip() for part in card.name.split("//") if part.strip())
+    return tuple(dict.fromkeys(names))
+
+
+def _normalize_card_name(name: str) -> str:
+    return " ".join(name.casefold().split())
+
+
+def _deck_structure_metrics(
+    *,
+    cards: tuple[CardInfo, ...],
+    config: DeckBuilderConfig,
+) -> _DeckStructureMetrics | None:
+    nonland_cards = tuple(card for card in cards if not _structure_is_land_card(card=card))
+    land_count = config.deck_size - len(nonland_cards)
+    if land_count < config.structure_min_land_count:
+        return None
+
+    if land_count > config.structure_max_land_count:
+        return None
+
+    pair = _structure_pair(cards=nonland_cards)
+    if pair is None:
+        return None
+
+    curve = {bucket: 0 for bucket in CURVE_BUCKETS}
+    for card in nonland_cards:
+        curve[_curve_bucket(card=card, config=config)] += 1
+
+    return _DeckStructureMetrics(
+        pair=pair,
+        creature_count=sum(
+            1 for card in nonland_cards if _structure_is_creature_card(card=card)
+        ),
+        land_count=land_count,
+        spell_count=len(nonland_cards),
+        two_drop_count=curve["2"],
+        expensive_spell_count=curve["6+"],
+        curve=curve,
+    )
+
+
+def _structure_pair(*, cards: tuple[CardInfo, ...]) -> str | None:
+    color_counts = _empty_structure_color_counts()
+    for card in cards:
+        for color in card.colors:
+            if color in color_counts:
+                color_counts[color] += 1
+
+    colors = tuple(
+        color
+        for color, count in sorted(
+            color_counts.items(),
+            key=lambda item: (-item[1], _color_order_index(color=item[0])),
+        )
+        if count > 0
+    )
+    if len(colors) < 2:
+        return None
+
+    return _canonical_pair(colors=colors[:2])
+
+
+def _canonical_pair(*, colors: tuple[str, str]) -> str:
+    color_set = set(colors)
+    for pair in COLOR_PAIRS:
+        if set(pair) == color_set:
+            return pair
+
+    raise SeventeenLandsError(f"Could not canonicalize color pair {colors}.")
+
+
+def _empty_structure_color_counts() -> dict[str, int]:
+    colors: dict[str, int] = {}
+    for pair in COLOR_PAIRS:
+        for color in pair:
+            colors.setdefault(color, 0)
+
+    return colors
+
+
+def _color_order_index(*, color: str) -> int:
+    colors = tuple(_empty_structure_color_counts())
+    return colors.index(color)
+
+
+def _structure_is_land_card(*, card: CardInfo) -> bool:
+    return any("Land" in type_line for type_line in card.types)
+
+
+def _structure_is_creature_card(*, card: CardInfo) -> bool:
+    return any("Creature" in type_line for type_line in card.types)
+
+
+def _curve_bucket(*, card: CardInfo, config: DeckBuilderConfig) -> str:
+    mana_value = card.mana_value or 0.0
+    if mana_value < config.two_drop_mana_value:
+        return "0-1"
+
+    if mana_value >= config.expensive_spell_mana_value:
+        return "6+"
+
+    return f"{int(mana_value)}"
+
+
+def _trophy_wins(*, event_format: str) -> int:
+    if event_format.startswith("Trad"):
+        return 3
+
+    return 7
+
+
+def _structural_targets_from_metrics(
+    *,
+    set_code: str,
+    event_format: str,
+    pair: str,
+    metrics: tuple[_DeckStructureMetrics, ...],
+    source_url: str | None,
+    computed_at: datetime,
+) -> StructuralTargets:
+    sample_size = len(metrics)
+    if sample_size <= 0:
+        raise SeventeenLandsError("Cannot build structure targets without decks.")
+
+    return StructuralTargets(
+        set_code=set_code,
+        event_format=event_format,
+        pair=pair,
+        sample_size=sample_size,
+        average_creature_count=_average(
+            values=tuple(metric.creature_count for metric in metrics)
+        ),
+        average_land_count=_average(values=tuple(metric.land_count for metric in metrics)),
+        average_spell_count=_average(values=tuple(metric.spell_count for metric in metrics)),
+        average_two_drop_count=_average(
+            values=tuple(metric.two_drop_count for metric in metrics)
+        ),
+        average_expensive_spell_count=_average(
+            values=tuple(metric.expensive_spell_count for metric in metrics)
+        ),
+        average_curve=tuple(
+            (
+                bucket,
+                _average(values=tuple(metric.curve[bucket] for metric in metrics)),
+            )
+            for bucket in CURVE_BUCKETS
+        ),
+        source=STRUCTURE_TARGET_SOURCE,
+        source_url=source_url,
+        computed_at=computed_at,
+    )
+
+
+def _average(*, values: tuple[int, ...]) -> float:
+    if not values:
+        return 0.0
+
+    return sum(values) / len(values)
+
+
+def _structure_cache_path(
+    *,
+    set_code: str,
+    event_format: str,
+    app_dir: PathInput | None,
+    cache_path: PathInput | None,
+) -> Path:
+    if cache_path is not None:
+        return Path(cache_path)
+
+    return seventeen_lands_structure_targets_cache_path(
+        set_code=set_code,
+        event_format=event_format,
+        app_dir=app_dir,
+    )
 
 
 def _parse_card_ratings(*, payload: Any) -> dict[int, SeventeenCardStats]:

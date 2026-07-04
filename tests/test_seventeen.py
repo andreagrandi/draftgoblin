@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.config import COLOR_PAIRS, PICK_ENGINE
 from draftgoblin.seventeen import (
     NEUTRAL_PRIOR_SOURCE,
@@ -12,11 +13,15 @@ from draftgoblin.seventeen import (
     QUICK_DRAFT_FORMAT,
     SEVENTEEN_LANDS_ATTRIBUTION,
     SeventeenLandsError,
+    build_17lands_structure_targets_from_draft_rows,
+    load_17lands_structure_targets,
     load_cached_17lands_data,
     load_or_refresh_17lands_data,
     load_or_refresh_17lands_format_data,
+    save_17lands_structure_targets,
     seventeen_lands_cache_path,
     seventeen_lands_pair_card_cache_path,
+    seventeen_lands_structure_targets_cache_path,
 )
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -220,8 +225,148 @@ def test_pair_filtered_card_ratings_are_loaded_lazily_and_cached(
     ).exists()
 
 
+def test_structure_targets_are_computed_cached_and_loaded_with_ratings(
+    tmp_path: Path,
+) -> None:
+    computed_at = datetime(2026, 7, 3, 12, 0, tzinfo=UTC)
+    targets = build_17lands_structure_targets_from_draft_rows(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        card_database=_structure_card_database(),
+        rows=_structure_rows(),
+        source_url="https://17lands-public.example/draft.csv.gz",
+        computed_at=computed_at,
+    )
+
+    save_17lands_structure_targets(targets, app_dir=tmp_path)
+    loaded_targets = load_17lands_structure_targets(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+    )
+    data = load_cached_17lands_data(set_code="TST", app_dir=tmp_path)
+    wu_targets = data.structure_targets_for(pair="WU")
+
+    assert loaded_targets.total_decks == 2
+    assert set(loaded_targets.targets) == {"WU"}
+    assert wu_targets is not None
+    assert wu_targets.sample_size == 2
+    assert wu_targets.average_creature_count == 15.0
+    assert wu_targets.average_land_count == 16.5
+    assert wu_targets.average_two_drop_count == 6.0
+    assert seventeen_lands_structure_targets_cache_path(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+    ).exists()
+
+
 def _load_json(*, path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _structure_card_database() -> CardDatabase:
+    cards: dict[int, CardInfo] = {}
+    for offset in range(16):
+        grp_id = 2000 + offset
+        cards[grp_id] = _structure_card(
+            grp_id=grp_id,
+            name=f"Structure Creature {offset}",
+            colors=("W",) if offset % 2 == 0 else ("U",),
+            mana_value=2.0 if offset < 6 else 3.0,
+            types=("Creature — Fixture",),
+        )
+
+    for offset in range(8):
+        grp_id = 2100 + offset
+        cards[grp_id] = _structure_card(
+            grp_id=grp_id,
+            name=f"Structure Spell {offset}",
+            colors=("W",) if offset % 2 == 0 else ("U",),
+            mana_value=3.0,
+            types=("Instant",),
+        )
+
+    cards[2200] = _structure_card(
+        grp_id=2200,
+        name="Ignored Red Card",
+        colors=("R",),
+        mana_value=2.0,
+        types=("Creature — Fixture",),
+    )
+    return CardDatabase(cards=cards)
+
+
+def _structure_card(
+    *,
+    grp_id: int,
+    name: str,
+    colors: tuple[str, ...],
+    mana_value: float,
+    types: tuple[str, ...],
+) -> CardInfo:
+    return CardInfo(
+        grp_id=grp_id,
+        name=name,
+        colors=colors,
+        mana_value=mana_value,
+        rarity="common",
+        types=types,
+    )
+
+
+def _structure_rows() -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    rows.extend(
+        _structure_deck_rows(
+            draft_id="draft-a",
+            wins="7",
+            creature_count=16,
+            spell_count=23,
+        )
+    )
+    rows.extend(
+        _structure_deck_rows(
+            draft_id="draft-b",
+            wins="7",
+            creature_count=14,
+            spell_count=24,
+        )
+    )
+    rows.extend(
+        _structure_deck_rows(
+            draft_id="draft-c",
+            wins="6",
+            creature_count=16,
+            spell_count=23,
+        )
+    )
+    return rows
+
+
+def _structure_deck_rows(
+    *,
+    draft_id: str,
+    wins: str,
+    creature_count: int,
+    spell_count: int,
+) -> list[dict[str, str]]:
+    creature_names = [f"Structure Creature {index % 16}" for index in range(creature_count)]
+    spell_names = [
+        f"Structure Spell {index % 8}"
+        for index in range(spell_count - creature_count)
+    ]
+    return [
+        {
+            "draft_id": draft_id,
+            "expansion": "TST",
+            "event_type": QUICK_DRAFT_FORMAT,
+            "event_match_wins": wins,
+            "pick": name,
+            "pick_maindeck_rate": "1.0",
+        }
+        for name in (*creature_names, *spell_names)
+    ]
 
 
 def _pair_card_rating_row() -> dict[str, object]:
