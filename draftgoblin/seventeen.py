@@ -8,6 +8,7 @@ import csv
 import gzip
 import io
 import json
+import math
 import shutil
 import tarfile
 import tempfile
@@ -59,6 +60,23 @@ STRUCTURE_TARGET_SOURCE = "17lands-public-draft-data"
 CURVE_BUCKETS = ("0-1", "2", "3", "4", "5", "6+")
 HTTP_TIMEOUT_SECONDS = 60
 ALL_TIME_START_DATE = date(year=2020, month=1, day=1)
+GRADE_STEP_STANDARD_DEVIATIONS = 0.33
+GRADE_LABELS = (
+    "F",
+    "D-",
+    "D",
+    "D+",
+    "C-",
+    "C",
+    "C+",
+    "B-",
+    "B",
+    "B+",
+    "A-",
+    "A",
+    "A+",
+)
+GRADE_CENTER_INDEX = GRADE_LABELS.index("C")
 
 
 class SeventeenLandsError(RuntimeError):
@@ -456,6 +474,20 @@ class SeventeenLandsFormatData:
 
         return SEVENTEEN_LANDS_ATTRIBUTION
 
+    def letter_grade_for(self, *, grp_id: int) -> str | None:
+        """Return the 17Lands-style GIH grade for one card.
+        Grades use the selected format's GIH distribution.
+        """
+
+        stats = self.card_ratings.get(grp_id)
+        if stats is None:
+            return None
+
+        return _letter_grade_for_metric(
+            value=stats.gih_win_rate,
+            distribution=_gih_win_rate_distribution(stats=self.card_ratings.values()),
+        )
+
     def to_json(self) -> dict[str, object]:
         """Convert this dataset to Draftgoblin's cache shape.
         Keys are sorted so cache files remain stable and inspectable.
@@ -574,6 +606,7 @@ class ResolvedCardRating:
     opening_hand_win_rate: float | None
     drawn_improvement_win_rate: float | None
     sample_counts: RatingSampleCounts
+    letter_grade: str | None
     neutral_prior_score: float | None
     metadata: RatingSourceMetadata
 
@@ -646,6 +679,7 @@ class SeventeenLandsData:
         ):
             return _resolved_from_stats(
                 stats=primary_stats,
+                format_data=self.primary,
                 requested_format=self.requested_format,
                 source_format=self.primary.event_format,
                 fallback_reason=None,
@@ -662,6 +696,7 @@ class SeventeenLandsData:
         ):
             return _resolved_from_stats(
                 stats=fallback_stats,
+                format_data=self.fallback,
                 requested_format=self.requested_format,
                 source_format=self.fallback.event_format if self.fallback is not None else None,
                 fallback_reason=fallback_reason,
@@ -702,6 +737,7 @@ class SeventeenLandsData:
         ):
             return _resolved_from_stats(
                 stats=pair_stats,
+                format_data=pair_data,
                 requested_format=self.requested_format,
                 source_format=pair_data.event_format if pair_data is not None else None,
                 fallback_reason=None,
@@ -2061,6 +2097,7 @@ def _parse_pair_win_rates(*, payload: Any) -> dict[str, ColorPairWinRate]:
 def _resolved_from_stats(
     *,
     stats: SeventeenCardStats | None,
+    format_data: SeventeenLandsFormatData | None,
     requested_format: str,
     source_format: str | None,
     fallback_reason: str | None,
@@ -2078,6 +2115,11 @@ def _resolved_from_stats(
         opening_hand_win_rate=stats.opening_hand_win_rate,
         drawn_improvement_win_rate=stats.drawn_improvement_win_rate,
         sample_counts=stats.sample_counts,
+        letter_grade=(
+            None
+            if format_data is None
+            else format_data.letter_grade_for(grp_id=stats.grp_id)
+        ),
         neutral_prior_score=None,
         metadata=RatingSourceMetadata(
             requested_format=requested_format,
@@ -2118,6 +2160,7 @@ def _neutral_rating(
             stats.drawn_improvement_win_rate if stats is not None else None
         ),
         sample_counts=sample_counts,
+        letter_grade=None,
         neutral_prior_score=PICK_ENGINE.neutral_prior_score,
         metadata=RatingSourceMetadata(
             requested_format=requested_format,
@@ -2126,6 +2169,53 @@ def _neutral_rating(
             fallback_reason=fallback_reason,
         ),
     )
+
+
+def _gih_win_rate_distribution(
+    *,
+    stats: Iterable[SeventeenCardStats],
+) -> tuple[float, ...]:
+    return tuple(
+        card.gih_win_rate
+        for card in stats
+        if card.gih_win_rate is not None
+    )
+
+
+def _letter_grade_for_metric(
+    *,
+    value: float | None,
+    distribution: tuple[float, ...],
+) -> str | None:
+    if value is None or not distribution:
+        return None
+
+    mean = sum(distribution) / len(distribution)
+    variance = sum((metric - mean) ** 2 for metric in distribution) / len(distribution)
+    standard_deviation = math.sqrt(variance)
+    if standard_deviation <= 0:
+        return "C"
+
+    grade_offset = _rounded_grade_offset(
+        value=(value - mean) / standard_deviation / GRADE_STEP_STANDARD_DEVIATIONS
+    )
+    grade_index = _clamp_int(
+        value=GRADE_CENTER_INDEX + grade_offset,
+        lower=0,
+        upper=len(GRADE_LABELS) - 1,
+    )
+    return GRADE_LABELS[grade_index]
+
+
+def _rounded_grade_offset(*, value: float) -> int:
+    if value >= 0:
+        return math.floor(value + 0.5)
+
+    return math.ceil(value - 0.5)
+
+
+def _clamp_int(*, value: int, lower: int, upper: int) -> int:
+    return min(max(value, lower), upper)
 
 
 def _has_strong_gih_signal(
