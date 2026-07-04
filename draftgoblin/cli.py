@@ -10,6 +10,12 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from draftgoblin import DISCLAIMER, __version__
+from draftgoblin.backtest import (
+    BacktestError,
+    format_backtest_report,
+    generate_backtest_report,
+    load_persisted_backtest_state,
+)
 from draftgoblin.carddb import (
     CardDatabase,
     CardDatabaseError,
@@ -34,6 +40,7 @@ from draftgoblin.events import DraftLogParseError
 from draftgoblin.logfollow import LogFollowError
 from draftgoblin.paths import UnsupportedPlatformError, resolve_player_log_path
 from draftgoblin.pool import DraftPoolError
+from draftgoblin.ranking import DEFAULT_RANKING_MODE, RANKING_MODES
 from draftgoblin.replay import ReplayError, replay_log_file
 from draftgoblin.seventeen import (
     QUICK_DRAFT_FORMAT,
@@ -212,6 +219,47 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
     build_parser_command.set_defaults(handler=handle_build)
+
+    backtest_parser = subparsers.add_parser(
+        name="backtest",
+        help="Replay saved picks and compare recommendations to actual choices.",
+        description=(
+            "Dry-run a persisted draft with the current pick engine, using saved "
+            "offered card history and the pool before each pick."
+        ),
+    )
+    backtest_parser.add_argument(
+        "--account",
+        default=None,
+        help="MTGA account identifier to disambiguate persisted drafts.",
+    )
+    backtest_parser.add_argument(
+        "--draft-id",
+        default=None,
+        help="Draft identifier to disambiguate persisted drafts.",
+    )
+    backtest_parser.add_argument(
+        "--ranking",
+        choices=RANKING_MODES,
+        default=DEFAULT_RANKING_MODE,
+        help="Ranking used for recommendations (default: 17L WR).",
+    )
+    backtest_parser.add_argument(
+        "--bulk-file",
+        type=Path,
+        default=None,
+        help=(
+            "Resolve card names from a local Scryfall JSONL(.gz) bulk file "
+            "instead of the cached card database."
+        ),
+    )
+    backtest_parser.add_argument(
+        "--app-dir",
+        type=Path,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    backtest_parser.set_defaults(handler=handle_backtest)
 
     refresh_parser = subparsers.add_parser(
         name="refresh-data",
@@ -468,6 +516,75 @@ def _load_build_card_database(*, args: argparse.Namespace) -> CardDatabase:
         return build_card_database_from_bulk_file(path=args.bulk_file)
 
     return load_or_refresh_card_database(app_dir=args.app_dir)
+
+
+def handle_backtest(args: argparse.Namespace) -> int:
+    """Handle persisted draft recommendation backtests.
+    Missing 17Lands cache falls back to neutral-prior pick scoring.
+    """
+
+    try:
+        state = load_persisted_backtest_state(
+            app_dir=args.app_dir,
+            account_id=args.account,
+            draft_id=args.draft_id,
+        )
+        database = _load_backtest_card_database(args=args)
+        ratings_data = _load_optional_backtest_ratings_data(
+            args=args,
+            database=database,
+            set_code=state.set_code,
+        )
+        report = generate_backtest_report(
+            state=state,
+            card_database=database,
+            ratings_data=ratings_data,
+            ranking_mode=args.ranking,
+        )
+    except (BacktestError, CardDatabaseError, DraftPoolError) as error:
+        print(f"backtest failed: {error}", file=sys.stderr)
+        return 1
+
+    print(format_backtest_report(report), end="")
+    return 0
+
+
+def _load_backtest_card_database(*, args: argparse.Namespace) -> CardDatabase:
+    """Load card metadata for backtest reports.
+    The command is user-facing, so cached metadata may refresh automatically.
+    """
+
+    if args.bulk_file is not None:
+        return build_card_database_from_bulk_file(path=args.bulk_file)
+
+    return load_or_refresh_card_database(app_dir=args.app_dir)
+
+
+def _load_optional_backtest_ratings_data(
+    *,
+    args: argparse.Namespace,
+    database: CardDatabase,
+    set_code: str,
+) -> SeventeenLandsData | None:
+    """Load cached 17Lands ratings when available for backtests.
+    Backtests remain useful with neutral-prior scores if cache is absent.
+    """
+
+    try:
+        ratings_data = load_cached_17lands_data(
+            set_code=set_code,
+            app_dir=args.app_dir,
+        )
+    except SeventeenLandsError:
+        return None
+
+    _augment_card_database_from_ratings(
+        args=args,
+        database=database,
+        set_code=set_code,
+        ratings_data=ratings_data,
+    )
+    return ratings_data
 
 
 def _metadata_augmenting_ratings_loader(

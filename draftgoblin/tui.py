@@ -1,5 +1,5 @@
 """Textual live interface for Draftgoblin watch mode.
-Render score-sorted packs and status updates without blocking fetches.
+Render ranked packs and status updates without blocking fetches.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ try:  # pragma: no cover - import availability depends on optional terminal extr
 except Exception:  # pragma: no cover - graceful fallback when unavailable.
     TgpImage = None
 
+from draftgoblin.backtest import format_backtest_report, generate_backtest_report
 from draftgoblin.carddb import SCRYFALL_USER_AGENT, CardDatabase, CardInfo
 from draftgoblin.config import COLOR_PAIRS, POLL_INTERVAL_SECONDS
 from draftgoblin.deckbuilder import (
@@ -56,6 +57,13 @@ from draftgoblin.events import (
 from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
 from draftgoblin.pool import DraftPoolStore, DraftState, list_draft_states
+from draftgoblin.ranking import (
+    DEFAULT_RANKING_MODE,
+    RANKING_LABELS,
+    RANKING_MODES,
+    rank_scored_cards,
+    ranking_label,
+)
 from draftgoblin.seventeen import SEVENTEEN_LANDS_ATTRIBUTION, SeventeenLandsData
 from draftgoblin.setinfo import format_set_label
 
@@ -68,7 +76,7 @@ TuiCardQuantityGroup: TypeAlias = tuple[ScoredCard, int]
 
 PRIMARY_COLUMN_KEYS = ("rank", "win_rate", "grade", "score", "card", "colors")
 SECONDARY_COLUMN_KEYS = ("fit", "alsa", "mv", "source")
-SORT_MODES = ("score", "alsa", "mv")
+SORT_MODES = RANKING_MODES
 BUILD_SPELL_SORT_MODES = ("curve", "score", "name")
 SECONDARY_COLUMN_MIN_WIDTH = 88
 SIDEBAR_MIN_WIDTH = 56
@@ -119,11 +127,7 @@ COLUMN_WIDTHS = {
     "source": 9,
 }
 
-SORT_LABELS = {
-    "score": "DG Score",
-    "alsa": "ALSA",
-    "mv": "MV",
-}
+SORT_LABELS = RANKING_LABELS
 
 
 class CardDetailsPanel(Static, can_focus=False):
@@ -207,8 +211,9 @@ class DraftgoblinTuiApp(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
         Binding("c", "toggle_secondary_columns", "Columns", show=True),
-        Binding("s", "cycle_sort", "Sort", show=True),
+        Binding("s", "cycle_sort", "Rank", show=True),
         Binding("b", "open_build_view", "Build", show=True),
+        Binding("t", "open_backtest_report", "Backtest", show=True),
         Binding("a", "cycle_account", "Account", show=True),
         Binding("p", "rebuild_with_pair_override", "Pair", show=True),
         Binding("up", "navigate_previous_card", "Previous", show=False, priority=True),
@@ -267,7 +272,7 @@ class DraftgoblinTuiApp(App[None]):
         self._card_image_uris_by_grp_id: dict[int, str] = {}
 
         self.show_secondary_columns = True
-        self.sort_mode = "score"
+        self.sort_mode = DEFAULT_RANKING_MODE
         self._view_mode = "pack"
         self._visible_column_keys: tuple[str, ...] = ()
         self._account_labels: dict[str, str] = {}
@@ -289,6 +294,9 @@ class DraftgoblinTuiApp(App[None]):
         self._build_text = "Build view: no picked cards yet."
         self._build_error: str | None = None
         self._build_action_status: str | None = None
+        self._backtest_text = "Backtest view: complete a draft, then press t."
+        self._backtest_error: str | None = None
+        self._backtest_action_status: str | None = None
         self._last_build_signature: BuildSignature | None = None
         self._build_spell_sort_mode = "curve"
         self._build_show_details = False
@@ -328,6 +336,14 @@ class DraftgoblinTuiApp(App[None]):
         """
 
         return self._build_text
+
+    @property
+    def backtest_view_text(self) -> str:
+        """Return the rendered backtest report text for pilot tests.
+        This mirrors the Static widget content after a report refresh.
+        """
+
+        return self._backtest_text
 
     def compose(self) -> ComposeResult:
         """Compose the pack table, sidebar, status bar, and key footer.
@@ -401,8 +417,8 @@ class DraftgoblinTuiApp(App[None]):
         self._render_all()
 
     def action_cycle_sort(self) -> None:
-        """Cycle pack sorting or build spell grouping.
-        Build mode uses the same key to reorder the selected-spell section.
+        """Cycle pack ranking or build spell grouping.
+        Backtest reports are rebuilt with the selected recommendation ranking.
         """
 
         if self._view_mode == "build":
@@ -414,6 +430,12 @@ class DraftgoblinTuiApp(App[None]):
         else:
             index = SORT_MODES.index(self.sort_mode)
             self.sort_mode = SORT_MODES[(index + 1) % len(SORT_MODES)]
+            if self._view_mode == "backtest":
+                self._rebuild_backtest_view()
+                self._backtest_action_status = (
+                    f"rebuilt {ranking_label(ranking_mode=self.sort_mode)} "
+                    "recommendation comparison"
+                )
 
         self._render_all()
 
@@ -441,6 +463,25 @@ class DraftgoblinTuiApp(App[None]):
         self._record_build_action_result(success_message="rebuilt current pool")
         self._render_all()
 
+    def action_open_backtest_report(self) -> None:
+        """Run a saved-pick dry run and show recommendation matches.
+        The report uses persisted offered-card and pre-pick pool history.
+        """
+
+        self._build_action_status = None
+        if self._rebuild_backtest_view():
+            self._view_mode = "backtest"
+            self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
+            self._last_error = None
+            self._backtest_action_status = (
+                f"rebuilt {ranking_label(ranking_mode=self.sort_mode)} "
+                "recommendation comparison"
+            )
+        else:
+            self._backtest_action_status = f"cannot backtest — {self._backtest_error}"
+
+        self._render_all()
+
     def action_navigate_previous_card(self) -> None:
         """Move to the previous card in the active card list.
         Left, Up, and k share this action for predictable keyboard browsing.
@@ -448,6 +489,10 @@ class DraftgoblinTuiApp(App[None]):
 
         if self._view_mode == "build":
             self._move_build_card_cursor(delta=-1)
+            return
+
+        if self._view_mode == "backtest":
+            self.query_one("#build-scroll", VerticalScroll).scroll_page_up(animate=False)
             return
 
         self._move_pack_cursor(delta=-1)
@@ -461,6 +506,10 @@ class DraftgoblinTuiApp(App[None]):
             self._move_build_card_cursor(delta=1)
             return
 
+        if self._view_mode == "backtest":
+            self.query_one("#build-scroll", VerticalScroll).scroll_page_down(animate=False)
+            return
+
         self._move_pack_cursor(delta=1)
 
     def action_navigate_page_up(self) -> None:
@@ -468,7 +517,7 @@ class DraftgoblinTuiApp(App[None]):
         Pack view moves the card cursor; build view scrolls the deck sheet.
         """
 
-        if self._view_mode == "build":
+        if self._view_mode in {"build", "backtest"}:
             self.query_one("#build-scroll", VerticalScroll).scroll_page_up(animate=False)
             return
 
@@ -479,7 +528,7 @@ class DraftgoblinTuiApp(App[None]):
         Pack view moves the card cursor; build view scrolls the deck sheet.
         """
 
-        if self._view_mode == "build":
+        if self._view_mode in {"build", "backtest"}:
             self.query_one("#build-scroll", VerticalScroll).scroll_page_down(animate=False)
             return
 
@@ -490,7 +539,7 @@ class DraftgoblinTuiApp(App[None]):
         This keeps Home useful in both major TUI modes.
         """
 
-        if self._view_mode == "build":
+        if self._view_mode in {"build", "backtest"}:
             self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
             return
 
@@ -501,7 +550,7 @@ class DraftgoblinTuiApp(App[None]):
         This keeps End useful in both major TUI modes.
         """
 
-        if self._view_mode == "build":
+        if self._view_mode in {"build", "backtest"}:
             self.query_one("#build-scroll", VerticalScroll).scroll_end(animate=False)
             return
 
@@ -686,6 +735,9 @@ class DraftgoblinTuiApp(App[None]):
         self._build_text = "Build view: no picked cards yet."
         self._build_error = None
         self._build_action_status = None
+        self._backtest_text = "Backtest view: complete a draft, then press t."
+        self._backtest_error = None
+        self._backtest_action_status = None
         self._last_build_signature = None
         self._build_spell_sort_mode = "curve"
         self._build_show_details = False
@@ -701,6 +753,7 @@ class DraftgoblinTuiApp(App[None]):
         self._pool_size = len(event.pool_grp_ids)
         self._pool_grp_ids = event.pool_grp_ids
         self._build_action_status = None
+        self._backtest_action_status = None
         self._current_pack_event = event
         self._view_mode = "pack"
         self._ensure_ratings_load_started(set_code=event.set_code)
@@ -723,6 +776,7 @@ class DraftgoblinTuiApp(App[None]):
             self._pool_size = len(self._pool_grp_ids)
 
         self._build_action_status = None
+        self._backtest_action_status = None
         card = self.card_database.lookup(grp_id=event.chosen_grp_id)
         self._last_picks.append(_format_card_name(card=card))
         self._last_picks = self._last_picks[-5:]
@@ -741,6 +795,7 @@ class DraftgoblinTuiApp(App[None]):
         self._pool_grp_ids = event.picked_grp_ids if state is None else state.pool_grp_ids
         self._pool_size = len(self._pool_grp_ids)
         self._build_action_status = None
+        self._backtest_action_status = None
         self._current_pack_event = None
         self._current_pack = None
         self._ensure_ratings_load_started(set_code=event.set_code)
@@ -779,6 +834,9 @@ class DraftgoblinTuiApp(App[None]):
 
         if self._view_mode == "build" and self._set_code == set_code:
             self._rebuild_build_view()
+
+        if self._view_mode == "backtest" and self._set_code == set_code:
+            self._rebuild_backtest_view()
 
         self._render_all()
 
@@ -853,6 +911,7 @@ class DraftgoblinTuiApp(App[None]):
         self._commitment_label = "0% recovered"
         self._forced_pair = None
         self._build_action_status = None
+        self._backtest_action_status = None
         self._last_picks = [
             _format_card_name(card=self.card_database.lookup(grp_id=grp_id))
             for grp_id in state.pool_grp_ids[-5:]
@@ -939,6 +998,17 @@ class DraftgoblinTuiApp(App[None]):
             )
             return
 
+        if self._view_mode == "backtest":
+            if self._backtest_error is not None:
+                title.update("Backtest view unavailable — saved draft state issue")
+            else:
+                title.update(
+                    "Backtest view — "
+                    f"{ranking_label(ranking_mode=self.sort_mode)} "
+                    "recommendations vs actual picks; scroll ↑/↓ PgUp/PgDn"
+                )
+            return
+
         if self._current_pack_event is None:
             if self._pick_label == "complete":
                 title.update("Draft complete")
@@ -952,7 +1022,7 @@ class DraftgoblinTuiApp(App[None]):
             f"{event.pack_number + 1} "
             "Pick "
             f"{event.pick_number + 1} "
-            f"— sort {SORT_LABELS[self.sort_mode]}"
+            f"— ranked by {SORT_LABELS[self.sort_mode]}"
         )
 
     def _render_pack_table(self) -> None:
@@ -960,9 +1030,9 @@ class DraftgoblinTuiApp(App[None]):
         build_scroll = self.query_one("#build-scroll", VerticalScroll)
         build_view = self.query_one("#build-view", Static)
         table.display = self._view_mode == "pack"
-        build_scroll.display = self._view_mode == "build"
-        build_view.update(self._build_text)
-        if self._view_mode == "build":
+        build_scroll.display = self._view_mode in {"build", "backtest"}
+        build_view.update(self._active_text_view())
+        if self._view_mode in {"build", "backtest"}:
             self._visible_column_keys = ()
             return
 
@@ -1065,7 +1135,7 @@ class DraftgoblinTuiApp(App[None]):
 
     def _render_sidebar(self) -> None:
         pool_summary = self.query_one("#pool-summary", Static)
-        pool_summary.display = self._view_mode != "build"
+        pool_summary.display = self._view_mode not in {"build", "backtest"}
         if pool_summary.display:
             event_text = self._event_name or "unknown event"
             draft_text = self._draft_id or "unknown draft"
@@ -1352,11 +1422,11 @@ class DraftgoblinTuiApp(App[None]):
             self._focus_primary_card_section()
             return
 
-        if focused_id == "build-scroll" and self._view_mode != "build":
+        if focused_id == "build-scroll" and self._view_mode not in {"build", "backtest"}:
             self._focus_primary_card_section()
 
     def _focus_primary_card_section(self) -> None:
-        if self._view_mode == "build":
+        if self._view_mode in {"build", "backtest"}:
             self.query_one("#build-scroll", VerticalScroll).focus()
             return
 
@@ -1383,11 +1453,12 @@ class DraftgoblinTuiApp(App[None]):
         if self._view_mode == "build" and self._build_pair_label != "—":
             pair_label = self._build_pair_label
 
-        sort_label = (
-            f"Build sort: {self._build_spell_sort_mode}"
-            if self._view_mode == "build"
-            else f"Sort: {SORT_LABELS[self.sort_mode]}"
-        )
+        if self._view_mode == "build":
+            sort_label = f"Build sort: {self._build_spell_sort_mode}"
+        elif self._view_mode == "backtest":
+            sort_label = f"Backtest ranking: {SORT_LABELS[self.sort_mode]}"
+        else:
+            sort_label = f"Ranking: {SORT_LABELS[self.sort_mode]}"
         text = (
             f"Account: {self._active_account_label} | "
             f"View: {self._view_mode} | "
@@ -1411,6 +1482,12 @@ class DraftgoblinTuiApp(App[None]):
         if self._build_action_status is not None:
             text = f"Build action: {self._build_action_status} | {text}"
 
+        if self._backtest_action_status is not None:
+            text = f"Backtest action: {self._backtest_action_status} | {text}"
+
+        if self._backtest_error is not None and self._view_mode == "backtest":
+            text = f"Backtest: {self._backtest_error} | {text}"
+
         if self._last_error is not None:
             text = f"Error: {self._last_error} | {text}"
 
@@ -1429,13 +1506,10 @@ class DraftgoblinTuiApp(App[None]):
         if self._current_pack is None:
             return ()
 
-        if self.sort_mode == "alsa":
-            return tuple(sorted(self._current_pack.cards, key=_alsa_sort_key))
-
-        if self.sort_mode == "mv":
-            return tuple(sorted(self._current_pack.cards, key=_mana_value_sort_key))
-
-        return self._current_pack.cards
+        return rank_scored_cards(
+            cards=self._current_pack.cards,
+            ranking_mode=self.sort_mode,
+        )
 
     def _current_build_pool(self) -> BuildPool | None:
         if self._set_code is None or not self._pool_grp_ids:
@@ -1472,6 +1546,56 @@ class DraftgoblinTuiApp(App[None]):
             grp_ids.extend(self._current_pack_event.offered_grp_ids)
 
         return tuple(grp_ids)
+
+    def _active_text_view(self) -> str:
+        if self._view_mode == "backtest":
+            return self._backtest_text
+
+        return self._build_text
+
+    def _rebuild_backtest_view(self) -> bool:
+        state = self._current_backtest_state()
+        if state is None:
+            self._backtest_error = "no persisted draft state for current draft"
+            self._backtest_text = (
+                "Backtest view unavailable: no persisted draft state for the "
+                "current draft. Watch or replay a draft first."
+            )
+            return False
+
+        report = generate_backtest_report(
+            state=state,
+            card_database=self.card_database,
+            ratings_data=self._ratings_data_for_scoring(set_code=state.set_code),
+            ranking_mode=self.sort_mode,
+        )
+        self._backtest_error = None
+        self._backtest_text = format_backtest_report(report).rstrip("\n")
+        return True
+
+    def _current_backtest_state(self) -> DraftState | None:
+        if self._active_account_id is not None and self._draft_id is not None:
+            key = (self._active_account_id, self._draft_id)
+            cached = self._draft_states_by_key.get(key)
+            if cached is not None:
+                return cached
+
+            for state in self._available_draft_states():
+                if (state.account_id, state.draft_id) == key:
+                    self._remember_draft_state(state=state)
+                    return state
+
+        matching_states = tuple(
+            state
+            for state in self._available_draft_states()
+            if self._event_name is not None
+            and state.event_name == self._event_name
+            and state.set_code == self._set_code
+        )
+        if not matching_states:
+            return None
+
+        return max(matching_states, key=_latest_draft_state_sort_key)
 
     def _rebuild_build_view(self) -> bool:
         pool = self._current_build_pool()
@@ -2455,15 +2579,3 @@ def _sparkline_glyph(*, count: int, max_count: int) -> str:
 
     index = max(0, round((count / max_count) * (len(SPARKLINE_GLYPHS) - 1)))
     return SPARKLINE_GLYPHS[index]
-
-
-def _alsa_sort_key(card: ScoredCard) -> tuple[float, int, int]:
-    alsa = card.rating.average_last_seen_at
-    sort_alsa = float("inf") if alsa is None else alsa
-    return (sort_alsa, -card.score, card.original_index)
-
-
-def _mana_value_sort_key(card: ScoredCard) -> tuple[float, int, int]:
-    mana_value = card.card.mana_value
-    sort_mana_value = float("inf") if mana_value is None else mana_value
-    return (sort_mana_value, -card.score, card.original_index)
