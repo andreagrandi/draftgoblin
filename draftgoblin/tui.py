@@ -48,6 +48,7 @@ from draftgoblin.setinfo import format_set_label
 
 PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
+BuildSignature: TypeAlias = tuple[str, tuple[int, ...], str | None]
 
 PRIMARY_COLUMN_KEYS = ("rank", "score", "card", "colors")
 SECONDARY_COLUMN_KEYS = ("fit", "gih", "alsa", "mv", "source")
@@ -228,6 +229,8 @@ class DraftgoblinTuiApp(App[None]):
         self._build_pair_label = "—"
         self._build_text = "Build view: no picked cards yet."
         self._build_error: str | None = None
+        self._build_action_status: str | None = None
+        self._last_build_signature: BuildSignature | None = None
         self._build_spell_sort_mode = "curve"
         self._build_show_details = False
         self._current_pack_event: PackOfferedEvent | None = None
@@ -341,14 +344,23 @@ class DraftgoblinTuiApp(App[None]):
         The draft may still be in progress when this is invoked.
         """
 
-        if self._view_mode == "build":
-            if self._current_pack_event is not None:
-                self._view_mode = "pack"
-            else:
+        pool = self._current_build_pool()
+        if pool is not None:
+            signature = self._build_signature(pool=pool)
+            if (
+                self._view_mode == "build"
+                and self._build_error is None
+                and self._last_build_signature == signature
+            ):
                 self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
-                self._last_error = "already in build view; use ↑/↓ or PgUp/PgDn to scroll"
-        elif self._rebuild_build_view():
+                self._last_error = None
+                self._build_action_status = "no build needed — current pool already shown"
+                self._render_all()
+                return
+
+        if self._rebuild_build_view():
             self._view_mode = "build"
+        self._record_build_action_result(success_message="rebuilt current pool")
         self._render_all()
 
     def action_scroll_build_up(self) -> None:
@@ -427,6 +439,9 @@ class DraftgoblinTuiApp(App[None]):
         self._forced_pair = self._next_forced_pair()
         if self._rebuild_build_view():
             self._view_mode = "build"
+        self._record_build_action_result(
+            success_message=f"rebuilt with forced pair {self._forced_pair}",
+        )
         self._render_all()
 
     def process_lines(self, *, lines: Iterable[str]) -> None:
@@ -573,6 +588,8 @@ class DraftgoblinTuiApp(App[None]):
         self._build_pair_label = "—"
         self._build_text = "Build view: no picked cards yet."
         self._build_error = None
+        self._build_action_status = None
+        self._last_build_signature = None
         self._build_spell_sort_mode = "curve"
         self._build_show_details = False
         self._ensure_ratings_load_started(set_code=event.set_code)
@@ -585,6 +602,7 @@ class DraftgoblinTuiApp(App[None]):
         self._pick_label = f"P{event.pack_number + 1}P{event.pick_number + 1}"
         self._pool_size = len(event.pool_grp_ids)
         self._pool_grp_ids = event.pool_grp_ids
+        self._build_action_status = None
         self._current_pack_event = event
         self._view_mode = "pack"
         self._ensure_ratings_load_started(set_code=event.set_code)
@@ -606,6 +624,7 @@ class DraftgoblinTuiApp(App[None]):
             self._pool_grp_ids = self._pool_grp_ids + (event.chosen_grp_id,)
             self._pool_size = len(self._pool_grp_ids)
 
+        self._build_action_status = None
         card = self.card_database.lookup(grp_id=event.chosen_grp_id)
         self._last_picks.append(_format_card_name(card=card))
         self._last_picks = self._last_picks[-5:]
@@ -623,6 +642,7 @@ class DraftgoblinTuiApp(App[None]):
         self._pick_label = "complete"
         self._pool_grp_ids = event.picked_grp_ids if state is None else state.pool_grp_ids
         self._pool_size = len(self._pool_grp_ids)
+        self._build_action_status = None
         self._current_pack_event = None
         self._current_pack = None
         self._ensure_ratings_load_started(set_code=event.set_code)
@@ -734,6 +754,7 @@ class DraftgoblinTuiApp(App[None]):
         self._pair_label = "open"
         self._commitment_label = "0% recovered"
         self._forced_pair = None
+        self._build_action_status = None
         self._last_picks = [
             _format_card_name(card=self.card_database.lookup(grp_id=grp_id))
             for grp_id in state.pool_grp_ids[-5:]
@@ -893,6 +914,7 @@ class DraftgoblinTuiApp(App[None]):
             f"Inferred pair: {self._pair_label}\n"
             f"Build pair: {self._build_pair_label}\n"
             f"Override: {override_label}\n"
+            f"Build action: {self._build_action_label()}\n"
             f"{self._metadata_status_text()}\n"
             f"{color_bar}\n"
             f"{curve}"
@@ -913,6 +935,12 @@ class DraftgoblinTuiApp(App[None]):
             return "unavailable"
 
         return "automatic"
+
+    def _build_action_label(self) -> str:
+        if self._build_action_status is None:
+            return "not requested"
+
+        return self._build_action_status
 
     def _render_status_bar(self) -> None:
         status = self.query_one("#status-bar", Static)
@@ -944,6 +972,9 @@ class DraftgoblinTuiApp(App[None]):
 
         if self._build_error is not None:
             text = f"Build: {self._build_error} | {text}"
+
+        if self._build_action_status is not None:
+            text = f"Build action: {self._build_action_status} | {text}"
 
         if self._last_error is not None:
             text = f"Error: {self._last_error} | {text}"
@@ -1013,6 +1044,7 @@ class DraftgoblinTuiApp(App[None]):
             self._build_error = "no picked cards yet"
             self._build_text = "Build view: no picked cards yet."
             self._build_pair_label = "—"
+            self._last_build_signature = None
             return False
 
         try:
@@ -1025,23 +1057,41 @@ class DraftgoblinTuiApp(App[None]):
             )
         except DeckBuilderError as error:
             self._build_error = str(error)
-            self._build_text = f"Build view unavailable: {error}"
+            self._build_text = _format_tui_build_error(
+                pool=pool,
+                card_database=self.card_database,
+                error=str(error),
+                width=self._build_text_width(),
+            )
             self._build_pair_label = "—"
+            self._last_build_signature = None
             return True
 
         self._build_error = None
         self._last_error = None
         self._build_pair_label = selection.chosen.pair
+        self._last_build_signature = self._build_signature(pool=pool)
         self._build_text = _format_tui_build_result(
             pool=pool,
             selection=selection,
             spell_selection=build_sheet.spell_selection,
             mana_base=build_sheet.mana_base,
+            card_database=self.card_database,
             spell_sort_mode=self._build_spell_sort_mode,
             show_details=self._build_show_details,
             width=self._build_text_width(),
         )
         return True
+
+    def _build_signature(self, *, pool: BuildPool) -> BuildSignature:
+        return (pool.set_code, pool.pool_grp_ids, self._forced_pair)
+
+    def _record_build_action_result(self, *, success_message: str) -> None:
+        if self._build_error is None:
+            self._build_action_status = success_message
+            return
+
+        self._build_action_status = f"cannot build — {self._build_error}"
 
     def _build_text_width(self) -> int:
         sidebar_width = max(0, self.query_one("#sidebar", Vertical).size.width)
@@ -1080,6 +1130,7 @@ def _format_tui_build_result(
     selection: PairSelection,
     spell_selection: SpellSelection,
     mana_base: ManaBase,
+    card_database: CardDatabase,
     spell_sort_mode: str,
     show_details: bool,
     width: int,
@@ -1113,8 +1164,8 @@ def _format_tui_build_result(
         f"Mana pips: {_format_plain_color_counts(mana_base.pip_counts)}",
         f"Mana sources: {_format_plain_color_counts(mana_base.source_counts)}",
         (
-            "Keys: ↑/↓ or j/k scroll; PgUp/PgDn page; s changes spell sort; "
-            "c shows details; p changes pair"
+            "Keys: b checks build status; ↑/↓ or j/k scroll; PgUp/PgDn page; "
+            "s changes spell sort; c shows details/pool; p changes pair"
         ),
         "",
     ])
@@ -1131,18 +1182,74 @@ def _format_tui_build_result(
         lines.append("")
         lines.extend(_format_tui_spell_counts(spell_selection=spell_selection))
         lines.append("")
+        lines.extend(
+            _format_tui_picked_pool(
+                pool=pool,
+                card_database=card_database,
+                width=width,
+            )
+        )
+        lines.append("")
         lines.extend(_format_tui_pair_scores(selection=selection))
         lines.append("")
         lines.extend(_format_tui_bench(selection=spell_selection, width=width))
     else:
         lines.append("")
         lines.append(
-            "Details hidden: press c for color-pair reasoning, structure checks, and bench cuts."
+            "Details hidden: press c for picked pool, color-pair reasoning, structure checks, and bench cuts."
         )
 
     lines.append("")
     lines.append(selection.attribution)
     return "\n".join(lines) + "\n"
+
+
+def _format_tui_build_error(
+    *,
+    pool: BuildPool,
+    card_database: CardDatabase,
+    error: str,
+    width: int,
+) -> str:
+    lines = [
+        f"Build view unavailable: {error}",
+        "",
+    ]
+    lines.extend(
+        _format_tui_picked_pool(
+            pool=pool,
+            card_database=card_database,
+            width=width,
+        )
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _format_tui_picked_pool(
+    *,
+    pool: BuildPool,
+    card_database: CardDatabase,
+    width: int,
+) -> list[str]:
+    lines = [f"Picked pool ({len(pool.pool_grp_ids)})"]
+    if not pool.pool_grp_ids:
+        return lines + ["- none"]
+
+    for index, grp_id in enumerate(pool.pool_grp_ids, start=1):
+        card = card_database.lookup(grp_id=grp_id)
+        lines.append(
+            _clip(text=_format_tui_picked_card(index=index, card=card), width=width)
+        )
+
+    return lines
+
+
+def _format_tui_picked_card(*, index: int, card: CardInfo) -> str:
+    marker = "[unresolved] " if card.unknown else ""
+    color_label = "Unknown" if card.unknown else _format_plain_colors(card.colors)
+    mana_value = _format_mana_value(card=card)
+    card_name = _format_card_name(card=card)
+    return f"{index:02d}. {marker}{card_name} | Colors {color_label} | MV {mana_value}"
 
 
 def _format_tui_curve_summary(*, spells: tuple[ScoredCard, ...]) -> str:

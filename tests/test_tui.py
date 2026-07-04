@@ -90,8 +90,13 @@ async def _assert_build_view_refuses_unknown_metadata_pool(tmp_path: Path) -> No
         assert "Build view unavailable: Card metadata is missing" in app.build_view_text
         assert "The build cannot be trusted" in app.build_view_text
         assert "no deck was produced" in app.build_view_text
+        assert "Picked pool (1)" in app.build_view_text
+        assert "[unresolved] Unknown card 105097 (grpId 105097)" in app.build_view_text
         assert "Build sheet:" not in app.build_view_text
         assert "Build: Card metadata is missing" in _status_text(app=app)
+        assert "Build action: cannot build — Card metadata is missing" in _status_text(
+            app=app,
+        )
 
 
 def test_tui_keybindings_toggle_columns_and_cycle_sort(tmp_path: Path) -> None:
@@ -156,6 +161,39 @@ async def _assert_sidebar_updates_pool_summary(tmp_path: Path) -> None:
         assert "Fixture Spider" in last_picks
 
 
+def test_tui_build_view_lists_full_picked_pool_with_card_details(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_build_view_lists_full_picked_pool(tmp_path=tmp_path))
+
+
+async def _assert_build_view_lists_full_picked_pool(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    save_draft_state(
+        state=_draft_state(
+            account_id="FIXTURECLIENTID1234567890",
+            draft_id="pool-details-draft",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(104894, 105097),
+        ),
+        app_dir=tmp_path / "app",
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_account_lines())
+        await pilot.pause()
+
+        assert "Picked pool" not in app.build_view_text
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        text = app.build_view_text
+        assert "Picked pool (2)" in text
+        assert "01. Fixture Split Card | Colors WU | MV 3" in text
+        assert "02. Fixture Spider | Colors G | MV 4" in text
+
+
 def test_tui_build_keybinding_opens_build_view_on_demand(tmp_path: Path) -> None:
     asyncio.run(_assert_build_keybinding_opens_build_view(tmp_path=tmp_path))
 
@@ -177,9 +215,25 @@ async def _assert_build_keybinding_opens_build_view(tmp_path: Path) -> None:
         assert "Pool size: 1 cards" in app.build_view_text
         assert "Average mana value:" in app.build_view_text
         assert "Mana curve: 0:" in app.build_view_text
+        assert "Selected spells by mana value" in app.build_view_text
+        assert "Picked pool" not in app.build_view_text
         assert "Color-pair reasoning" not in app.build_view_text
         assert "Pair scores" not in app.build_view_text
         assert "Details hidden: press c" in app.build_view_text
+        assert "Build action: rebuilt current pool" in _status_text(app=app)
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert "Picked pool (1)" in app.build_view_text
+        assert "01. Fixture Spider | Colors G | MV 4" in app.build_view_text
+
+        await pilot.press("b")
+        await pilot.pause()
+
+        assert "Build action: no build needed — current pool already shown" in _status_text(
+            app=app,
+        )
 
 
 def test_tui_completion_switches_to_build_view_and_pair_override_keybinding(
