@@ -81,6 +81,51 @@ def test_pair_selection_can_be_forced_without_hiding_automatic_best() -> None:
     assert selection.score_gap < 0
 
 
+def test_pair_selection_refuses_when_every_pair_has_zero_playables() -> None:
+    database = CardDatabase(
+        cards={
+            91: _card(
+                grp_id=91,
+                name="Fixture Land",
+                colors=(),
+                mana_value=0.0,
+                types=("Land",),
+            ),
+        }
+    )
+
+    with pytest.raises(DeckBuilderError) as error:
+        select_color_pair(
+            pool_grp_ids=(91,),
+            card_database=database,
+            ratings_data=_ratings_data(),
+        )
+
+    assert "no playable spells" in str(error.value)
+    assert "automatic color pair" in str(error.value)
+
+
+def test_build_deck_from_pool_rejects_all_unknown_card_metadata() -> None:
+    pool = BuildPool(
+        set_code="TST",
+        pool_grp_ids=(9001, 9002, 9003),
+        source_label="unknown metadata fixture",
+    )
+
+    with pytest.raises(DeckBuilderError) as error:
+        build_deck_from_pool(
+            pool=pool,
+            card_database=CardDatabase(cards={}),
+            ratings_data=_ratings_data(),
+        )
+
+    message = str(error.value)
+    assert "Card metadata is missing for 3/3 picked cards" in message
+    assert "The build cannot be trusted" in message
+    assert "no deck was produced" in message
+    assert "Unresolved grpIds: 9001, 9002, 9003" in message
+    assert "automatic" not in message
+
 
 def test_pair_win_rate_blend_uses_configured_weights() -> None:
     config = replace(

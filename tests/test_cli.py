@@ -321,6 +321,7 @@ def test_config_exposes_documented_tunables() -> None:
     assert config.DECK_BUILDER.splash_max_cards == 2
     assert config.DECK_BUILDER.splash_minimum_fixing_sources == 2
     assert config.DECK_BUILDER.splash_elite_score_minimum == 70.0
+    assert config.DECK_BUILDER.maximum_unresolved_metadata_ratio == 0.25
     assert config.DECK_BUILDER.main_color_source_floor == 7
     assert config.DECK_BUILDER.structure_maindeck_rate_threshold == 0.5
     assert "minimum two-drop quota" in config.DECK_BUILDER.relaxation_order

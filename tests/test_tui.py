@@ -69,6 +69,31 @@ async def _assert_tui_warns_when_card_metadata_is_incomplete(tmp_path: Path) -> 
         )
 
 
+def test_tui_build_view_refuses_unknown_metadata_pool(tmp_path: Path) -> None:
+    asyncio.run(_assert_build_view_refuses_unknown_metadata_pool(tmp_path=tmp_path))
+
+
+async def _assert_build_view_refuses_unknown_metadata_pool(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path, card_database=CardDatabase(cards={}))
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_first_pick_lines())
+        await pilot.pause()
+
+        await pilot.press("b")
+        await pilot.pause()
+
+        title = app.query_one("#pack-title", Static)
+        assert str(title.render()).startswith("Build view unavailable")
+        assert "automatic" not in str(title.render())
+        assert "Override: unavailable" in _pool_summary_text(app=app)
+        assert "Build view unavailable: Card metadata is missing" in app.build_view_text
+        assert "The build cannot be trusted" in app.build_view_text
+        assert "no deck was produced" in app.build_view_text
+        assert "Build sheet:" not in app.build_view_text
+        assert "Build: Card metadata is missing" in _status_text(app=app)
+
+
 def test_tui_keybindings_toggle_columns_and_cycle_sort(tmp_path: Path) -> None:
     asyncio.run(_assert_keybindings_toggle_columns_and_sort(tmp_path=tmp_path))
 

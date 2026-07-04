@@ -32,6 +32,7 @@ All tunables live in `draftgoblin/config.py` under `DeckBuilderConfig`:
 - `minimum_two_drops = 5` at mana value 2
 - `maximum_expensive_spells = 3` at mana value 6 or greater
 - `near_tie_creature_preference_points = 2.0`
+- `maximum_unresolved_metadata_ratio = 0.25`
 - `splash_max_cards = 2`
 - `splash_minimum_fixing_sources = 2`
 - `splash_elite_score_minimum = 70.0`
@@ -45,6 +46,8 @@ Empirical targets can be computed from 17Lands public draft-data dumps with `ref
 The selector greedily walks score-ranked eligible spells. While the creature floor is unmet, creatures receive the near-tie preference so a creature can beat a noncreature that is within the configured score window.
 
 When the curve calls for 16 or 18 lands, the builder reselects the spell count to keep the final deck exactly 40 cards.
+
+Before pair selection, the builder validates that enough picked cards have card metadata to identify playable spells reliably. If too much metadata is missing, or unresolved cards make the playable count fall below the spell target, the builder refuses to print a deck and asks the user to refresh card data or pass a current bulk file.
 
 ## Mana base
 
