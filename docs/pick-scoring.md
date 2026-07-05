@@ -8,6 +8,8 @@ Scores are normalized against the set rating distribution and centered so the ne
 
 Pool color weights come from picked cards. Each colored picked card contributes a quality-weighted amount to each of its colors, so a strong card pulls harder than filler. The highest-weighted two-color pair is the inferred pair once at least two colors have material weight.
 
+During open picks, set/format-specific 17Lands deck color win rates are used as a close-pick tiebreaker. If cards are within `3.0` DG points and the hypothetical color-pair weights after taking each card are also close, the recommendation prefers the card leading toward the higher-win-rate pair. This is deliberately disabled once the color ramp starts, so pair win rate does not override later commitment signals.
+
 Commitment is controlled by documented defaults in `config.py`:
 
 - picks 1-5: open, raw scores (`open_pick_count = 5`)
@@ -16,12 +18,13 @@ Commitment is controlled by documented defaults in `config.py`:
 - locked on-color score multiplier: `1.15`
 - locked off-color score multiplier: `0.75`
 - pool weight baseline/rating scale/min/max: `1.0`, `10.0`, `0.25`, `2.0`
+- open-pick pair-win-rate tiebreaker: within `3.0` DG points and `0.25` pair-weight points
 
 Rows show a `Fit` marker: `On` for cards inside the inferred pair, `Off!` for off-color cards, `Any` for colorless cards, and `Open` before the ramp starts or before a pair is available. Once locked, pair-filtered 17Lands ratings are used when present with adequate samples; otherwise all-decks ratings remain the fallback.
 
 The TUI pack table shows `17L WR` and `17L Grade` as primary columns. `17L WR` is the raw Games-in-Hand win rate from the resolved 17Lands source. `17L Grade` follows the methodology published on the 17Lands Card Data page for the Grades view: grades are centered at `C` on the selected win-rate metric distribution, and each grade step is a deterministic `0.33` standard-deviation band. Draftgoblin computes those grades from the cached 17Lands GIH distribution for the same source and format/filter context the row uses (QuickDraft for Quick Drafts, PremierDraft when the row is a Premier fallback, or pair-filtered data when used); cards without a strong GIH sample show `—`.
 
-Displayed `DG` scores are whole-number integers. We do not show one decimal for ties because the plain draft table should stay easy to scan; DG ties are resolved deterministically by raw score, base rating, and original pack order.
+Displayed `DG` scores are whole-number integers. We do not show one decimal for ties because the plain draft table should stay easy to scan; after the open-pick pair-win-rate tiebreaker, remaining DG ties are resolved deterministically by raw score, base rating, and original pack order.
 
 The TUI is explicit about the active ranking in the title and status bar. Press `s` to cycle between DG Score, 17Lands WR, ALSA, and mana value. When the current recommendation is an early/open pick or the top two cards are very close in the active ranking, the status bar shows confidence copy such as `early/open pick — stay flexible` or `close pick` rather than overclaiming certainty. Backtest reports also print the ranking used before listing recommended-vs-actual picks.
 
