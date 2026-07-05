@@ -209,6 +209,24 @@ def test_parser_infers_completion_from_final_empty_pack_without_completed_status
     ]
 
 
+def test_parser_ignores_quick_draft_course_snapshot_outside_botdraft() -> None:
+    line = json.dumps(
+        {
+            "Course": {
+                "CourseId": "00000000-0000-4000-8000-000000000078",
+                "InternalEventName": "QuickDraft_ABC_20260702",
+                "CurrentModule": "DeckSelect",
+                "ModulePayload": "",
+                "CourseDeckSummary": {"Attributes": []},
+                "CardPool": [],
+                "CardStyles": [],
+            },
+        }
+    )
+
+    assert list(parse_events(lines=[line])) == []
+
+
 @pytest.mark.parametrize(
     "raw_line",
     [

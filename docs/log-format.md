@@ -37,6 +37,9 @@ A paid Quick Draft entry appears as an `EventJoin` request followed by a course 
 
 Persist draft state by `(account clientId, CourseId/InternalEventName)`. The event id gives the set code and the course id disambiguates a concrete run of that event.
 
+Arena can also emit Quick Draft course snapshots after the course has moved to another module, such as `DeckSelect`.
+Those snapshots are not draft-start events and should be ignored; pack presentation and completion are parsed from the module payload lines below.
+
 ## Pack presentation
 
 The initial P1P1 pack is requested with `BotDraftDraftStatus`; the response body has `CurrentModule: "BotDraft"` and a string-encoded JSON `Payload`:
