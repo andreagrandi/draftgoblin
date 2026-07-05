@@ -70,8 +70,14 @@ def _win_rate_sort_key(card: ScoredCard) -> tuple[bool, float, int, float, int]:
     return (False, -win_rate, -card.score, -card.raw_score, card.original_index)
 
 
-def _score_sort_key(card: ScoredCard) -> tuple[int, float, float, int]:
-    return (-card.score, -card.raw_score, -card.base_rating, card.original_index)
+def _score_sort_key(card: ScoredCard) -> tuple[int, int, float, float, int]:
+    return (
+        card.score_sort_index,
+        -card.score,
+        -card.raw_score,
+        -card.base_rating,
+        card.original_index,
+    )
 
 
 def _alsa_sort_key(card: ScoredCard) -> tuple[float, int, float, int]:

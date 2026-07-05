@@ -5,7 +5,8 @@ Keep pick-quality math isolated from CLI and TUI rendering code.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import cmp_to_key
 
 from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.config import COLOR_PAIRS, PICK_ENGINE, PickEngineConfig
@@ -84,6 +85,10 @@ class ScoredCard:
     score: int
     source_label: str
     color_fit: str
+    pair_tiebreaker_pair: str | None
+    pair_tiebreaker_win_rate: float | None
+    pair_tiebreaker_weight: float | None
+    score_sort_index: int
 
     @property
     def no_data(self) -> bool:
@@ -104,7 +109,7 @@ class ScoredCard:
 
 @dataclass(frozen=True, slots=True)
 class ScoredPack:
-    """A score-sorted view of one offered pack.
+    """A recommendation-ordered view of one offered pack.
     Source summary describes the actual data used in this pack.
     """
 
@@ -140,8 +145,8 @@ class PickEngine:
         pool_grp_ids: tuple[int, ...] = (),
         pick_index: int | None = None,
     ) -> ScoredPack:
-        """Return offered cards sorted from highest score to lowest.
-        Ties keep stronger raw ratings ahead, then preserve pack order.
+        """Return offered cards in recommendation order.
+        Open close-pick groups can use pair win rates as a final tiebreaker.
         """
 
         commitment = _color_commitment(
@@ -156,11 +161,18 @@ class PickEngine:
                 grp_id=grp_id,
                 original_index=index,
                 card_database=card_database,
+                ratings_data=self.ratings_data,
                 commitment=commitment,
             )
             for index, grp_id in enumerate(offered_grp_ids)
         )
-        sorted_cards = tuple(sorted(scored_cards, key=_scored_card_sort_key))
+        sorted_cards = _score_sorted_cards(
+            cards=scored_cards,
+            commitment=commitment,
+            ratings_data=self.ratings_data,
+            offered_count=len(offered_grp_ids),
+            config=self.config,
+        )
         return ScoredPack(
             cards=sorted_cards,
             normalization=self.normalization,
@@ -174,6 +186,7 @@ class PickEngine:
         grp_id: int,
         original_index: int,
         card_database: CardDatabase,
+        ratings_data: SeventeenLandsData | None,
         commitment: ColorCommitment,
     ) -> ScoredCard:
         card = card_database.lookup(grp_id=grp_id)
@@ -199,6 +212,17 @@ class PickEngine:
             lower=0.0,
             upper=100.0,
         )
+        (
+            pair_tiebreaker_pair,
+            pair_tiebreaker_win_rate,
+            pair_tiebreaker_weight,
+        ) = _pair_tiebreaker_for_card(
+            card=card,
+            base_rating=base_rating,
+            commitment=commitment,
+            ratings_data=ratings_data,
+            config=self.config,
+        )
         return ScoredCard(
             card=card,
             rating=rating,
@@ -211,6 +235,10 @@ class PickEngine:
             score=_integer_score(raw_score=raw_score),
             source_label=_source_label(rating=rating),
             color_fit=color_fit,
+            pair_tiebreaker_pair=pair_tiebreaker_pair,
+            pair_tiebreaker_win_rate=pair_tiebreaker_win_rate,
+            pair_tiebreaker_weight=pair_tiebreaker_weight,
+            score_sort_index=original_index,
         )
 
 
@@ -395,6 +423,276 @@ def _color_factor(
     return 1.0
 
 
+def _score_sorted_cards(
+    *,
+    cards: tuple[ScoredCard, ...],
+    commitment: ColorCommitment,
+    ratings_data: SeventeenLandsData | None,
+    offered_count: int,
+    config: PickEngineConfig,
+) -> tuple[ScoredCard, ...]:
+    base_sorted = tuple(sorted(cards, key=_scored_card_base_sort_key))
+    if not _early_pair_tiebreaker_enabled(
+        commitment=commitment,
+        ratings_data=ratings_data,
+        offered_count=offered_count,
+        config=config,
+    ):
+        return _with_score_sort_indexes(cards=base_sorted)
+
+    sorted_cards = _apply_early_pair_tiebreaker(cards=base_sorted, config=config)
+    return _with_score_sort_indexes(cards=sorted_cards)
+
+
+def _early_pair_tiebreaker_enabled(
+    *,
+    commitment: ColorCommitment,
+    ratings_data: SeventeenLandsData | None,
+    offered_count: int,
+    config: PickEngineConfig,
+) -> bool:
+    if ratings_data is None or not ratings_data.pair_win_rates:
+        return False
+
+    if commitment.level > 0.0 or commitment.pick_index > config.open_pick_count:
+        return False
+
+    if config.early_pair_tiebreaker_score_threshold <= 0.0:
+        return False
+
+    if config.early_pair_tiebreaker_max_offered_cards <= 0:
+        return False
+
+    return offered_count <= config.early_pair_tiebreaker_max_offered_cards
+
+
+def _apply_early_pair_tiebreaker(
+    *,
+    cards: tuple[ScoredCard, ...],
+    config: PickEngineConfig,
+) -> tuple[ScoredCard, ...]:
+    sorted_cards: list[ScoredCard] = []
+    group: list[ScoredCard] = []
+    group_top_score = 0.0
+    for card in cards:
+        if not group:
+            group = [card]
+            group_top_score = card.raw_score
+            continue
+
+        score_delta = group_top_score - card.raw_score
+        if score_delta <= config.early_pair_tiebreaker_score_threshold:
+            group.append(card)
+            continue
+
+        sorted_cards.extend(
+            _sort_early_pair_tiebreaker_group(group=group, config=config)
+        )
+        group = [card]
+        group_top_score = card.raw_score
+
+    if group:
+        sorted_cards.extend(
+            _sort_early_pair_tiebreaker_group(group=group, config=config)
+        )
+
+    return tuple(sorted_cards)
+
+
+def _sort_early_pair_tiebreaker_group(
+    *,
+    group: list[ScoredCard],
+    config: PickEngineConfig,
+) -> tuple[ScoredCard, ...]:
+    return tuple(
+        sorted(
+            group,
+            key=cmp_to_key(
+                lambda left, right: _compare_early_pair_tiebreaker(
+                    left=left,
+                    right=right,
+                    config=config,
+                ),
+            ),
+        )
+    )
+
+
+def _compare_early_pair_tiebreaker(
+    *,
+    left: ScoredCard,
+    right: ScoredCard,
+    config: PickEngineConfig,
+) -> int:
+    left_win_rate = left.pair_tiebreaker_win_rate
+    right_win_rate = right.pair_tiebreaker_win_rate
+    left_weight = left.pair_tiebreaker_weight
+    right_weight = right.pair_tiebreaker_weight
+    if (
+        left_win_rate is not None
+        and right_win_rate is not None
+        and left_weight is not None
+        and right_weight is not None
+        and abs(left.raw_score - right.raw_score)
+        <= config.early_pair_tiebreaker_score_threshold
+        and abs(left_weight - right_weight)
+        <= config.early_pair_tiebreaker_pair_weight_threshold
+        and left_win_rate != right_win_rate
+    ):
+        return -1 if left_win_rate > right_win_rate else 1
+
+    return _compare_base_scored_cards(left=left, right=right)
+
+
+def _compare_base_scored_cards(*, left: ScoredCard, right: ScoredCard) -> int:
+    left_key = _scored_card_base_sort_key(left)
+    right_key = _scored_card_base_sort_key(right)
+    if left_key < right_key:
+        return -1
+
+    if left_key > right_key:
+        return 1
+
+    return 0
+
+
+def _with_score_sort_indexes(*, cards: tuple[ScoredCard, ...]) -> tuple[ScoredCard, ...]:
+    return tuple(
+        replace(card, score_sort_index=index)
+        for index, card in enumerate(cards)
+    )
+
+
+def _pair_tiebreaker_for_card(
+    *,
+    card: CardInfo,
+    base_rating: float,
+    commitment: ColorCommitment,
+    ratings_data: SeventeenLandsData | None,
+    config: PickEngineConfig,
+) -> tuple[str | None, float | None, float | None]:
+    if ratings_data is None or not ratings_data.pair_win_rates:
+        return (None, None, None)
+
+    colors = _recognized_card_colors(card=card)
+    if not colors:
+        return (None, None, None)
+
+    compatible_pairs = _compatible_pairs_for_colors(colors=colors)
+    if not compatible_pairs:
+        return (None, None, None)
+
+    weights = _candidate_pair_weights(
+        colors=colors,
+        base_rating=base_rating,
+        commitment=commitment,
+        config=config,
+    )
+    pair = _best_tiebreaker_pair(
+        pairs=compatible_pairs,
+        weights=weights,
+        ratings_data=ratings_data,
+        config=config,
+    )
+    if pair is None:
+        return (None, None, None)
+
+    return (
+        pair,
+        _pair_win_rate(pair=pair, ratings_data=ratings_data),
+        _pair_weight(pair=pair, weights=weights),
+    )
+
+
+def _recognized_card_colors(*, card: CardInfo) -> tuple[str, ...]:
+    color_order = tuple(_empty_color_weights())
+    colors: list[str] = []
+    for color in card.colors:
+        if color in color_order and color not in colors:
+            colors.append(color)
+
+    return tuple(colors)
+
+
+def _compatible_pairs_for_colors(*, colors: tuple[str, ...]) -> tuple[str, ...]:
+    color_set = set(colors)
+    return tuple(
+        pair for pair in COLOR_PAIRS if color_set.issubset(set(pair))
+    )
+
+
+def _candidate_pair_weights(
+    *,
+    colors: tuple[str, ...],
+    base_rating: float,
+    commitment: ColorCommitment,
+    config: PickEngineConfig,
+) -> dict[str, float]:
+    weights = dict(commitment.color_weights)
+    weight = _pool_card_weight(base_rating=base_rating, config=config)
+    for color in colors:
+        weights[color] = weights.get(color, 0.0) + weight
+
+    return weights
+
+
+def _best_tiebreaker_pair(
+    *,
+    pairs: tuple[str, ...],
+    weights: dict[str, float],
+    ratings_data: SeventeenLandsData,
+    config: PickEngineConfig,
+) -> str | None:
+    if not pairs:
+        return None
+
+    max_pair_weight = max(_pair_weight(pair=pair, weights=weights) for pair in pairs)
+    weight_threshold = max(0.0, config.early_pair_tiebreaker_pair_weight_threshold)
+    close_pairs = tuple(
+        pair
+        for pair in pairs
+        if max_pair_weight - _pair_weight(pair=pair, weights=weights) <= weight_threshold
+    )
+    return max(
+        close_pairs,
+        key=lambda pair: _tiebreaker_pair_sort_key(
+            pair=pair,
+            weights=weights,
+            ratings_data=ratings_data,
+        ),
+    )
+
+
+def _tiebreaker_pair_sort_key(
+    *,
+    pair: str,
+    weights: dict[str, float],
+    ratings_data: SeventeenLandsData,
+) -> tuple[bool, float, float, int]:
+    win_rate = _pair_win_rate(pair=pair, ratings_data=ratings_data)
+    return (
+        win_rate is not None,
+        0.0 if win_rate is None else win_rate,
+        _pair_weight(pair=pair, weights=weights),
+        -COLOR_PAIRS.index(pair),
+    )
+
+
+def _pair_win_rate(
+    *,
+    pair: str,
+    ratings_data: SeventeenLandsData | None,
+) -> float | None:
+    if ratings_data is None:
+        return None
+
+    pair_record = ratings_data.pair_win_rates.get(pair)
+    if pair_record is None:
+        return None
+
+    return pair_record.win_rate
+
+
 def _normalization_from_data(
     *,
     ratings_data: SeventeenLandsData | None,
@@ -567,7 +865,7 @@ def _source_summary(*, cards: tuple[ScoredCard, ...]) -> str:
     return " + ".join(parts) if parts else "unknown"
 
 
-def _scored_card_sort_key(card: ScoredCard) -> tuple[int, float, float, int]:
+def _scored_card_base_sort_key(card: ScoredCard) -> tuple[int, float, float, int]:
     return (-card.score, -card.raw_score, -card.base_rating, card.original_index)
 
 

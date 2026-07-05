@@ -83,6 +83,10 @@ class PickEngineConfig:
     pool_weight_epsilon: float = 0.01
     minimum_pair_colors: int = 2
     premier_fallback_enabled: bool = True
+    # Open picks use pair win rates only as a close-pick tiebreaker.
+    early_pair_tiebreaker_score_threshold: float = 3.0
+    early_pair_tiebreaker_pair_weight_threshold: float = 0.25
+    early_pair_tiebreaker_max_offered_cards: int = 16
 
 
 DECK_BUILDER = DeckBuilderConfig()

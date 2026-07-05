@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.pickengine import PickEngine
+from draftgoblin.ranking import rank_scored_cards
 from draftgoblin.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
@@ -129,6 +130,90 @@ def test_pool_weight_uses_card_quality_when_inferring_pair() -> None:
     )
 
     assert scored_pack.commitment.inferred_pair == "WR"
+
+
+def test_open_pick_pair_win_rate_tiebreaker_prefers_higher_rate_pair() -> None:
+    engine = PickEngine(ratings_data=_msh_pair_tiebreaker_data())
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(31, 32),
+        card_database=_msh_pair_tiebreaker_database(),
+        pool_grp_ids=(20, 21),
+        pick_index=3,
+    )
+    ranked_cards = rank_scored_cards(cards=scored_pack.cards, ranking_mode="score")
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+
+    assert scored_pack.commitment.phase == "open"
+    assert by_id[31].pair_tiebreaker_pair == "WU"
+    assert by_id[31].pair_tiebreaker_win_rate == 0.606
+    assert by_id[32].pair_tiebreaker_pair == "BR"
+    assert by_id[32].pair_tiebreaker_win_rate == 0.539
+    assert by_id[31].raw_score < by_id[32].raw_score
+    assert scored_pack.cards[0].card.grp_id == 31
+    assert ranked_cards[0].card.grp_id == 31
+
+
+def test_pair_win_rate_tiebreaker_does_not_override_colorless_card_score() -> None:
+    engine = PickEngine(ratings_data=_msh_pair_tiebreaker_data())
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(31, 33),
+        card_database=_msh_pair_tiebreaker_database(),
+        pool_grp_ids=(20, 21),
+        pick_index=3,
+    )
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+
+    assert by_id[33].pair_tiebreaker_win_rate is None
+    assert by_id[33].raw_score > by_id[31].raw_score
+    assert scored_pack.cards[0].card.grp_id == 33
+
+
+def test_pair_win_rate_tiebreaker_does_not_override_later_pick_score() -> None:
+    engine = PickEngine(ratings_data=_msh_pair_tiebreaker_data())
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(31, 32),
+        card_database=_msh_pair_tiebreaker_database(),
+        pool_grp_ids=(20, 21),
+        pick_index=6,
+    )
+
+    assert scored_pack.commitment.phase == "building"
+    assert scored_pack.cards[0].card.grp_id == 32
+
+
+def test_pair_win_rate_tiebreaker_does_not_override_later_color_signal() -> None:
+    engine = PickEngine(ratings_data=_msh_pair_tiebreaker_data(red_gih=0.55))
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(31, 32),
+        card_database=_msh_pair_tiebreaker_database(),
+        pool_grp_ids=(21, 22),
+        pick_index=16,
+    )
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+
+    assert scored_pack.commitment.inferred_pair == "BR"
+    assert by_id[31].color_fit == "off-color"
+    assert by_id[32].color_fit == "on-color"
+    assert scored_pack.cards[0].card.grp_id == 32
+
+
+def test_pair_win_rate_tiebreaker_does_not_override_clear_card_signal() -> None:
+    engine = PickEngine(ratings_data=_msh_pair_tiebreaker_data(red_gih=0.62))
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(31, 32),
+        card_database=_msh_pair_tiebreaker_database(),
+        pool_grp_ids=(20, 21),
+        pick_index=3,
+    )
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+
+    assert by_id[32].raw_score - by_id[31].raw_score > 3.0
+    assert scored_pack.cards[0].card.grp_id == 32
 
 
 def test_locked_pair_uses_pair_filtered_rating_when_samples_are_adequate() -> None:
@@ -275,6 +360,65 @@ def _ratings_data_with_pair_filter() -> SeventeenLandsData:
     )
 
 
+def _msh_pair_tiebreaker_data(*, red_gih: float = 0.552) -> SeventeenLandsData:
+    return SeventeenLandsData(
+        set_code="MSH",
+        requested_format=QUICK_DRAFT_FORMAT,
+        primary=SeventeenLandsFormatData(
+            set_code="MSH",
+            event_format=QUICK_DRAFT_FORMAT,
+            fetched_at=datetime(2026, 7, 3, 12, 0, tzinfo=UTC),
+            card_ratings={
+                20: _stats(
+                    grp_id=20,
+                    name="White Start",
+                    color="W",
+                    gih=0.55,
+                    games_in_hand=900,
+                ),
+                21: _stats(
+                    grp_id=21,
+                    name="Black Start",
+                    color="B",
+                    gih=0.55,
+                    games_in_hand=900,
+                ),
+                22: _stats(
+                    grp_id=22,
+                    name="Red Start",
+                    color="R",
+                    gih=0.55,
+                    games_in_hand=900,
+                ),
+                31: _stats(
+                    grp_id=31,
+                    name="Blue WU Lane Card",
+                    color="U",
+                    gih=0.55,
+                    games_in_hand=900,
+                ),
+                32: _stats(
+                    grp_id=32,
+                    name="Red BR Lane Card",
+                    color="R",
+                    gih=red_gih,
+                    games_in_hand=900,
+                ),
+                33: _stats(
+                    grp_id=33,
+                    name="Colorless Close Card",
+                    color="C",
+                    gih=0.552,
+                    games_in_hand=900,
+                ),
+            },
+            pair_win_rates=_msh_pair_win_rates(),
+        ),
+        fallback=None,
+        thin_sample_minimum=500,
+    )
+
+
 def _stats(
     *,
     grp_id: int,
@@ -309,6 +453,13 @@ def _pair_win_rates() -> dict[str, ColorPairWinRate]:
     }
 
 
+def _msh_pair_win_rates() -> dict[str, ColorPairWinRate]:
+    return {
+        "WU": ColorPairWinRate(pair="WU", wins=606, games=1000, win_rate=0.606),
+        "BR": ColorPairWinRate(pair="BR", wins=539, games=1000, win_rate=0.539),
+    }
+
+
 def _card_database() -> CardDatabase:
     return CardDatabase(
         cards={
@@ -324,6 +475,19 @@ def _card_database() -> CardDatabase:
             10: _card(grp_id=10, name="Blue Filler", colors=("U",)),
             11: _card(grp_id=11, name="Red Playable", colors=("R",)),
             12: _card(grp_id=12, name="Pair Filtered Card", colors=("W",)),
+        }
+    )
+
+
+def _msh_pair_tiebreaker_database() -> CardDatabase:
+    return CardDatabase(
+        cards={
+            20: _card(grp_id=20, name="White Start", colors=("W",)),
+            21: _card(grp_id=21, name="Black Start", colors=("B",)),
+            22: _card(grp_id=22, name="Red Start", colors=("R",)),
+            31: _card(grp_id=31, name="Blue WU Lane Card", colors=("U",)),
+            32: _card(grp_id=32, name="Red BR Lane Card", colors=("R",)),
+            33: _card(grp_id=33, name="Colorless Close Card", colors=()),
         }
     )
 
