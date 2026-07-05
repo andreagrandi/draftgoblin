@@ -93,6 +93,49 @@ def test_watch_plain_once_honors_log_path_override(
     assert captured.err == ""
 
 
+def test_watch_plain_once_ignores_quick_draft_course_snapshot_outside_botdraft(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log_path = tmp_path / "Player.log"
+    log_path.write_text(
+        json.dumps(
+            {
+                "Course": {
+                    "CourseId": "00000000-0000-4000-8000-000000000078",
+                    "InternalEventName": "QuickDraft_ABC_20260702",
+                    "CurrentModule": "DeckSelect",
+                    "ModulePayload": "",
+                    "CourseDeckSummary": {"Attributes": []},
+                    "CardPool": [],
+                    "CardStyles": [],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        argv=[
+            "watch",
+            "--log-path",
+            str(log_path),
+            "--plain",
+            "--bulk-file",
+            str(SCRYFALL_BULK_SAMPLE_PATH),
+            "--app-dir",
+            str(tmp_path / "app"),
+            "--once",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Mode: plain-text" in captured.out
+    assert captured.err == ""
+
 
 def test_watch_tui_once_is_default_mode(
     tmp_path: Path,

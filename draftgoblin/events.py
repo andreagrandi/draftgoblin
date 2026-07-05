@@ -353,11 +353,8 @@ def _parse_course(
     )
     current_module = course.get("CurrentModule")
     event_name_value = course.get("InternalEventName")
-    if current_module != "BotDraft" and not _is_quick_draft_name(event_name_value):
-        return None
-
     if current_module != "BotDraft":
-        _raise("Quick Draft course must use CurrentModule BotDraft", raw_line=raw_line)
+        return None
 
     event_name = _required_str(
         event_name_value,
@@ -589,10 +586,6 @@ def _set_code(*, event_name: str, raw_line: str) -> str:
         _raise("Quick Draft event name does not include a set code", raw_line=raw_line)
 
     return parts[1]
-
-
-def _is_quick_draft_name(value: Any) -> bool:
-    return isinstance(value, str) and value.startswith(QUICK_DRAFT_PREFIX)
 
 
 def _json_line_may_contain_events(line: str) -> bool:
