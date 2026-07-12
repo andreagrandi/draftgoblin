@@ -435,16 +435,16 @@ def handle_watch(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        database = _load_watch_card_database(args=args)
-        ratings_loader = _metadata_augmenting_ratings_loader(
-            args=args,
-            database=database,
-            load_ratings=lambda set_code: load_or_refresh_17lands_data(
-                set_code=set_code,
-                app_dir=args.app_dir,
-            ),
-        )
         if args.plain:
+            database = _load_watch_card_database(args=args)
+            ratings_loader = _metadata_augmenting_ratings_loader(
+                args=args,
+                database=database,
+                load_ratings=lambda set_code: load_or_refresh_17lands_data(
+                    set_code=set_code,
+                    app_dir=args.app_dir,
+                ),
+            )
             return run_plain_watch(
                 log_path=log_path,
                 card_database=database,
@@ -457,12 +457,19 @@ def handle_watch(args: argparse.Namespace) -> int:
 
         return run_tui_watch(
             log_path=log_path,
-            card_database=database,
+            card_database_loader=lambda: _load_watch_card_database(args=args),
             app_dir=args.app_dir,
             poll_interval=args.poll_interval,
             once=args.once,
             startup_scan=args.startup_scan,
-            ratings_loader=ratings_loader,
+            ratings_loader_factory=lambda database: _metadata_augmenting_ratings_loader(
+                args=args,
+                database=database,
+                load_ratings=lambda set_code: load_or_refresh_17lands_data(
+                    set_code=set_code,
+                    app_dir=args.app_dir,
+                ),
+            ),
             mana_icons_enabled=args.mana_icons,
         )
     except KeyboardInterrupt:

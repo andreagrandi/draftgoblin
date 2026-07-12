@@ -175,6 +175,11 @@ def test_watch_mana_icons_flag_is_explicit_tui_opt_in(
         return 0
 
     monkeypatch.setattr(cli, "run_tui_watch", fake_run_tui_watch)
+
+    def fail_if_loaded_before_tui(*, args: object) -> CardDatabase:
+        raise AssertionError("card metadata loaded before the TUI started")
+
+    monkeypatch.setattr(cli, "_load_watch_card_database", fail_if_loaded_before_tui)
     log_path = tmp_path / "Player.log"
     log_path.write_text("", encoding="utf-8")
 
@@ -194,6 +199,7 @@ def test_watch_mana_icons_flag_is_explicit_tui_opt_in(
 
     assert exit_code == 0
     assert default_args.mana_icons is False
+    assert callable(captured["card_database_loader"])
     assert captured["mana_icons_enabled"] is True
 
 

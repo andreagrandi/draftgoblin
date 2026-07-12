@@ -69,6 +69,8 @@ from draftgoblin.setinfo import format_set_label
 
 PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
+CardDatabaseLoader: TypeAlias = Callable[[], CardDatabase]
+RatingsLoaderFactory: TypeAlias = Callable[[CardDatabase], RatingsLoader]
 CardImageFetcher: TypeAlias = Callable[[str, Path], Path]
 BuildSignature: TypeAlias = tuple[str, tuple[int, ...], str | None]
 TuiCardQuantityKey: TypeAlias = tuple[str, str]
@@ -260,11 +262,13 @@ class DraftgoblinTuiApp(App[None]):
         self,
         *,
         log_path: PathInput,
-        card_database: CardDatabase,
+        card_database: CardDatabase | None = None,
+        card_database_loader: CardDatabaseLoader | None = None,
         app_dir: PathInput | None = None,
         poll_interval: float = POLL_INTERVAL_SECONDS,
         previous_log_path: PathInput | None = None,
         ratings_loader: RatingsLoader | None = None,
+        ratings_loader_factory: RatingsLoaderFactory | None = None,
         startup_scan: bool = False,
         once: bool = False,
         poll_enabled: bool = True,
@@ -273,8 +277,19 @@ class DraftgoblinTuiApp(App[None]):
         card_image_fetcher: CardImageFetcher | None = None,
     ) -> None:
         super().__init__()
+        if card_database is None and card_database_loader is None:
+            raise ValueError("card_database or card_database_loader is required.")
+        if card_database is not None and card_database_loader is not None:
+            raise ValueError("card_database and card_database_loader are mutually exclusive.")
+        if ratings_loader is not None and ratings_loader_factory is not None:
+            raise ValueError("ratings_loader and ratings_loader_factory are mutually exclusive.")
+
         self.log_path = Path(log_path).expanduser().resolve(strict=False)
-        self.card_database = card_database
+        self._card_database = card_database
+        self.card_database_loader = card_database_loader
+        self._card_database_error: str | None = None
+        self._log_processing_started = False
+        self._ratings_loader_factory = ratings_loader_factory
         self.follower = LogFollower(
             log_path=self.log_path,
             app_dir=app_dir,
@@ -346,6 +361,25 @@ class DraftgoblinTuiApp(App[None]):
         self._draft_states_by_key: dict[tuple[str, str], DraftState] = {}
 
     @property
+    def card_database(self) -> CardDatabase:
+        """Return loaded card metadata for scoring and rendering.
+        Startup code must wait for the loader worker before accessing it.
+        """
+
+        if self._card_database is None:
+            raise RuntimeError("Card metadata is not ready.")
+
+        return self._card_database
+
+    @property
+    def card_database_loading(self) -> bool:
+        """Return whether a card metadata worker is currently running.
+        Tests use this to verify startup work stays outside the render loop.
+        """
+
+        return self._card_database is None and self._card_database_error is None
+
+    @property
     def visible_column_keys(self) -> tuple[str, ...]:
         """Return current pack-table columns for tests.
         The value reflects width-based degradation and user toggles.
@@ -397,8 +431,8 @@ class DraftgoblinTuiApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        """Prepare widgets and start live log polling.
-        The first poll is scheduled as a worker so file I/O does not block UI.
+        """Render the shell before starting metadata and log workers.
+        Log processing begins only after card data is available for scoring.
         """
 
         table = self.query_one("#pack-table", DataTable)
@@ -407,9 +441,21 @@ class DraftgoblinTuiApp(App[None]):
         table.focus()
         self._render_all()
 
-        if not self.poll_enabled:
+        if self.card_database_loading:
+            self._load_card_database_worker()
             return
 
+        self._start_log_processing()
+
+    def _start_log_processing(self) -> None:
+        """Start polling only once card metadata is safe to consume.
+        Deferring this preserves all events for normal scoring and recommendations.
+        """
+
+        if not self.poll_enabled or self._log_processing_started:
+            return
+
+        self._log_processing_started = True
         if self.startup_scan:
             self._scan_startup_files_worker(exit_after=self.once)
         else:
@@ -659,6 +705,9 @@ class DraftgoblinTuiApp(App[None]):
         Tests call this directly to simulate a live fixture stream.
         """
 
+        if self.card_database_loading or self._card_database_error is not None:
+            return
+
         try:
             for line in lines:
                 events_tuple = tuple(self.parser.parse_lines(lines=(line,)))
@@ -676,6 +725,54 @@ class DraftgoblinTuiApp(App[None]):
             self._last_error = str(error)
 
         self._render_all()
+
+    @work(thread=True, exclusive=True, group="card-database")
+    def _load_card_database_worker(self) -> None:
+        """Load or refresh card metadata away from the Textual render loop.
+        The loaded database and any UI state changes are published on the main thread.
+        """
+
+        worker = get_current_worker()
+        if worker.is_cancelled:
+            return
+
+        database = None
+        error_message = None
+        try:
+            if self.card_database_loader is None:
+                raise RuntimeError("No card metadata loader is configured.")
+            database = self.card_database_loader()
+        except Exception as error:  # pragma: no cover - defensive UI boundary.
+            error_message = str(error)
+
+        if worker.is_cancelled:
+            return
+
+        self.call_from_thread(
+            self._finish_card_database_load,
+            database,
+            error_message,
+        )
+
+    def _finish_card_database_load(
+        self,
+        database: CardDatabase | None,
+        error_message: str | None,
+    ) -> None:
+        if database is None:
+            detail = error_message or "unknown error"
+            self._card_database_error = (
+                f"{detail}. Run `draftgoblin refresh-data` after checking your "
+                "network connection and local card-data cache."
+            )
+            self._render_all()
+            return
+
+        self._card_database = database
+        if self._ratings_loader_factory is not None:
+            self.ratings_loader = self._ratings_loader_factory(database)
+        self._render_all()
+        self._start_log_processing()
 
     @work(thread=True, exclusive=True, group="log-poll")
     def _poll_log_worker(self, *, exit_after: bool = False) -> None:
@@ -1215,6 +1312,14 @@ class DraftgoblinTuiApp(App[None]):
 
     def _render_pack_title(self) -> None:
         title = self.query_one("#pack-title", Static)
+        if self.card_database_loading:
+            title.update("Loading card metadata…")
+            return
+
+        if self._card_database_error is not None:
+            title.update("Card metadata unavailable — check the status bar")
+            return
+
         if self._view_mode == "build":
             if self._build_error is not None and self._build_pair_label == "—":
                 title.update("Build view unavailable — metadata or playable count issue")
@@ -1271,6 +1376,7 @@ class DraftgoblinTuiApp(App[None]):
         table = self.query_one("#pack-table", DataTable)
         build_scroll = self.query_one("#build-scroll", VerticalScroll)
         build_view = self.query_one("#build-view", Static)
+        table.loading = self.card_database_loading
         table.display = self._view_mode == "pack"
         build_scroll.display = self._view_mode in {"build", "backtest"}
         build_view.update(self._active_text_view())
@@ -1379,6 +1485,16 @@ class DraftgoblinTuiApp(App[None]):
     def _render_sidebar(self) -> None:
         pool_summary = self.query_one("#pool-summary", Static)
         pool_summary.display = self._view_mode not in {"build", "backtest"}
+        if self.card_database_loading:
+            pool_summary.update("Card metadata\nLoading local cache and Scryfall data…")
+            self._render_focused_card_details()
+            return
+
+        if self._card_database_error is not None:
+            pool_summary.update("Card metadata\nLoad failed — check the status bar for next steps.")
+            self._render_focused_card_details()
+            return
+
         if pool_summary.display:
             event_text = self._event_name or "unknown event"
             draft_text = self._draft_id or "unknown draft"
@@ -1719,6 +1835,14 @@ class DraftgoblinTuiApp(App[None]):
 
     def _render_status_bar(self) -> None:
         status = self.query_one("#status-bar", Static)
+        if self.card_database_loading:
+            status.update("Loading card metadata… the watch UI remains available.")
+            return
+
+        if self._card_database_error is not None:
+            status.update(f"Card metadata failed to load: {self._card_database_error}")
+            return
+
         pair_label = self._pair_label
         if self._view_mode == "build" and self._build_pair_label != "—":
             pair_label = self._build_pair_label
@@ -2880,24 +3004,28 @@ _ERROR_EXIT_CODE = 1
 def run_tui_watch(
     *,
     log_path: PathInput,
-    card_database: CardDatabase,
+    card_database: CardDatabase | None = None,
+    card_database_loader: CardDatabaseLoader | None = None,
     app_dir: PathInput | None = None,
     poll_interval: float = POLL_INTERVAL_SECONDS,
     once: bool = False,
     startup_scan: bool = False,
     ratings_loader: RatingsLoader | None = None,
+    ratings_loader_factory: RatingsLoaderFactory | None = None,
     mana_icons_enabled: bool = False,
 ) -> int:
     """Run Textual watch mode and return a process-style exit code.
-    Tests can pass once=True to mount, poll once, and exit headlessly.
+    Metadata may load in a worker after the initial shell has rendered.
     """
 
     app = DraftgoblinTuiApp(
         log_path=log_path,
         card_database=card_database,
+        card_database_loader=card_database_loader,
         app_dir=app_dir,
         poll_interval=poll_interval,
         ratings_loader=ratings_loader,
+        ratings_loader_factory=ratings_loader_factory,
         startup_scan=startup_scan,
         once=once,
         mana_icons_enabled=mana_icons_enabled,

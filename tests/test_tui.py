@@ -13,7 +13,12 @@ import pytest
 from textual.containers import VerticalScroll
 from textual.widgets import DataTable, Static
 
-from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
+from draftgoblin.carddb import (
+    CardDatabase,
+    CardDatabaseError,
+    CardInfo,
+    build_card_database_from_bulk_file,
+)
 from draftgoblin.pool import (
     DraftPick,
     DraftState,
@@ -1373,6 +1378,83 @@ async def _assert_narrow_width_hides_secondary_columns(tmp_path: Path) -> None:
         )
 
 
+def test_tui_loads_card_metadata_after_rendering_the_shell(tmp_path: Path) -> None:
+    asyncio.run(_assert_card_metadata_load_starts_after_shell_renders(tmp_path=tmp_path))
+
+
+async def _assert_card_metadata_load_starts_after_shell_renders(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("\n".join(_first_pack_lines()) + "\n", encoding="utf-8")
+
+    def slow_loader() -> CardDatabase:
+        started.set()
+        release.wait(timeout=0.5)
+        return _fixture_card_database()
+
+    app = _tui_app(
+        tmp_path=tmp_path,
+        card_database_loader=slow_loader,
+        poll_enabled=True,
+    )
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        try:
+            assert await asyncio.to_thread(started.wait, 0.5)
+            assert app.card_database_loading
+            assert "Loading card metadata" in _status_text(app=app)
+            assert app.query_one("#pack-table", DataTable).loading
+
+            await pilot.press("s")
+            assert app.sort_mode == "win_rate"
+            assert app.query_one("#pack-table", DataTable).row_count == 0
+
+            release.set()
+            for _ in range(10):
+                await pilot.pause(0.05)
+                if app.query_one("#pack-table", DataTable).row_count == 14:
+                    break
+
+            table = app.query_one("#pack-table", DataTable)
+            assert not app.card_database_loading
+            assert not table.loading
+            assert table.row_count == 14
+        finally:
+            release.set()
+
+
+def test_tui_shows_actionable_error_when_card_metadata_load_fails(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_card_metadata_load_failure_is_visible(tmp_path=tmp_path))
+
+
+async def _assert_card_metadata_load_failure_is_visible(tmp_path: Path) -> None:
+    def failing_loader() -> CardDatabase:
+        raise CardDatabaseError("Scryfall is unavailable")
+
+    app = _tui_app(
+        tmp_path=tmp_path,
+        card_database_loader=failing_loader,
+        poll_enabled=True,
+    )
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        for _ in range(10):
+            await pilot.pause(0.05)
+            if not app.card_database_loading:
+                break
+
+        table = app.query_one("#pack-table", DataTable)
+        status = _status_text(app=app)
+        assert not app.card_database_loading
+        assert not table.loading
+        assert table.row_count == 0
+        assert "Card metadata failed to load: Scryfall is unavailable" in status
+        assert "Run `draftgoblin refresh-data`" in status
+
+
 def test_tui_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
     asyncio.run(_assert_slow_ratings_refresh_stays_responsive(tmp_path=tmp_path))
 
@@ -1417,19 +1499,24 @@ def _tui_app(
     *,
     tmp_path: Path,
     card_database: CardDatabase | None = None,
+    card_database_loader: Callable[[], CardDatabase] | None = None,
     ratings_loader: Callable[[str], SeventeenLandsData] | None = None,
     image_preview_enabled: bool | None = None,
     mana_icons_enabled: bool = False,
     card_image_fetcher: Callable[[str, Path], Path] | None = None,
+    poll_enabled: bool = False,
 ) -> DraftgoblinTuiApp:
     return DraftgoblinTuiApp(
         log_path=tmp_path / "Player.log",
         card_database=(
-            card_database if card_database is not None else _fixture_card_database()
+            None
+            if card_database_loader is not None
+            else card_database if card_database is not None else _fixture_card_database()
         ),
+        card_database_loader=card_database_loader,
         app_dir=tmp_path / "app",
         ratings_loader=ratings_loader,
-        poll_enabled=False,
+        poll_enabled=poll_enabled,
         image_preview_enabled=image_preview_enabled,
         mana_icons_enabled=mana_icons_enabled,
         card_image_fetcher=card_image_fetcher,
