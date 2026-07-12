@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NoReturn, TypeAlias
 
 QUICK_DRAFT_PREFIX = "QuickDraft_"
@@ -19,6 +19,10 @@ FINAL_PICK_NUMBER = EXPECTED_PICKS_PER_PACK - 1
 
 _REQUEST_LINE = re.compile(r"^\[UnityCrossThreadLogger\]==>\s+(?P<token>\S+)\s+(?P<body>\{.*\})$")
 _RESPONSE_MARKER = re.compile(r"^<==\s+(?P<token>[^()]+)\(")
+_LOGIN_DISPLAY_NAME = re.compile(
+    r"\[Accounts - Login\]\s+Logged in successfully\.\s+"
+    r"Display Name:\s+(?P<screen_name>.+?)\s*$"
+)
 
 
 class DraftLogParseError(ValueError):
@@ -110,6 +114,10 @@ DraftEvent: TypeAlias = (
 @dataclass(slots=True)
 class _ParserState:
     account_id: str | None = None
+    pending_login_screen_name: str | None = None
+    screen_names_by_client_id: dict[str, str] = field(default_factory=dict)
+    observed_quick_draft_course_ids: set[str] = field(default_factory=set)
+    login_generation: int = 0
 
 
 class DraftLogParser:
@@ -128,6 +136,30 @@ class DraftLogParser:
         for raw_line in lines:
             line = raw_line.rstrip("\r\n")
             yield from _parse_line(line=line, state=self._state)
+
+    @property
+    def pending_login_screen_name(self) -> str | None:
+        """Return the latest login name that lacks an authenticated account id.
+        Callers may use it only when recovery leaves one unambiguous account.
+        """
+
+        return self._state.pending_login_screen_name
+
+    @property
+    def observed_quick_draft_course_ids(self) -> frozenset[str]:
+        """Return Quick Draft course ids seen in current course snapshots.
+        Snapshots associate an otherwise unbound login name with saved drafts.
+        """
+
+        return frozenset(self._state.observed_quick_draft_course_ids)
+
+    @property
+    def login_generation(self) -> int:
+        """Return the count of login boundaries observed in the log stream.
+        Consumers use it to discard account context from the prior login.
+        """
+
+        return self._state.login_generation
 
 
 def parse_events(lines: Iterable[str]) -> Iterator[DraftEvent]:
@@ -149,6 +181,15 @@ def _parse_line(line: str, state: _ParserState) -> tuple[DraftEvent, ...]:
             "Unsupported Quick Draft token; expected current BotDraftDraft* format",
             raw_line=line,
         )
+
+    login_match = _LOGIN_DISPLAY_NAME.search(stripped)
+    if login_match is not None:
+        state.account_id = None
+        state.pending_login_screen_name = login_match.group("screen_name").strip()
+        state.screen_names_by_client_id.clear()
+        state.observed_quick_draft_course_ids.clear()
+        state.login_generation += 1
+        return ()
 
     request_match = _REQUEST_LINE.match(stripped)
     if request_match is not None:
@@ -283,6 +324,7 @@ def _parse_json_line(
     state: _ParserState,
 ) -> tuple[DraftEvent, ...]:
     data = _json_object(text=text, raw_line=raw_line, context="JSON log line")
+    _remember_quick_draft_course_ids(data=data, state=state)
 
     if "authenticateResponse" in data:
         account = _parse_account(data=data, raw_line=raw_line, state=state)
@@ -305,6 +347,31 @@ def _parse_json_line(
     return ()
 
 
+def _remember_quick_draft_course_ids(
+    *,
+    data: dict[str, Any],
+    state: _ParserState,
+) -> None:
+    course_values: list[Any] = [data.get("Course")]
+    courses = data.get("Courses")
+    if isinstance(courses, list):
+        course_values.extend(courses)
+
+    for course in course_values:
+        if not isinstance(course, dict):
+            continue
+
+        event_name = course.get("InternalEventName")
+        course_id = course.get("CourseId")
+        if (
+            isinstance(event_name, str)
+            and event_name.startswith(QUICK_DRAFT_PREFIX)
+            and isinstance(course_id, str)
+            and course_id != ""
+        ):
+            state.observed_quick_draft_course_ids.add(course_id)
+
+
 def _parse_account(
     *,
     data: dict[str, Any],
@@ -321,23 +388,46 @@ def _parse_account(
         field_name="authenticateResponse.clientId",
         raw_line=raw_line,
     )
-    screen_name_value = response.get("screenName")
-    if screen_name_value is None:
-        screen_name = None
-    else:
-        screen_name = _required_str(
-            screen_name_value,
-            field_name="authenticateResponse.screenName",
-            raw_line=raw_line,
-        )
+    screen_name = _screen_name_for_account(
+        response=response,
+        client_id=client_id,
+        raw_line=raw_line,
+        state=state,
+    )
 
     previous_client_id = state.account_id if state.account_id != client_id else None
     state.account_id = client_id
+    state.pending_login_screen_name = None
+    if screen_name is not None:
+        state.screen_names_by_client_id[client_id] = screen_name
     return AccountEvent(
         client_id=client_id,
         screen_name=screen_name,
         previous_client_id=previous_client_id,
     )
+
+
+def _screen_name_for_account(
+    *,
+    response: dict[str, Any],
+    client_id: str,
+    raw_line: str,
+    state: _ParserState,
+) -> str | None:
+    screen_name_value = response.get("screenName")
+    if screen_name_value is not None:
+        screen_name = _required_str(
+            screen_name_value,
+            field_name="authenticateResponse.screenName",
+            raw_line=raw_line,
+        )
+        if screen_name != client_id:
+            return screen_name
+
+    if state.pending_login_screen_name is not None:
+        return state.pending_login_screen_name
+
+    return state.screen_names_by_client_id.get(client_id)
 
 
 def _parse_course(

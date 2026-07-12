@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
+from dataclasses import replace
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -12,7 +14,13 @@ from textual.containers import VerticalScroll
 from textual.widgets import DataTable, Static
 
 from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
-from draftgoblin.pool import DraftPick, DraftState, draft_state_path, save_draft_state
+from draftgoblin.pool import (
+    DraftPick,
+    DraftState,
+    account_profile_path,
+    draft_state_path,
+    save_draft_state,
+)
 from draftgoblin.seventeen import (
     QUICK_DRAFT_FORMAT,
     RatingSampleCounts,
@@ -60,6 +68,476 @@ async def _assert_fixture_stream_updates_pack_panel(tmp_path: Path) -> None:
         assert "Pool: 0" in status
         assert "Data: neutral prior" in status
         assert "Card data from 17Lands (17lands.com)" in status
+
+
+def test_tui_account_indicator_uses_login_display_name_without_auth_screen_name(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_account_indicator_uses_login_display_name_without_auth_screen_name(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_account_indicator_uses_login_display_name_without_auth_screen_name(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.process_lines(lines=_account_lines_without_screen_name())
+        await pilot.pause()
+
+        status = _status_text(app=app)
+        assert "Account: FixturePlayer#12345" in status
+        assert f"Account: {FIXTURE_ACCOUNT_ID}" not in status
+
+
+def test_tui_does_not_assign_post_login_draft_events_to_the_prior_account(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_post_login_draft_events_do_not_use_the_prior_account(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_post_login_draft_events_do_not_use_the_prior_account(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(
+            lines=[
+                _auth_line(client_id="first-account", screen_name="First"),
+                "[Accounts - Login] Logged in successfully. "
+                "Display Name: Second#12345",
+                _course_line(
+                    event_name="QuickDraft_MSH_20260703",
+                    course_id="second-draft",
+                ),
+            ]
+        )
+        await pilot.pause()
+
+        assert not draft_state_path(
+            account_id="first-account",
+            draft_id="second-draft",
+            app_dir=tmp_path / "app",
+        ).exists()
+        assert "Account: unknown" in _status_text(app=app)
+        assert "Error:" not in _status_text(app=app)
+
+
+def test_tui_cycle_binds_an_unmatched_login_name_to_its_observed_legacy_draft(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_cycle_binds_unmatched_login_name_to_observed_legacy_draft(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_cycle_binds_unmatched_login_name_to_observed_legacy_draft(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    for account_id, draft_id, course_id in (
+        ("legacy-account", "legacy-draft", "current-course"),
+        ("other-account", "other-draft", "other-course"),
+    ):
+        save_draft_state(
+            state=replace(
+                _draft_state(
+                    account_id=account_id,
+                    draft_id=draft_id,
+                    event_name="QuickDraft_MSH_20260702",
+                    pool_grp_ids=(104894, 105097),
+                ),
+                course_id=course_id,
+            ),
+            app_dir=tmp_path / "app",
+        )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(
+            lines=[
+                "[Accounts - Login] Logged in successfully. "
+                "Display Name: MagoAnubiTest#26785",
+                _course_snapshot_line(course_id="current-course"),
+            ]
+        )
+        await pilot.pause()
+
+        assert (tmp_path / "app" / "accounts" / "legacy-account.json").exists()
+
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert "Account: MagoAnubiTest#26785" in _status_text(app=app)
+
+    restarted_app = _tui_app(tmp_path=tmp_path)
+    async with restarted_app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert "Account: MagoAnubiTest#26785" in _status_text(app=restarted_app)
+
+
+def test_tui_does_not_assign_unmatched_login_name_to_ambiguous_course_owners(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_unmatched_login_name_is_not_assigned_to_ambiguous_course_owners(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_unmatched_login_name_is_not_assigned_to_ambiguous_course_owners(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    for account_id in ("first-account", "second-account"):
+        save_draft_state(
+            state=replace(
+                _draft_state(
+                    account_id=account_id,
+                    draft_id=f"{account_id}-draft",
+                    event_name="QuickDraft_MSH_20260702",
+                    pool_grp_ids=(104894,),
+                ),
+                course_id="ambiguous-course",
+            ),
+            app_dir=tmp_path / "app",
+        )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(
+            lines=[
+                "[Accounts - Login] Logged in successfully. "
+                "Display Name: Unmatched#12345",
+                _course_snapshot_line(course_id="ambiguous-course"),
+            ]
+        )
+        await pilot.pause()
+
+        for account_id in ("first-account", "second-account"):
+            assert not account_profile_path(
+                account_id=account_id,
+                app_dir=tmp_path / "app",
+            ).exists()
+
+
+def test_tui_account_cycle_visits_each_account_once_and_uses_its_latest_draft(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_account_cycle_visits_each_account_once_and_uses_its_latest_draft(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_account_cycle_visits_each_account_once_and_uses_its_latest_draft(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    old_state = _draft_state(
+        account_id="alpha-account",
+        account_screen_name="Alpha",
+        draft_id="alpha-old",
+        event_name="QuickDraft_MSH_20260702",
+        pool_grp_ids=(104894,),
+    )
+    latest_state = replace(
+        old_state,
+        draft_id="alpha-latest",
+        course_id="alpha-latest",
+        updated_at="2026-07-05T13:00:00+00:00",
+    )
+    second_account_state = _draft_state(
+        account_id="beta-account",
+        account_screen_name="Beta",
+        draft_id="beta-draft",
+        event_name="QuickDraft_MSH_20260702",
+        pool_grp_ids=(105097,),
+    )
+    for state in (old_state, latest_state, second_account_state):
+        save_draft_state(state=state, app_dir=tmp_path / "app")
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == "alpha-account"
+        assert app._draft_id == "alpha-latest"
+        assert "Account: Alpha" in _status_text(app=app)
+        assert "alpha-account" not in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == "beta-account"
+        assert app._draft_id == "beta-draft"
+        assert "Account: Beta" in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == "alpha-account"
+        assert app._draft_id == "alpha-latest"
+
+
+def test_tui_account_cycle_returns_to_live_account_without_a_saved_draft(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_account_cycle_returns_to_live_account_without_a_saved_draft(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_account_cycle_returns_to_live_account_without_a_saved_draft(
+    tmp_path: Path,
+) -> None:
+    live_account_id = "mago-anubi"
+    recovered_account_id = "mago-anubi-test"
+    app = _tui_app(tmp_path=tmp_path)
+    save_draft_state(
+        state=_draft_state(
+            account_id=recovered_account_id,
+            account_screen_name="MagoAnubiTest",
+            draft_id="recovered-draft",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(104894, 105097),
+        ),
+        app_dir=tmp_path / "app",
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(
+            lines=[_auth_line(client_id=live_account_id, screen_name="MagoAnubi")]
+        )
+        await pilot.pause()
+        assert app._active_account_id == live_account_id
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == recovered_account_id
+        assert app._draft_id == "recovered-draft"
+        assert "Account: MagoAnubiTest" in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == live_account_id
+        assert app._draft_id is None
+        assert app._pool_grp_ids == ()
+        assert "Account: MagoAnubi" in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == recovered_account_id
+        assert app._draft_id == "recovered-draft"
+
+
+def test_tui_newer_account_name_survives_cycling_a_cached_legacy_draft(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_newer_account_name_survives_cycling_a_cached_legacy_draft(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_newer_account_name_survives_cycling_a_cached_legacy_draft(
+    tmp_path: Path,
+) -> None:
+    account_id = "legacy-account"
+    app = _tui_app(tmp_path=tmp_path)
+    save_draft_state(
+        state=_draft_state(
+            account_id=account_id,
+            account_screen_name="OldName",
+            draft_id="legacy-draft",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(104894, 105097),
+        ),
+        app_dir=tmp_path / "app",
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+        assert "Account: OldName" in _status_text(app=app)
+
+        app.process_lines(lines=[_auth_line(client_id=account_id, screen_name="NewName")])
+        await pilot.pause()
+        assert "Account: NewName" in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert "Account: NewName" in _status_text(app=app)
+
+    restarted_app = _tui_app(tmp_path=tmp_path)
+    async with restarted_app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert "Account: NewName" in _status_text(app=restarted_app)
+
+
+def test_tui_recovered_account_name_replaces_account_id_fallback(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_recovered_account_name_replaces_account_id_fallback(tmp_path=tmp_path)
+    )
+
+
+async def _assert_recovered_account_name_replaces_account_id_fallback(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    save_draft_state(
+        state=_draft_state(
+            account_id=FIXTURE_ACCOUNT_ID,
+            account_screen_name="PersistedPlayer",
+            draft_id="recovered-draft",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(104894, 105097),
+        ),
+        app_dir=tmp_path / "app",
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=[_auth_line_without_screen_name()])
+        await pilot.pause()
+
+        status = _status_text(app=app)
+        assert "Account: PersistedPlayer" in status
+        assert f"Account: {FIXTURE_ACCOUNT_ID}" not in status
+
+
+def test_tui_selected_account_handles_draft_events_without_account_id(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_selected_account_handles_draft_events_without_account_id(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_selected_account_handles_draft_events_without_account_id(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    save_draft_state(
+        state=_draft_state(
+            account_id=FIXTURE_ACCOUNT_ID,
+            account_screen_name="PersistedPlayer",
+            draft_id="persisted-draft",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(104894, 105097),
+        ),
+        app_dir=tmp_path / "app",
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+
+        app.process_lines(
+            lines=[
+                _course_line(
+                    event_name="QuickDraft_MSH_20260703",
+                    course_id="new-draft",
+                )
+            ]
+        )
+        await pilot.pause()
+
+        status = _status_text(app=app)
+        assert "Error:" not in status
+        assert "Account: PersistedPlayer" in status
+        assert "Pick: waiting" in status
+
+
+def test_tui_current_login_does_not_relabel_recovered_accountless_draft(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_current_login_does_not_relabel_recovered_accountless_draft(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_current_login_does_not_relabel_recovered_accountless_draft(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    save_draft_state(
+        state=_draft_state(
+            account_id="test-account",
+            account_screen_name="MagoAnubiTest",
+            draft_id="draft-from-prev-log",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(104894, 105097),
+        ),
+        app_dir=tmp_path / "app",
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(
+            lines=[
+                _course_line(
+                    event_name="QuickDraft_MSH_20260702",
+                    course_id="draft-from-prev-log",
+                ),
+                *_account_lines_without_screen_name(),
+            ]
+        )
+        await pilot.pause()
+
+        status = _status_text(app=app)
+        assert "Error:" not in status
+        assert "Account: MagoAnubiTest" in status
+        assert "Account: FixturePlayer" not in status
+
+
+def test_tui_accountless_draft_event_does_not_show_repeating_error(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_accountless_draft_event_does_not_show_repeating_error(tmp_path=tmp_path)
+    )
+
+
+async def _assert_accountless_draft_event_does_not_show_repeating_error(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(
+            lines=[
+                _course_line(
+                    event_name="QuickDraft_MSH_20260703",
+                    course_id="new-draft",
+                )
+            ]
+        )
+        await pilot.pause()
+
+        status = _status_text(app=app)
+        assert "Error: Draft event is missing an MTGA account id." not in status
+        assert "Account: unknown" in status
+        assert "Pick: waiting" in status
 
 
 def test_tui_pack_rows_show_17lands_win_rate_grade_and_dg_score(
@@ -863,7 +1341,7 @@ async def _assert_account_key_cycles_recovered_drafts(tmp_path: Path) -> None:
         await pilot.press("a")
         await pilot.pause()
 
-        assert "Account: TestUser (test-account)" in _status_text(app=app)
+        assert "Account: TestUser" in _status_text(app=app)
         assert "Draft: test-draft" not in app.build_view_text
         assert "Pool size: 2 cards" not in app.build_view_text
 
@@ -990,6 +1468,62 @@ def _draft_state(
 
 def _account_lines() -> list[str]:
     return FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()[:2]
+
+
+def _account_lines_without_screen_name() -> list[str]:
+    return [
+        "[Accounts - Login] Logged in successfully. "
+        "Display Name: FixturePlayer#12345",
+        _auth_line_without_screen_name(),
+    ]
+
+
+def _auth_line_without_screen_name() -> str:
+    return json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": FIXTURE_ACCOUNT_ID,
+                "sessionId": "00000000-0000-4000-8000-000000000002",
+            },
+        }
+    )
+
+
+def _auth_line(*, client_id: str, screen_name: str) -> str:
+    return json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": client_id,
+                "screenName": screen_name,
+            },
+        }
+    )
+
+
+def _course_line(*, event_name: str, course_id: str) -> str:
+    return json.dumps(
+        {
+            "Course": {
+                "CourseId": course_id,
+                "InternalEventName": event_name,
+                "CurrentModule": "BotDraft",
+            },
+        }
+    )
+
+
+def _course_snapshot_line(*, course_id: str) -> str:
+    return json.dumps(
+        {
+            "Courses": [
+                {
+                    "CourseId": course_id,
+                    "InternalEventName": "QuickDraft_MSH_20260702",
+                    "CurrentModule": "CreateMatch",
+                }
+            ]
+        }
+    )
 
 
 def _first_pack_lines() -> list[str]:

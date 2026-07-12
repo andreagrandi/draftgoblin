@@ -14,7 +14,15 @@ from draftgoblin.events import (
     PickMadeEvent,
     parse_events,
 )
-from draftgoblin.pool import DraftPoolStore, draft_state_path, load_draft_state
+from draftgoblin.pool import (
+    DraftPick,
+    DraftPoolStore,
+    DraftState,
+    draft_state_path,
+    list_draft_states,
+    load_draft_state,
+    save_draft_state,
+)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
 FIXTURE_ACCOUNT_ID = "FIXTURECLIENTID1234567890"
@@ -242,6 +250,123 @@ def test_two_account_stream_persists_separated_states_without_pool_leakage(
     ]
     assert sorted(path.name for path in (tmp_path / "state" / "ACCOUNT-B").iterdir()) == [
         "draft-b.json",
+    ]
+
+
+def test_accountless_draft_start_recovers_account_from_persisted_course_id(
+    tmp_path: Path,
+) -> None:
+    first_store = DraftPoolStore(app_dir=tmp_path, clock=_fixed_clock)
+    first_store.consume(event=AccountEvent(client_id="ACCOUNT-A", screen_name="First"))
+    first_store.consume(
+        event=DraftStartedEvent(
+            event_name="QuickDraft_ABC_20260703",
+            set_code="ABC",
+            course_id="draft-a",
+            account_id=None,
+        )
+    )
+
+    restart_store = DraftPoolStore(app_dir=tmp_path, clock=_fixed_clock)
+    recovered = restart_store.consume(
+        event=DraftStartedEvent(
+            event_name="QuickDraft_ABC_20260703",
+            set_code="ABC",
+            course_id="draft-a",
+            account_id=None,
+        )
+    )
+
+    assert recovered is not None
+    assert recovered.account_id == "ACCOUNT-A"
+    assert recovered.account_screen_name == "First"
+
+
+def test_account_profile_labels_legacy_drafts_after_a_restart(tmp_path: Path) -> None:
+    legacy_state = DraftState(
+        account_id="ACCOUNT-A",
+        draft_id="legacy-draft",
+        event_name="QuickDraft_ABC_20260703",
+        set_code="ABC",
+        course_id="legacy-draft",
+        started_at=FIXTURE_NOW.isoformat(),
+        updated_at=FIXTURE_NOW.isoformat(),
+        completed_at=None,
+        completed=False,
+        picks=(),
+        pool_grp_ids=(),
+        account_screen_name=None,
+    )
+    save_draft_state(state=legacy_state, app_dir=tmp_path)
+
+    first_store = DraftPoolStore(app_dir=tmp_path, clock=_fixed_clock)
+    first_store.consume(event=AccountEvent(client_id="ACCOUNT-A", screen_name="First"))
+
+    loaded = load_draft_state(
+        account_id="ACCOUNT-A",
+        draft_id="legacy-draft",
+        app_dir=tmp_path,
+    )
+    listed = list_draft_states(app_dir=tmp_path)
+
+    assert loaded.account_screen_name == "First"
+    assert listed == (replace(legacy_state, account_screen_name="First"),)
+    assert (tmp_path / "accounts" / "ACCOUNT-A.json").exists()
+
+
+def test_conflicting_first_pack_starts_new_synthetic_draft_state(
+    tmp_path: Path,
+) -> None:
+    store = DraftPoolStore(app_dir=tmp_path, clock=_fixed_clock)
+    store.consume(event=AccountEvent(client_id="ACCOUNT-A", screen_name="First"))
+    first_state = store.consume(
+        event=PackOfferedEvent(
+            event_name="QuickDraft_ABC_20260703",
+            set_code="ABC",
+            pack_number=0,
+            pick_number=0,
+            offered_grp_ids=(101, 102),
+            pool_grp_ids=(),
+            account_id=None,
+        )
+    )
+    assert first_state is not None
+    store.consume(
+        event=PickMadeEvent(
+            event_name="QuickDraft_ABC_20260703",
+            set_code="ABC",
+            pack_number=0,
+            pick_number=0,
+            chosen_grp_id=101,
+            account_id=None,
+        )
+    )
+
+    second_state = store.consume(
+        event=PackOfferedEvent(
+            event_name="QuickDraft_ABC_20260703",
+            set_code="ABC",
+            pack_number=0,
+            pick_number=0,
+            offered_grp_ids=(201, 202),
+            pool_grp_ids=(),
+            account_id=None,
+        )
+    )
+
+    assert second_state is not None
+    assert second_state.draft_id != first_state.draft_id
+    assert second_state.draft_id.startswith("QuickDraft_ABC_20260703-")
+    assert second_state.pick_for(pack_number=0, pick_number=0) == DraftPick(
+        pack_number=0,
+        pick_number=0,
+        offered_grp_ids=(201, 202),
+        pool_before_pick=(),
+        chosen_grp_id=None,
+    )
+    assert sorted(path.name for path in (tmp_path / "state" / "ACCOUNT-A").iterdir()) == [
+        "QuickDraft_ABC_20260703-2026-07-03T12_00_00+00_00.json",
+        "QuickDraft_ABC_20260703.json",
     ]
 
 

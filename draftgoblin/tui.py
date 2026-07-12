@@ -43,7 +43,6 @@ from draftgoblin.deckbuilder import (
     PairSelection,
     SpellSelection,
     build_deck_from_pool,
-    format_build_result,
 )
 from draftgoblin.events import (
     EXPECTED_PICKS_PER_PACK,
@@ -57,7 +56,7 @@ from draftgoblin.events import (
 )
 from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
-from draftgoblin.pool import DraftPoolStore, DraftState, list_draft_states
+from draftgoblin.pool import DraftPoolError, DraftPoolStore, DraftState, list_draft_states
 from draftgoblin.ranking import (
     DEFAULT_RANKING_MODE,
     RANKING_LABELS,
@@ -283,6 +282,7 @@ class DraftgoblinTuiApp(App[None]):
             previous_log_path=previous_log_path,
         )
         self.parser = DraftLogParser()
+        self._login_generation = self.parser.login_generation
         self.store = DraftPoolStore(app_dir=app_dir)
         self.ratings_loader = ratings_loader
         self.startup_scan = startup_scan
@@ -307,6 +307,7 @@ class DraftgoblinTuiApp(App[None]):
         self._view_mode = "pack"
         self._visible_column_keys: tuple[str, ...] = ()
         self._account_labels: dict[str, str] = {}
+        self._log_account_id: str | None = None
         self._active_account_id: str | None = None
         self._active_account_label = "unknown"
         self._event_name: str | None = None
@@ -410,9 +411,10 @@ class DraftgoblinTuiApp(App[None]):
             return
 
         if self.startup_scan:
-            self._scan_startup_files_worker()
+            self._scan_startup_files_worker(exit_after=self.once)
+        else:
+            self._poll_log_worker(exit_after=self.once)
 
-        self._poll_log_worker(exit_after=self.once)
         if not self.once:
             self.set_interval(self.poll_interval, self._poll_log_worker)
 
@@ -600,23 +602,43 @@ class DraftgoblinTuiApp(App[None]):
         self._move_pack_cursor_to(row=table.row_count - 1)
 
     def action_cycle_account(self) -> None:
-        """Cycle through recovered drafts for other accounts.
-        This lets users pick a just-finished draft after an account switch.
+        """Cycle known accounts and use the latest recovered draft when available.
+        Multiple saved drafts for one account must not create duplicate stops.
         """
 
-        states = self._available_draft_states()
-        if not states:
-            self._record_error("no recovered drafts to switch to")
+        states = self._available_account_draft_states()
+        state_by_account_id = {state.account_id: state for state in states}
+        account_ids = set(state_by_account_id) | set(self._account_labels)
+        if self._log_account_id is not None:
+            account_ids.add(self._log_account_id)
+        if self._active_account_id is not None:
+            account_ids.add(self._active_account_id)
+        if not account_ids:
+            self._record_error("no known accounts to switch to")
             return
 
-        current_key = (self._active_account_id, self._draft_id)
-        keys = tuple((state.account_id, state.draft_id) for state in states)
-        if current_key in keys:
-            index = (keys.index(current_key) + 1) % len(states)
+        ordered_account_ids = tuple(
+            sorted(
+                account_ids,
+                key=lambda account_id: (
+                    self._account_label(account_id=account_id),
+                    account_id,
+                ),
+            )
+        )
+        if self._active_account_id in ordered_account_ids:
+            index = (ordered_account_ids.index(self._active_account_id) + 1) % len(
+                ordered_account_ids
+            )
         else:
             index = 0
 
-        self._select_draft_state(state=states[index])
+        account_id = ordered_account_ids[index]
+        state = state_by_account_id.get(account_id)
+        if state is None:
+            self._select_account_without_draft(account_id=account_id)
+        else:
+            self._select_draft_state(state=state)
         self._render_all()
 
     def action_rebuild_with_pair_override(self) -> None:
@@ -638,12 +660,18 @@ class DraftgoblinTuiApp(App[None]):
         """
 
         try:
-            events_tuple = tuple(self.parser.parse_lines(lines=lines))
-            for event in events_tuple:
-                state = self.store.consume(event=event)
-                if state is not None:
-                    self._remember_draft_state(state=state)
-                self._consume_event(event=event, state=state)
+            for line in lines:
+                events_tuple = tuple(self.parser.parse_lines(lines=(line,)))
+                self._discard_previous_login_account_context()
+                for parsed_event in events_tuple:
+                    event = self._event_with_active_account(event=parsed_event)
+                    state = self._consume_store_event(event=event)
+                    if state is not None:
+                        self._remember_draft_state(state=state)
+                        if _event_is_missing_account(event=event):
+                            event = replace(event, account_id=state.account_id)
+                    self._consume_event(event=event, state=state)
+            self._persist_pending_login_name_for_observed_course()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self._last_error = str(error)
 
@@ -668,7 +696,7 @@ class DraftgoblinTuiApp(App[None]):
             self.call_from_thread(self.exit)
 
     @work(thread=True, exclusive=True, group="startup-scan")
-    def _scan_startup_files_worker(self) -> None:
+    def _scan_startup_files_worker(self, *, exit_after: bool = False) -> None:
         """Scan startup recovery files in a worker thread.
         Startup scans may read Player-prev.log and the current Player.log.
         """
@@ -677,9 +705,13 @@ class DraftgoblinTuiApp(App[None]):
             lines = tuple(self.follower.scan_startup_files(include_previous=True))
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.call_from_thread(self._record_error, str(error))
+            if exit_after:
+                self.call_from_thread(self.exit)
             return
 
         self.call_from_thread(self.process_lines, lines=lines)
+        if exit_after:
+            self.call_from_thread(self.exit)
 
     @work(thread=True, group="ratings")
     def _load_ratings_worker(self, set_code: str) -> None:
@@ -709,6 +741,32 @@ class DraftgoblinTuiApp(App[None]):
             error_message,
         )
 
+    def _discard_previous_login_account_context(self) -> None:
+        if self.parser.login_generation == self._login_generation:
+            return
+
+        self._login_generation = self.parser.login_generation
+        self._log_account_id = None
+        self.store.clear_active_account()
+
+    def _consume_store_event(self, *, event: DraftEvent) -> DraftState | None:
+        try:
+            return self.store.consume(event=event)
+        except DraftPoolError as error:
+            if _is_missing_account_error(event=event, error=error):
+                return None
+
+            raise
+
+    def _event_with_active_account(self, *, event: DraftEvent) -> DraftEvent:
+        if self._log_account_id is None:
+            return event
+
+        if not _event_is_missing_account(event=event):
+            return event
+
+        return replace(event, account_id=self._log_account_id)
+
     def _consume_event(self, *, event: DraftEvent, state: DraftState | None) -> None:
         if isinstance(event, AccountEvent):
             self._consume_account_event(event=event)
@@ -730,14 +788,26 @@ class DraftgoblinTuiApp(App[None]):
             self._consume_completed_event(event=event, state=state)
 
     def _consume_account_event(self, *, event: AccountEvent) -> None:
-        label = _format_account_label(
+        self._log_account_id = event.client_id
+        self._remember_account_label_for(
             client_id=event.client_id,
             screen_name=event.screen_name,
+            replace=True,
         )
-        self._account_labels[event.client_id] = label
-        self._active_account_id = event.client_id
-        self._active_account_label = label
-        self._recover_latest_account_state(account_id=event.client_id)
+        if self._active_account_id == event.client_id:
+            self._active_account_label = self._account_label(account_id=event.client_id)
+        elif self._should_display_account_event(event=event):
+            self._active_account_id = event.client_id
+            self._active_account_label = self._account_label(account_id=event.client_id)
+            self._recover_latest_account_state(account_id=event.client_id)
+
+    def _should_display_account_event(self, *, event: AccountEvent) -> bool:
+        return (
+            self._active_account_id in {None, event.client_id}
+            and self._draft_id is None
+            and self._current_pack_event is None
+            and not self._pool_grp_ids
+        )
 
     def _recover_latest_account_state(self, *, account_id: str) -> None:
         if (
@@ -758,8 +828,10 @@ class DraftgoblinTuiApp(App[None]):
         self._select_draft_state(state=max(states, key=_latest_draft_state_sort_key))
 
     def _consume_started_event(self, *, event: DraftStartedEvent) -> None:
-        self._active_account_id = event.account_id or self._active_account_id
-        self._active_account_label = self._account_label(account_id=event.account_id)
+        self._active_account_id = self._display_account_id(account_id=event.account_id)
+        self._active_account_label = self._account_label(
+            account_id=self._active_account_id
+        )
         self._event_name = event.event_name
         self._set_code = event.set_code
         self._draft_id = event.course_id
@@ -787,8 +859,10 @@ class DraftgoblinTuiApp(App[None]):
         self._ensure_ratings_load_started(set_code=event.set_code)
 
     def _consume_pack_event(self, *, event: PackOfferedEvent) -> None:
-        self._active_account_id = event.account_id or self._active_account_id
-        self._active_account_label = self._account_label(account_id=event.account_id)
+        self._active_account_id = self._display_account_id(account_id=event.account_id)
+        self._active_account_label = self._account_label(
+            account_id=self._active_account_id
+        )
         self._event_name = event.event_name
         self._set_code = event.set_code
         self._pick_label = f"P{event.pack_number + 1}P{event.pick_number + 1}"
@@ -807,8 +881,10 @@ class DraftgoblinTuiApp(App[None]):
         event: PickMadeEvent,
         state: DraftState | None,
     ) -> None:
-        self._active_account_id = event.account_id or self._active_account_id
-        self._active_account_label = self._account_label(account_id=event.account_id)
+        self._active_account_id = self._display_account_id(account_id=event.account_id)
+        self._active_account_label = self._account_label(
+            account_id=self._active_account_id
+        )
         self._pick_label = f"P{event.pack_number + 1}P{event.pick_number + 1} picked"
         if state is not None:
             self._pool_size = len(state.pool_grp_ids)
@@ -829,8 +905,10 @@ class DraftgoblinTuiApp(App[None]):
         event: DraftCompletedEvent,
         state: DraftState | None,
     ) -> None:
-        self._active_account_id = event.account_id or self._active_account_id
-        self._active_account_label = self._account_label(account_id=event.account_id)
+        self._active_account_id = self._display_account_id(account_id=event.account_id)
+        self._active_account_label = self._account_label(
+            account_id=self._active_account_id
+        )
         self._event_name = event.event_name
         self._set_code = event.set_code
         self._pick_label = "complete"
@@ -887,27 +965,47 @@ class DraftgoblinTuiApp(App[None]):
         self._remember_account_label(state=state)
 
     def _remember_account_label(self, *, state: DraftState) -> None:
-        if state.account_screen_name is not None:
-            self._account_labels.setdefault(
-                state.account_id,
-                _format_account_label(
-                    client_id=state.account_id,
-                    screen_name=state.account_screen_name,
-                ),
+        self._remember_account_label_for(
+            client_id=state.account_id,
+            screen_name=state.account_screen_name,
+            replace=False,
+        )
+
+    def _remember_account_label_for(
+        self,
+        *,
+        client_id: str,
+        screen_name: str | None,
+        replace: bool,
+    ) -> None:
+        if screen_name is None:
+            return
+
+        existing_label = self._account_labels.get(client_id)
+        if replace or existing_label is None or existing_label == client_id:
+            self._account_labels[client_id] = _format_account_label(
+                client_id=client_id,
+                screen_name=screen_name,
             )
 
-    def _available_draft_states(self) -> tuple[DraftState, ...]:
-        states = {
-            (state.account_id, state.draft_id): state
-            for state in list_draft_states(app_dir=self.store.app_dir)
-        }
-        states.update(self._draft_states_by_key)
+    def _recovered_draft_states(self) -> tuple[DraftState, ...]:
+        states = dict(self._draft_states_by_key)
+        states.update(
+            {
+                (state.account_id, state.draft_id): state
+                for state in list_draft_states(app_dir=self.store.app_dir)
+            }
+        )
         values = tuple(states.values())
-        if not values:
-            return ()
-
         for state in values:
             self._remember_account_label(state=state)
+
+        return values
+
+    def _available_draft_states(self) -> tuple[DraftState, ...]:
+        values = self._recovered_draft_states()
+        if not values:
+            return ()
 
         matching_event = tuple(
             state
@@ -929,6 +1027,22 @@ class DraftgoblinTuiApp(App[None]):
 
         return tuple(sorted(values, key=self._draft_state_sort_key))
 
+    def _available_account_draft_states(self) -> tuple[DraftState, ...]:
+        latest_state_by_account: dict[str, DraftState] = {}
+        for state in self._recovered_draft_states():
+            current = latest_state_by_account.get(state.account_id)
+            if current is None or _latest_draft_state_sort_key(state) > _latest_draft_state_sort_key(
+                current
+            ):
+                latest_state_by_account[state.account_id] = state
+
+        return tuple(
+            sorted(
+                latest_state_by_account.values(),
+                key=self._draft_state_sort_key,
+            )
+        )
+
     def _draft_state_sort_key(self, state: DraftState) -> tuple[str, str, str, str]:
         return (
             self._account_label(account_id=state.account_id),
@@ -937,9 +1051,86 @@ class DraftgoblinTuiApp(App[None]):
             state.draft_id,
         )
 
+    def _persist_pending_login_name_for_observed_course(self) -> None:
+        """Persist an unbound login name when one saved account owns its course.
+        Arena can omit authentication while still listing that account's active draft.
+        """
+
+        screen_name = self.parser.pending_login_screen_name
+        course_ids = self.parser.observed_quick_draft_course_ids
+        if screen_name is None or not course_ids:
+            return
+
+        states_by_key = dict(self._draft_states_by_key)
+        states_by_key.update(
+            {
+                (candidate.account_id, candidate.draft_id): candidate
+                for candidate in list_draft_states(app_dir=self.store.app_dir)
+            }
+        )
+        matching_account_ids = {
+            candidate.account_id
+            for candidate in states_by_key.values()
+            if candidate.course_id in course_ids or candidate.draft_id in course_ids
+        }
+        if len(matching_account_ids) != 1:
+            return
+
+        account_id = matching_account_ids.pop()
+        if account_id in self._account_labels:
+            return
+
+        self.store.set_active_account(
+            account_id=account_id,
+            screen_name=screen_name,
+        )
+        for key, candidate in tuple(self._draft_states_by_key.items()):
+            if candidate.account_id == account_id:
+                self._draft_states_by_key[key] = replace(
+                    candidate,
+                    account_screen_name=screen_name,
+                )
+
+    def _select_account_without_draft(self, *, account_id: str) -> None:
+        """Show an account with no recovered draft without retaining another account's pool.
+        This keeps the live logged-in account reachable through the account cycle.
+        """
+
+        self._active_account_id = account_id
+        self.store.set_active_account(account_id=account_id)
+        self._active_account_label = self._account_label(account_id=account_id)
+        self._event_name = None
+        self._set_code = None
+        self._draft_id = None
+        self._pick_label = "—"
+        self._pool_size = 0
+        self._pool_grp_ids = ()
+        self._last_picks = []
+        self._current_pack_event = None
+        self._current_pack = None
+        self._pair_label = "open"
+        self._commitment_label = "0% open"
+        self._view_mode = "pack"
+        self._forced_pair = None
+        self._build_pair_label = "—"
+        self._build_text = "Build view: no picked cards yet."
+        self._build_error = None
+        self._build_action_status = None
+        self._backtest_text = "Backtest view: complete a draft, then press t."
+        self._backtest_error = None
+        self._backtest_action_status = None
+        self._last_build_signature = None
+        self._build_spell_sort_mode = "curve"
+        self._build_show_details = False
+        self._clear_build_render_state()
+
     def _select_draft_state(self, *, state: DraftState) -> None:
         self._remember_draft_state(state=state)
         self._active_account_id = state.account_id
+        self.store.set_active_account(
+            account_id=state.account_id,
+            screen_name=state.account_screen_name,
+        )
         self._active_account_label = self._account_label(account_id=state.account_id)
         self._event_name = state.event_name
         self._set_code = state.set_code
@@ -1812,6 +2003,15 @@ class DraftgoblinTuiApp(App[None]):
 
         index = COLOR_PAIRS.index(current_pair)
         return COLOR_PAIRS[(index + 1) % len(COLOR_PAIRS)]
+
+    def _display_account_id(self, *, account_id: str | None) -> str | None:
+        if (
+            account_id is None
+            and self.parser.pending_login_screen_name is not None
+        ):
+            return None
+
+        return account_id or self._active_account_id
 
     def _account_label(self, *, account_id: str | None) -> str:
         client_id = account_id or self._active_account_id
@@ -2791,11 +2991,28 @@ def _latest_draft_state_sort_key(state: DraftState) -> tuple[str, str, str]:
     return (state.updated_at, state.account_id, state.draft_id)
 
 
+def _is_missing_account_error(*, event: DraftEvent, error: DraftPoolError) -> bool:
+    return (
+        str(error) == "Draft event is missing an MTGA account id."
+        and _event_is_missing_account(event=event)
+    )
+
+
+def _event_is_missing_account(*, event: DraftEvent) -> bool:
+    return (
+        isinstance(
+            event,
+            (DraftStartedEvent, PackOfferedEvent, PickMadeEvent, DraftCompletedEvent),
+        )
+        and event.account_id is None
+    )
+
+
 def _format_account_label(*, client_id: str, screen_name: str | None) -> str:
     if screen_name is None:
         return client_id
 
-    return f"{screen_name} ({client_id})"
+    return screen_name
 
 
 def _format_card_name(*, card: CardInfo) -> str:

@@ -9,6 +9,7 @@ from draftgoblin.events import (
     AccountEvent,
     DraftCompletedEvent,
     DraftLogParseError,
+    DraftLogParser,
     DraftStartedEvent,
     PackOfferedEvent,
     PickMadeEvent,
@@ -135,6 +136,207 @@ def test_parse_fixture_yields_account_start_all_picks_and_completion() -> None:
     assert len(completion.picked_grp_ids) == 42
     assert completion.inferred is False
     assert completion.account_id == account.client_id
+
+
+def test_parser_uses_login_display_name_when_auth_screen_name_is_missing() -> None:
+    auth_line = json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": "ACCOUNTID123",
+            },
+        }
+    )
+
+    events = list(
+        parse_events(
+            lines=[
+                "[Accounts - Login] Logged in successfully. "
+                "Display Name: ReadablePlayer#12345",
+                auth_line,
+            ]
+        )
+    )
+
+    assert events == [
+        AccountEvent(
+            client_id="ACCOUNTID123",
+            screen_name="ReadablePlayer#12345",
+            previous_client_id=None,
+        )
+    ]
+
+
+def test_parser_accepts_a_decorated_login_display_name_line() -> None:
+    auth_line = json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": "ACCOUNTID123",
+            },
+        }
+    )
+
+    events = list(
+        parse_events(
+            lines=[
+                "[UnityCrossThreadLogger] [Accounts - Login] "
+                "Logged in successfully. Display Name: ReadablePlayer#12345",
+                auth_line,
+            ]
+        )
+    )
+
+    assert events == [
+        AccountEvent(
+            client_id="ACCOUNTID123",
+            screen_name="ReadablePlayer#12345",
+            previous_client_id=None,
+        )
+    ]
+
+
+def test_parser_records_quick_draft_course_ids_from_course_snapshots() -> None:
+    parser = DraftLogParser()
+    snapshot_line = json.dumps(
+        {
+            "Courses": [
+                {
+                    "CourseId": "quick-draft-course",
+                    "InternalEventName": "QuickDraft_MSH_20260702",
+                    "CurrentModule": "CreateMatch",
+                },
+                {
+                    "CourseId": "other-course",
+                    "InternalEventName": "PremierDraft_MSH_20260702",
+                    "CurrentModule": "CreateMatch",
+                },
+            ]
+        }
+    )
+
+    assert list(parser.parse_lines(lines=[snapshot_line])) == []
+    assert parser.observed_quick_draft_course_ids == frozenset({"quick-draft-course"})
+
+
+def test_parser_clears_prior_account_context_at_a_new_login_boundary() -> None:
+    parser = DraftLogParser()
+    first_auth_line = json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": "FIRSTACCOUNT",
+                "screenName": "FirstPlayer",
+            },
+        }
+    )
+    previous_course_snapshot = json.dumps(
+        {
+            "Courses": [
+                {
+                    "CourseId": "previous-course",
+                    "InternalEventName": "QuickDraft_MSH_20260702",
+                }
+            ]
+        }
+    )
+    next_course_line = json.dumps(
+        {
+            "Course": {
+                "CourseId": "next-course",
+                "InternalEventName": "QuickDraft_MSH_20260702",
+                "CurrentModule": "BotDraft",
+            }
+        }
+    )
+
+    assert list(
+        parser.parse_lines(lines=[first_auth_line, previous_course_snapshot])
+    ) == [
+        AccountEvent(
+            client_id="FIRSTACCOUNT",
+            screen_name="FirstPlayer",
+            previous_client_id=None,
+        )
+    ]
+    events = list(
+        parser.parse_lines(
+            lines=[
+                "[Accounts - Login] Logged in successfully. "
+                "Display Name: SecondPlayer#12345",
+                next_course_line,
+            ]
+        )
+    )
+
+    assert events == [
+        DraftStartedEvent(
+            event_name="QuickDraft_MSH_20260702",
+            set_code="MSH",
+            course_id="next-course",
+            account_id=None,
+        )
+    ]
+    assert parser.observed_quick_draft_course_ids == frozenset({"next-course"})
+
+
+def test_parser_prefers_login_display_name_when_auth_screen_name_is_client_id() -> None:
+    auth_line = json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": "ACCOUNTID123",
+                "screenName": "ACCOUNTID123",
+            },
+        }
+    )
+
+    events = list(
+        parse_events(
+            lines=[
+                "[Accounts - Login] Logged in successfully. "
+                "Display Name: ReadablePlayer#12345",
+                auth_line,
+            ]
+        )
+    )
+
+    assert events == [
+        AccountEvent(
+            client_id="ACCOUNTID123",
+            screen_name="ReadablePlayer#12345",
+            previous_client_id=None,
+        )
+    ]
+
+
+def test_parser_reuses_known_account_name_for_repeated_auth_without_screen_name() -> None:
+    first_auth_line = json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": "ACCOUNTID123",
+                "screenName": "ReadablePlayer",
+            },
+        }
+    )
+    second_auth_line = json.dumps(
+        {
+            "authenticateResponse": {
+                "clientId": "ACCOUNTID123",
+            },
+        }
+    )
+
+    events = list(parse_events(lines=[first_auth_line, second_auth_line]))
+
+    assert events == [
+        AccountEvent(
+            client_id="ACCOUNTID123",
+            screen_name="ReadablePlayer",
+            previous_client_id=None,
+        ),
+        AccountEvent(
+            client_id="ACCOUNTID123",
+            screen_name="ReadablePlayer",
+            previous_client_id=None,
+        ),
+    ]
 
 
 def test_parser_emits_account_change_when_authenticate_response_changes() -> None:

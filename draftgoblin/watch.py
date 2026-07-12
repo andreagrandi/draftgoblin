@@ -7,6 +7,7 @@ from __future__ import annotations
 import sys
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from os import PathLike
 from pathlib import Path
 from typing import TextIO, TypeAlias
@@ -25,7 +26,7 @@ from draftgoblin.events import (
 )
 from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine
-from draftgoblin.pool import DraftPoolStore, DraftState
+from draftgoblin.pool import DraftPoolError, DraftPoolStore, DraftState
 from draftgoblin.replay import (
     format_draft_completed_event,
     format_pack_offered_event,
@@ -61,6 +62,7 @@ class PlainLogWatcher:
             previous_log_path=previous_log_path,
         )
         self.parser = DraftLogParser()
+        self._login_generation = self.parser.login_generation
         self.store = DraftPoolStore(app_dir=app_dir)
         self.ratings_loader = ratings_loader
         self._pick_engines_by_set: dict[str, PickEngine] = {}
@@ -89,16 +91,50 @@ class PlainLogWatcher:
         Pool persistence happens before rendering so conflicts fail loudly.
         """
 
-        events = tuple(self.parser.parse_lines(lines=lines))
-        if not events:
-            return ""
-
         output_lines: list[str] = []
-        for event in events:
-            state = self.store.consume(event=event)
-            output_lines.extend(self._format_event(event=event, state=state))
+        for line in lines:
+            events = tuple(self.parser.parse_lines(lines=(line,)))
+            self._discard_previous_login_account_context()
+            for parsed_event in events:
+                event = self._event_with_active_account(event=parsed_event)
+                state = self._consume_store_event(event=event)
+                if state is not None:
+                    self._remember_account_label(
+                        client_id=state.account_id,
+                        screen_name=state.account_screen_name,
+                        replace=False,
+                    )
+                    if _event_is_missing_account(event=event):
+                        event = replace(event, account_id=state.account_id)
+                output_lines.extend(self._format_event(event=event, state=state))
 
         return _join_output_lines(lines=output_lines)
+
+    def _discard_previous_login_account_context(self) -> None:
+        if self.parser.login_generation == self._login_generation:
+            return
+
+        self._login_generation = self.parser.login_generation
+        self._active_account_id = None
+        self.store.clear_active_account()
+
+    def _consume_store_event(self, *, event: DraftEvent) -> DraftState | None:
+        try:
+            return self.store.consume(event=event)
+        except DraftPoolError as error:
+            if _is_missing_account_error(event=event, error=error):
+                return None
+
+            raise
+
+    def _event_with_active_account(self, *, event: DraftEvent) -> DraftEvent:
+        if self._active_account_id is None:
+            return event
+
+        if not _event_is_missing_account(event=event):
+            return event
+
+        return replace(event, account_id=self._active_account_id)
 
     def _format_event(
         self,
@@ -158,12 +194,13 @@ class PlainLogWatcher:
         return []
 
     def _format_account_event(self, *, event: AccountEvent) -> list[str]:
-        label = _format_account_label(
+        self._remember_account_label(
             client_id=event.client_id,
             screen_name=event.screen_name,
+            replace=True,
         )
-        self._account_labels[event.client_id] = label
         self._active_account_id = event.client_id
+        label = self._account_label(account_id=event.client_id)
 
         if event.previous_client_id is None:
             headline = f"Active account: {label}"
@@ -188,6 +225,23 @@ class PlainLogWatcher:
 
     def _known_account_label(self, client_id: str) -> str:
         return self._account_labels.get(client_id, client_id)
+
+    def _remember_account_label(
+        self,
+        *,
+        client_id: str,
+        screen_name: str | None,
+        replace: bool,
+    ) -> None:
+        if screen_name is None:
+            return
+
+        existing_label = self._account_labels.get(client_id)
+        if replace or existing_label is None or existing_label == client_id:
+            self._account_labels[client_id] = _format_account_label(
+                client_id=client_id,
+                screen_name=screen_name,
+            )
 
     def _format_build_sheet(self, *, state: DraftState) -> list[str]:
         pool = BuildPool(
@@ -312,6 +366,23 @@ def _color_status_from_pack_lines(*, lines: list[str]) -> str:
 
 def _pack_lines_without_color_status(*, lines: list[str]) -> list[str]:
     return [line for line in lines if not line.startswith("Status: inferred pair ")]
+
+
+def _is_missing_account_error(*, event: DraftEvent, error: DraftPoolError) -> bool:
+    return (
+        str(error) == "Draft event is missing an MTGA account id."
+        and _event_is_missing_account(event=event)
+    )
+
+
+def _event_is_missing_account(*, event: DraftEvent) -> bool:
+    return (
+        isinstance(
+            event,
+            (DraftStartedEvent, PackOfferedEvent, PickMadeEvent, DraftCompletedEvent),
+        )
+        and event.account_id is None
+    )
 
 
 def _format_account_label(*, client_id: str, screen_name: str | None) -> str:
