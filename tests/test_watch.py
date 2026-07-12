@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
-from draftgoblin.pool import load_draft_state
+from draftgoblin.pool import draft_state_path, load_draft_state
 from draftgoblin.seventeen import SeventeenLandsError
 from draftgoblin.watch import PlainLogWatcher
 
@@ -47,6 +47,60 @@ def test_plain_watch_processes_appended_lines_incrementally(tmp_path: Path) -> N
 
     assert pick_output == "Chosen card: Fixture Spider [G] (grpId 105097)\n\n"
     assert watcher.poll_once() == ""
+
+
+def test_plain_watch_renders_accountless_draft_event_without_crashing(
+    tmp_path: Path,
+) -> None:
+    watcher = PlainLogWatcher(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        poll_interval=0.01,
+    )
+
+    output = watcher.process_lines(
+        lines=[
+            _course_line(
+                event_name="QuickDraft_MSH_20260703",
+                course_id="new-draft",
+            )
+        ]
+    )
+
+    assert "Draft started: QuickDraft_MSH_20260703" in output
+    assert "Status: active account unknown, draft new-draft" in output
+
+
+def test_plain_watch_does_not_assign_post_login_draft_events_to_prior_account(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    watcher = PlainLogWatcher(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+        poll_interval=0.01,
+    )
+
+    output = watcher.process_lines(
+        lines=[
+            _auth_line(client_id="first-account", screen_name="First"),
+            "[Accounts - Login] Logged in successfully. "
+            "Display Name: Second#12345",
+            _course_line(
+                event_name="QuickDraft_MSH_20260703",
+                course_id="second-draft",
+            ),
+        ]
+    )
+
+    assert "Status: active account unknown, draft second-draft" in output
+    assert not draft_state_path(
+        account_id="first-account",
+        draft_id="second-draft",
+        app_dir=app_dir,
+    ).exists()
 
 
 def test_plain_watch_degrades_to_neutral_when_ratings_loader_fails(

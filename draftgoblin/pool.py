@@ -29,6 +29,8 @@ Clock: TypeAlias = Callable[[], datetime]
 
 STATE_DIRECTORY_NAME = "state"
 STATE_SCHEMA_VERSION = 1
+ACCOUNT_PROFILE_DIRECTORY_NAME = "accounts"
+ACCOUNT_PROFILE_SCHEMA_VERSION = 1
 
 
 class DraftPoolError(RuntimeError):
@@ -198,6 +200,54 @@ class DraftState:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class AccountProfile:
+    """Durable display metadata for one MTGA account.
+    Profiles keep account names independent from individual draft snapshots.
+    """
+
+    account_id: str
+    screen_name: str
+
+    def to_json(self) -> dict[str, object]:
+        """Convert this profile to its small on-disk JSON shape.
+        The account id is repeated to validate the enclosing directory.
+        """
+
+        return {
+            "schema_version": ACCOUNT_PROFILE_SCHEMA_VERSION,
+            "account_id": self.account_id,
+            "screen_name": self.screen_name,
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> AccountProfile:
+        """Load one profile from its on-disk JSON shape.
+        Schema mismatches and malformed values fail before use.
+        """
+
+        schema_version = _required_int(
+            data.get("schema_version"),
+            field_name="account profile.schema_version",
+        )
+        if schema_version != ACCOUNT_PROFILE_SCHEMA_VERSION:
+            raise DraftPoolError(
+                "Unsupported account profile schema "
+                f"{schema_version}; expected {ACCOUNT_PROFILE_SCHEMA_VERSION}."
+            )
+
+        return cls(
+            account_id=_required_str(
+                data.get("account_id"),
+                field_name="account profile.account_id",
+            ),
+            screen_name=_required_str(
+                data.get("screen_name"),
+                field_name="account profile.screen_name",
+            ),
+        )
+
+
 def draft_state_root(*, app_dir: PathInput | None = None) -> Path:
     """Return the root directory for persisted draft state.
     The directory is created by save operations, not path resolution.
@@ -224,6 +274,23 @@ def draft_state_path(
     )
 
 
+def account_profile_path(
+    *,
+    account_id: str,
+    app_dir: PathInput | None = None,
+) -> Path:
+    """Return the durable display-profile path for one MTGA account.
+    Profiles live separately from draft snapshots in the app data directory.
+    """
+
+    root = Path(app_data_dir() if app_dir is None else app_dir)
+    return (
+        root
+        / ACCOUNT_PROFILE_DIRECTORY_NAME
+        / f"{_path_segment(value=account_id, field_name='account_id')}.json"
+    )
+
+
 def load_draft_state(
     *,
     account_id: str,
@@ -235,7 +302,7 @@ def load_draft_state(
     """
 
     path = draft_state_path(account_id=account_id, draft_id=draft_id, app_dir=app_dir)
-    return _load_state_file(path=path)
+    return _with_account_profile(state=_load_state_file(path=path), app_dir=app_dir)
 
 
 def list_draft_states(*, app_dir: PathInput | None = None) -> tuple[DraftState, ...]:
@@ -250,7 +317,10 @@ def list_draft_states(*, app_dir: PathInput | None = None) -> tuple[DraftState, 
     states: list[DraftState] = []
     for account_dir in sorted(root.iterdir()):
         if account_dir.is_dir():
-            states.extend(_load_matching_states(account_dir=account_dir))
+            states.extend(
+                _with_account_profile(state=state, app_dir=app_dir)
+                for state in _load_matching_states(account_dir=account_dir)
+            )
 
     return tuple(states)
 
@@ -360,15 +430,41 @@ class DraftPoolStore:
             app_dir=self.app_dir,
         )
 
-    def _consume_account(self, *, event: AccountEvent) -> None:
-        self._active_account_id = event.client_id
-        if event.screen_name is not None:
-            self._account_screen_names[event.client_id] = event.screen_name
+    def set_active_account(
+        self,
+        *,
+        account_id: str,
+        screen_name: str | None = None,
+    ) -> None:
+        """Set account context for later account-less draft events.
+        UI recovery uses this after selecting persisted account state.
+        """
 
+        self._active_account_id = account_id
+        if screen_name is not None:
+            self._account_screen_names[account_id] = screen_name
+            _save_account_profile(
+                account_id=account_id,
+                screen_name=screen_name,
+                app_dir=self.app_dir,
+            )
+
+    def clear_active_account(self) -> None:
+        """Clear account context after the log starts a new login sequence.
+        Account-less events must not inherit the previous session's identity.
+        """
+
+        self._active_account_id = None
+
+    def _consume_account(self, *, event: AccountEvent) -> None:
+        self.set_active_account(
+            account_id=event.client_id,
+            screen_name=event.screen_name,
+        )
         return None
 
     def _consume_started(self, *, event: DraftStartedEvent) -> DraftState:
-        account_id = self._account_id_for_event(account_id=event.account_id)
+        account_id = self._account_id_for_started_event(event=event)
         draft_id = event.course_id
         self._remember_draft(
             account_id=account_id,
@@ -413,6 +509,14 @@ class DraftPoolStore:
             pack_number=event.pack_number,
             pick_number=event.pick_number,
         )
+        if _is_new_draft_pack_conflict(existing_pick=existing_pick, event=event):
+            state = self._start_new_state_after_pack_conflict(
+                account_id=state.account_id,
+                event_name=event.event_name,
+                set_code=event.set_code,
+            )
+            existing_pick = None
+
         if existing_pick is None or existing_pick.chosen_grp_id is None:
             _ensure_pool_snapshot(state=state, pool_grp_ids=event.pool_grp_ids)
 
@@ -555,6 +659,39 @@ class DraftPoolStore:
             draft_id=event_name,
         )
 
+    def _start_new_state_after_pack_conflict(
+        self,
+        *,
+        account_id: str,
+        event_name: str,
+        set_code: str,
+    ) -> DraftState:
+        draft_id = self._unused_synthetic_draft_id(
+            account_id=account_id,
+            event_name=event_name,
+        )
+        self._remember_draft(
+            account_id=account_id,
+            event_name=event_name,
+            draft_id=draft_id,
+        )
+        return self._new_event_named_state(
+            account_id=account_id,
+            event_name=event_name,
+            set_code=set_code,
+            draft_id=draft_id,
+        )
+
+    def _unused_synthetic_draft_id(self, *, account_id: str, event_name: str) -> str:
+        base = f"{event_name}-{self._now_iso()}"
+        draft_id = base
+        index = 2
+        while self.path_for(account_id=account_id, draft_id=draft_id).exists():
+            draft_id = f"{base}-{index}"
+            index += 1
+
+        return draft_id
+
     def _new_event_named_state(
         self,
         *,
@@ -629,7 +766,16 @@ class DraftPoolStore:
         return self._with_current_account_metadata(state=state)
 
     def _account_screen_name(self, *, account_id: str) -> str | None:
-        return self._account_screen_names.get(account_id)
+        screen_name = self._account_screen_names.get(account_id)
+        if screen_name is not None:
+            return screen_name
+
+        profile = _load_account_profile(account_id=account_id, app_dir=self.app_dir)
+        if profile is None:
+            return None
+
+        self._account_screen_names[account_id] = profile.screen_name
+        return profile.screen_name
 
     def _with_current_account_metadata(self, *, state: DraftState) -> DraftState:
         account_screen_name = self._account_screen_name(account_id=state.account_id)
@@ -645,6 +791,38 @@ class DraftPoolStore:
 
     def _remember_draft(self, *, account_id: str, event_name: str, draft_id: str) -> None:
         self._draft_ids_by_event[(account_id, event_name)] = draft_id
+
+    def _account_id_for_started_event(self, *, event: DraftStartedEvent) -> str:
+        if event.account_id is not None or self._active_account_id is not None:
+            return self._account_id_for_event(account_id=event.account_id)
+
+        inferred_account_id = self._infer_account_id_from_course_id(
+            course_id=event.course_id,
+        )
+        if inferred_account_id is None:
+            raise DraftPoolError("Draft event is missing an MTGA account id.")
+
+        self._active_account_id = inferred_account_id
+        return inferred_account_id
+
+    def _infer_account_id_from_course_id(self, *, course_id: str) -> str | None:
+        if not self.root.exists():
+            return None
+
+        matches = [
+            state
+            for account_dir in sorted(self.root.iterdir())
+            if account_dir.is_dir()
+            for state in _load_matching_states(account_dir=account_dir)
+            if state.course_id == course_id or state.draft_id == course_id
+        ]
+        if len(matches) == 1:
+            return matches[0].account_id
+
+        if len(matches) > 1:
+            raise DraftPoolError(f"Multiple account states match course {course_id!r}.")
+
+        return None
 
     def _account_id_for_draft_event(
         self,
@@ -745,6 +923,68 @@ def _load_matching_states(*, account_dir: Path) -> tuple[DraftState, ...]:
     return tuple(states)
 
 
+def _with_account_profile(*, state: DraftState, app_dir: PathInput | None) -> DraftState:
+    profile = _load_account_profile(account_id=state.account_id, app_dir=app_dir)
+    if profile is None or state.account_screen_name == profile.screen_name:
+        return state
+
+    return replace(state, account_screen_name=profile.screen_name)
+
+
+def _load_account_profile(
+    *,
+    account_id: str,
+    app_dir: PathInput | None,
+) -> AccountProfile | None:
+    path = account_profile_path(account_id=account_id, app_dir=app_dir)
+    if not path.exists():
+        return None
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise DraftPoolError(f"Malformed account profile {path}: {error}.") from error
+
+    if not isinstance(data, dict):
+        raise DraftPoolError(f"Malformed account profile {path}: expected object.")
+
+    profile = AccountProfile.from_json(data=data)
+    if profile.account_id != account_id:
+        raise DraftPoolError(
+            f"Account profile {path} does not match account {account_id!r}."
+        )
+
+    return profile
+
+
+def _save_account_profile(
+    *,
+    account_id: str,
+    screen_name: str,
+    app_dir: PathInput | None,
+) -> Path:
+    profile = AccountProfile(account_id=account_id, screen_name=screen_name)
+    path = account_profile_path(account_id=account_id, app_dir=app_dir)
+    existing = _load_account_profile(account_id=account_id, app_dir=app_dir)
+    if existing == profile:
+        return path
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(profile.to_json(), indent=2, sort_keys=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        delete=False,
+        dir=path.parent,
+        encoding="utf-8",
+    ) as temporary_file:
+        temporary_file.write(payload)
+        temporary_file.write("\n")
+        temporary_path = Path(temporary_file.name)
+
+    temporary_path.replace(path)
+    return path
+
+
 def _ensure_metadata(
     *,
     state: DraftState,
@@ -780,6 +1020,21 @@ def _ensure_pool_snapshot(*, state: DraftState, pool_grp_ids: tuple[int, ...]) -
 
 def _same_pool_contents(left: tuple[int, ...], right: tuple[int, ...]) -> bool:
     return Counter(left) == Counter(right)
+
+
+def _is_new_draft_pack_conflict(
+    *,
+    existing_pick: DraftPick | None,
+    event: PackOfferedEvent,
+) -> bool:
+    return (
+        event.pack_number == 0
+        and event.pick_number == 0
+        and event.pool_grp_ids == ()
+        and existing_pick is not None
+        and existing_pick.offered_grp_ids is not None
+        and existing_pick.offered_grp_ids != event.offered_grp_ids
+    )
 
 
 def _merge_pick(

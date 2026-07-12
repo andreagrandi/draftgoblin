@@ -20,11 +20,19 @@ Arena logs account identity near session start and match authentication. The mos
 { "transactionId": "00000000-0000-4000-8000-000000000001", "requestId": 1, "timestamp": "639186578104553274", "authenticateResponse": { "clientId": "FIXTURECLIENTID1234567890", "sessionId": "00000000-0000-4000-8000-000000000002", "screenName":"FixturePlayer" } }
 ```
 
-Use `authenticateResponse.clientId` as the MTGA account key for current logs and `screenName` for display. `sessionId` is session-scoped and should not be used as the account key. Cross-patch stability still needs future revalidation; if `clientId` disappears, fall back to `screenName` plus a manual `--account` override. The nearby login UI line can provide the display name with tag, but it is not required for parsing:
+Use `authenticateResponse.clientId` as the MTGA account key for current logs and `screenName` for display. `sessionId` is session-scoped and should not be used as the account key. Cross-patch stability still needs future revalidation; if `clientId` disappears, fall back to `screenName` plus a manual `--account` override. When `authenticateResponse.screenName` is missing or only repeats the client id, the parser uses the nearby login UI line as a display-name fallback:
 
 ```log
 [Accounts - Login] Logged in successfully. Display Name: FixturePlayer#12345
 ```
+
+Draftgoblin stores the latest verified display name in a separate per-account
+profile in its app data directory. That profile labels every recovered draft for
+that account, including legacy snapshots written before display-name support.
+When Arena emits a login line without its matching authentication response, the
+TUI may associate it only with recovered drafts whose Quick Draft course id is
+present in the same session's course snapshot; otherwise it leaves the raw id
+unchanged rather than guessing.
 
 ## Quick Draft start
 
@@ -98,5 +106,5 @@ No reference code was copied.
 ## PRD open questions answered
 
 1. Current Quick Draft tokens are `BotDraftDraftStatus` for initial status and `BotDraftDraftPick` for pick requests/responses. The older underscore forms are not present in this fixture.
-2. Account identity is available from `authenticateResponse.clientId`; use `screenName` only as display metadata. Cross-patch stability is not provable from one fixture, so the documented fallback is `screenName` plus a manual account override if the token changes.
+2. Account identity is available from `authenticateResponse.clientId`; use `screenName` or the login display-name line only as display metadata. Cross-patch stability is not provable from one fixture, so the documented fallback is `screenName` plus a manual account override if the token changes.
 3. Completion is explicit via `Payload.DraftStatus == "Completed"` in `CurrentModule == "DeckSelect"`; fallback is final pick plus empty `DraftPack` plus 42-card `PickedCards` pool.
