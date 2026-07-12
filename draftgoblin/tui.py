@@ -25,7 +25,8 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Header, Select, Static, Switch
 from textual.worker import get_current_worker
 
 try:  # pragma: no cover - import availability depends on optional terminal extras.
@@ -57,6 +58,11 @@ from draftgoblin.events import (
 from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
 from draftgoblin.pool import DraftPoolError, DraftPoolStore, DraftState, list_draft_states
+from draftgoblin.preferences import (
+    TuiVisibilityPreferences,
+    load_tui_preferences,
+    save_tui_preferences,
+)
 from draftgoblin.ranking import (
     DEFAULT_RANKING_MODE,
     RANKING_LABELS,
@@ -157,6 +163,184 @@ class CardDetailsPanel(Static, can_focus=False):
     """
 
 
+_VISIBILITY_BOOLEAN_OPTIONS = (
+    (
+        "secondary_columns",
+        "Secondary pack columns — show Fit, ALSA, mana value, and source on wide "
+        "screens.",
+    ),
+    (
+        "build_details",
+        "Build details — show the picked pool, pair reasoning, checks, and bench "
+        "cuts.",
+    ),
+    (
+        "pool_metadata",
+        "Pool metadata — show set, event, pool size, pairs, and metadata status.",
+    ),
+    (
+        "pool_color_distribution",
+        "Pool color distribution — show the sidebar color bar.",
+    ),
+    (
+        "pool_mana_curve",
+        "Mana curve — show pool and detailed-build mana curves.",
+    ),
+    (
+        "account_identifier",
+        "Account identifier — show the active account and detailed-build account ID.",
+    ),
+    (
+        "draft_identifier",
+        "Draft identifier — show draft IDs in pool and detailed-build metadata.",
+    ),
+    (
+        "mana_pips_and_sources",
+        "Mana pips and sources — show detailed-build mana requirements and sources.",
+    ),
+    (
+        "attribution",
+        "17Lands attribution — show the data-source attribution in the status bar.",
+    ),
+    (
+        "focused_card_details",
+        "Focused card details — show statistics for the highlighted card in the "
+        "sidebar.",
+    ),
+)
+
+
+class TuiVisibilityScreen(ModalScreen[TuiVisibilityPreferences | None]):
+    """Modal editor for persisted optional TUI elements.
+    Saving returns the selected preferences to the calling application.
+    """
+
+    CSS = """
+    TuiVisibilityScreen {
+        align: center middle;
+    }
+
+    #visibility-dialog {
+        width: 76;
+        height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #visibility-options {
+        height: 1fr;
+    }
+
+    .visibility-label {
+        height: auto;
+        margin-top: 1;
+    }
+
+    #visibility-actions {
+        height: auto;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, *, preferences: TuiVisibilityPreferences) -> None:
+        super().__init__()
+        self.preferences = preferences
+
+    def compose(self) -> ComposeResult:
+        """Compose descriptive controls for every persisted visibility preference.
+        The scrollable form fits short terminals without hiding any option.
+        """
+
+        with Vertical(id="visibility-dialog"):
+            yield Static("TUI config", classes="visibility-label")
+            yield Static(
+                "Choose optional elements. Responsive terminal width can still hide "
+                "enabled sections.",
+                classes="visibility-label",
+            )
+            with VerticalScroll(id="visibility-options"):
+                for field_name, label in _VISIBILITY_BOOLEAN_OPTIONS:
+                    yield Static(label, classes="visibility-label")
+                    yield Switch(
+                        value=getattr(self.preferences, field_name),
+                        id=_visibility_control_id(field_name=field_name),
+                    )
+                yield Static(
+                    "Card image preview — Auto follows terminal detection; Show "
+                    "requests previews; Hide prevents image loading.",
+                    classes="visibility-label",
+                )
+                yield Select(
+                    (
+                        ("Auto", "auto"),
+                        ("Show", "show"),
+                        ("Hide", "hide"),
+                    ),
+                    value=self.preferences.card_image_preview,
+                    allow_blank=False,
+                    id=_visibility_control_id(field_name="card_image_preview"),
+                )
+            with Horizontal(id="visibility-actions"):
+                yield Button("Save", id="save-visibility", variant="primary")
+                yield Button("Cancel", id="cancel-visibility")
+                yield Button("Reset defaults", id="reset-visibility")
+
+    def action_cancel(self) -> None:
+        """Dismiss the dialog without changing active or persisted preferences.
+        Escape follows the explicit Cancel action.
+        """
+
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Save, cancel, or reset the form according to its selected action.
+        Reset changes the form only until the user confirms Save.
+        """
+
+        if event.button.id == "save-visibility":
+            self.dismiss(self._selected_preferences())
+        elif event.button.id == "cancel-visibility":
+            self.dismiss(None)
+        elif event.button.id == "reset-visibility":
+            self._restore_defaults()
+
+    def _selected_preferences(self) -> TuiVisibilityPreferences:
+        values = {
+            field_name: self.query_one(
+                f"#{_visibility_control_id(field_name=field_name)}",
+                Switch,
+            ).value
+            for field_name, _ in _VISIBILITY_BOOLEAN_OPTIONS
+        }
+        card_image_preview = self.query_one(
+            f"#{_visibility_control_id(field_name='card_image_preview')}",
+            Select,
+        ).value
+        return TuiVisibilityPreferences(
+            **values,
+            card_image_preview=str(card_image_preview),
+        )
+
+    def _restore_defaults(self) -> None:
+        defaults = TuiVisibilityPreferences()
+        for field_name, _ in _VISIBILITY_BOOLEAN_OPTIONS:
+            self.query_one(
+                f"#{_visibility_control_id(field_name=field_name)}",
+                Switch,
+            ).value = getattr(defaults, field_name)
+        self.query_one(
+            f"#{_visibility_control_id(field_name='card_image_preview')}",
+            Select,
+        ).value = defaults.card_image_preview
+
+
+def _visibility_control_id(*, field_name: str) -> str:
+    return f"visibility-{field_name.replace('_', '-')}"
+
+
 class DraftgoblinTuiApp(App[None]):
     """Textual app for live Quick Draft recommendations.
     The app can tail a real log or accept fixture lines in tests.
@@ -239,7 +423,7 @@ class DraftgoblinTuiApp(App[None]):
 
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
-        Binding("c", "toggle_secondary_columns", "Columns", show=True),
+        Binding("c", "open_config", "Config", show=True),
         Binding("s", "cycle_sort", "Rank", show=True),
         Binding("b", "open_build_view", "Build", show=True),
         Binding("t", "open_backtest_report", "Backtest", show=True),
@@ -275,6 +459,7 @@ class DraftgoblinTuiApp(App[None]):
         image_preview_enabled: bool | None = None,
         mana_icons_enabled: bool = False,
         card_image_fetcher: CardImageFetcher | None = None,
+        visibility_preferences: TuiVisibilityPreferences | None = None,
     ) -> None:
         super().__init__()
         if card_database is None and card_database_loader is None:
@@ -285,6 +470,16 @@ class DraftgoblinTuiApp(App[None]):
             raise ValueError("ratings_loader and ratings_loader_factory are mutually exclusive.")
 
         self.log_path = Path(log_path).expanduser().resolve(strict=False)
+        self._preferences_app_dir = app_dir
+        if visibility_preferences is None:
+            (
+                self.visibility_preferences,
+                self._preferences_load_warning,
+            ) = load_tui_preferences(app_dir=app_dir)
+        else:
+            self.visibility_preferences = visibility_preferences
+            self._preferences_load_warning = None
+        self._preferences_save_warning: str | None = None
         self._card_database = card_database
         self.card_database_loader = card_database_loader
         self._card_database_error: str | None = None
@@ -317,7 +512,7 @@ class DraftgoblinTuiApp(App[None]):
         self._loading_card_image_uris: set[str] = set()
         self._card_image_uris_by_grp_id: dict[int, str] = {}
 
-        self.show_secondary_columns = True
+        self.show_secondary_columns = self.visibility_preferences.secondary_columns
         self.sort_mode = DEFAULT_RANKING_MODE
         self._view_mode = "pack"
         self._visible_column_keys: tuple[str, ...] = ()
@@ -346,7 +541,7 @@ class DraftgoblinTuiApp(App[None]):
         self._backtest_action_status: str | None = None
         self._last_build_signature: BuildSignature | None = None
         self._build_spell_sort_mode = "curve"
-        self._build_show_details = False
+        self._build_show_details = self.visibility_preferences.build_details
         self._build_focus_cards: tuple[TuiCardQuantityGroup, ...] = ()
         self._build_focused_card_index = 0
         self._build_render_pool: BuildPool | None = None
@@ -482,18 +677,36 @@ class DraftgoblinTuiApp(App[None]):
         if event.data_table.id == "pack-table":
             self._render_focused_card_details()
 
-    def action_toggle_secondary_columns(self) -> None:
-        """Toggle secondary pack columns or build detail sections.
-        In build view this makes the key produce an immediate visible change.
+    def action_open_config(self) -> None:
+        """Open the in-app editor for persisted optional TUI elements.
+        The callback applies only settings that the user explicitly saves.
         """
 
-        if self._view_mode == "build":
-            self._build_show_details = not self._build_show_details
-            self._rebuild_build_view()
-        else:
-            self.show_secondary_columns = not self.show_secondary_columns
+        self.push_screen(
+            TuiVisibilityScreen(preferences=self.visibility_preferences),
+            self._apply_visibility_preferences,
+        )
 
+    def _apply_visibility_preferences(
+        self,
+        preferences: TuiVisibilityPreferences | None,
+    ) -> None:
+        if preferences is None:
+            return
+
+        self.visibility_preferences = preferences
+        self.show_secondary_columns = preferences.secondary_columns
+        self._build_show_details = preferences.build_details
+        self._save_visibility_preferences()
+        if self._build_render_pool is not None:
+            self._refresh_build_text_from_render_state()
         self._render_all()
+
+    def _save_visibility_preferences(self) -> None:
+        self._preferences_save_warning = save_tui_preferences(
+            preferences=self.visibility_preferences,
+            app_dir=self._preferences_app_dir,
+        )
 
     def action_toggle_mana_icons(self) -> None:
         """Toggle opt-in Mana font icon rendering.
@@ -951,7 +1164,7 @@ class DraftgoblinTuiApp(App[None]):
         self._backtest_action_status = None
         self._last_build_signature = None
         self._build_spell_sort_mode = "curve"
-        self._build_show_details = False
+        self._build_show_details = self.visibility_preferences.build_details
         self._clear_build_render_state()
         self._ensure_ratings_load_started(set_code=event.set_code)
 
@@ -1218,7 +1431,7 @@ class DraftgoblinTuiApp(App[None]):
         self._backtest_action_status = None
         self._last_build_signature = None
         self._build_spell_sort_mode = "curve"
-        self._build_show_details = False
+        self._build_show_details = self.visibility_preferences.build_details
         self._clear_build_render_state()
 
     def _select_draft_state(self, *, state: DraftState) -> None:
@@ -1308,7 +1521,34 @@ class DraftgoblinTuiApp(App[None]):
 
     def _update_responsive_visibility(self) -> None:
         sidebar = self.query_one("#sidebar", Vertical)
-        sidebar.display = self.size.width >= SIDEBAR_MIN_WIDTH
+        sidebar.display = (
+            self.size.width >= SIDEBAR_MIN_WIDTH
+            and self._sidebar_has_enabled_content()
+        )
+
+    def _sidebar_has_enabled_content(self) -> bool:
+        if self._view_mode not in {"build", "backtest"} and any(
+            (
+                self.visibility_preferences.pool_metadata,
+                self.visibility_preferences.pool_color_distribution,
+                self.visibility_preferences.pool_mana_curve,
+            )
+        ):
+            return True
+
+        return (
+            self.visibility_preferences.focused_card_details
+            or self._card_image_preview_is_enabled()
+        )
+
+    def _card_image_preview_is_enabled(self) -> bool:
+        mode = self.visibility_preferences.card_image_preview
+        if mode == "hide":
+            return False
+        if mode == "show":
+            return TgpImage is not None
+
+        return self._card_image_preview_enabled
 
     def _render_pack_title(self) -> None:
         title = self.query_one("#pack-title", Static)
@@ -1484,56 +1724,82 @@ class DraftgoblinTuiApp(App[None]):
 
     def _render_sidebar(self) -> None:
         pool_summary = self.query_one("#pool-summary", Static)
-        pool_summary.display = self._view_mode not in {"build", "backtest"}
+        show_pool_summary = self._view_mode not in {"build", "backtest"} and any(
+            (
+                self.visibility_preferences.pool_metadata,
+                self.visibility_preferences.pool_color_distribution,
+                self.visibility_preferences.pool_mana_curve,
+            )
+        )
+        pool_summary.display = show_pool_summary and self.query_one(
+            "#sidebar",
+            Vertical,
+        ).display
         if self.card_database_loading:
-            pool_summary.update("Card metadata\nLoading local cache and Scryfall data…")
+            if pool_summary.display:
+                pool_summary.update("Card metadata\nLoading local cache and Scryfall data…")
             self._render_focused_card_details()
             return
 
         if self._card_database_error is not None:
-            pool_summary.update("Card metadata\nLoad failed — check the status bar for next steps.")
+            if pool_summary.display:
+                pool_summary.update(
+                    "Card metadata\nLoad failed — check the status bar for next steps."
+                )
             self._render_focused_card_details()
             return
 
         if pool_summary.display:
-            event_text = self._event_name or "unknown event"
-            draft_text = self._draft_id or "unknown draft"
-            color_bar = _pool_color_distribution_bar(
-                pool_grp_ids=self._pool_grp_ids,
-                card_database=self.card_database,
-                mana_icons_enabled=self.mana_icons_enabled,
-            )
-            curve = _pool_curve_sparkline(
-                pool_grp_ids=self._pool_grp_ids,
-                card_database=self.card_database,
-            )
-            override_label = self._build_override_label()
-            inferred_pair = _format_pair_label(
-                pair=self._pair_label,
-                mana_icons_enabled=self.mana_icons_enabled,
-            )
-            build_pair = _format_pair_label(
-                pair=self._build_pair_label,
-                mana_icons_enabled=self.mana_icons_enabled,
-            )
-            override = _format_pair_label(
-                pair=override_label,
-                mana_icons_enabled=self.mana_icons_enabled,
-            )
-            pool_summary.update(
-                "Pool summary\n"
-                f"Set: {format_set_label(set_code=self._set_code)}\n"
-                f"Event: {event_text}\n"
-                f"Draft: {draft_text}\n"
-                f"Pool size: {self._pool_size}\n"
-                f"Inferred pair: {inferred_pair}\n"
-                f"Build pair: {build_pair}\n"
-                f"Override: {override}\n"
-                f"Build action: {self._build_action_label()}\n"
-                f"{self._metadata_status_text()}\n"
-                f"{color_bar}\n"
-                f"{curve}"
-            )
+            lines = ["Pool summary"]
+            if self.visibility_preferences.pool_metadata:
+                event_text = self._event_name or "unknown event"
+                override_label = self._build_override_label()
+                inferred_pair = _format_pair_label(
+                    pair=self._pair_label,
+                    mana_icons_enabled=self.mana_icons_enabled,
+                )
+                build_pair = _format_pair_label(
+                    pair=self._build_pair_label,
+                    mana_icons_enabled=self.mana_icons_enabled,
+                )
+                override = _format_pair_label(
+                    pair=override_label,
+                    mana_icons_enabled=self.mana_icons_enabled,
+                )
+                lines.extend(
+                    (
+                        f"Set: {format_set_label(set_code=self._set_code)}",
+                        f"Event: {event_text}",
+                    )
+                )
+                if self.visibility_preferences.draft_identifier:
+                    lines.append(f"Draft: {self._draft_id or 'unknown draft'}")
+                lines.extend(
+                    (
+                        f"Pool size: {self._pool_size}",
+                        f"Inferred pair: {inferred_pair}",
+                        f"Build pair: {build_pair}",
+                        f"Override: {override}",
+                        f"Build action: {self._build_action_label()}",
+                        self._metadata_status_text(),
+                    )
+                )
+            if self.visibility_preferences.pool_color_distribution:
+                lines.append(
+                    _pool_color_distribution_bar(
+                        pool_grp_ids=self._pool_grp_ids,
+                        card_database=self.card_database,
+                        mana_icons_enabled=self.mana_icons_enabled,
+                    )
+                )
+            if self.visibility_preferences.pool_mana_curve:
+                lines.append(
+                    _pool_curve_sparkline(
+                        pool_grp_ids=self._pool_grp_ids,
+                        card_database=self.card_database,
+                    )
+                )
+            pool_summary.update("\n".join(lines))
 
         self._render_focused_card_details()
 
@@ -1543,18 +1809,26 @@ class DraftgoblinTuiApp(App[None]):
         except NoMatches:
             return
 
+        sidebar = self.query_one("#sidebar", Vertical)
+        focused_card.display = (
+            self.visibility_preferences.focused_card_details and sidebar.display
+        )
         selected = self._focused_card_details()
         if selected is None:
             self._render_card_image_preview(card=None)
-            focused_card.update(
-                "Focused card details\n"
-                "Use ↑/↓/←/→ in the card list to browse card details here."
-            )
+            if focused_card.display:
+                focused_card.update(
+                    "Focused card details\n"
+                    "Use ↑/↓/←/→ in the card list to browse card details here."
+                )
             return
 
         section, rank, total_count, scored_card, quantity = selected
         card = scored_card.card
         self._render_card_image_preview(card=card)
+        if not focused_card.display:
+            return
+
         type_line = _format_card_types(
             card=card,
             mana_icons_enabled=self.mana_icons_enabled,
@@ -1583,7 +1857,7 @@ class DraftgoblinTuiApp(App[None]):
 
     def _render_card_image_preview(self, *, card: CardInfo | None) -> None:
         image_panel = self.query_one("#card-image-preview", Static)
-        if not self._card_image_preview_enabled:
+        if not self._card_image_preview_is_enabled():
             image_panel.display = False
             return
 
@@ -1857,52 +2131,53 @@ class DraftgoblinTuiApp(App[None]):
             sort_label = f"Backtest ranking: {SORT_LABELS[self.sort_mode]}"
         else:
             sort_label = f"Ranking: {SORT_LABELS[self.sort_mode]}"
+
+        segments: list[str] = []
+        if self.visibility_preferences.account_identifier:
+            segments.append(f"Account: {self._active_account_label}")
+        segments.extend(
+            (
+                f"View: {self._view_mode}",
+                f"Pair: {pair_label} ({self._commitment_label})",
+                f"Pick: {self._pick_label}",
+                f"Pool: {self._pool_size}",
+                f"Data: {self._data_source}",
+                sort_label,
+            )
+        )
         confidence_label = self._recommendation_confidence_label()
-        confidence_text = (
-            f"Confidence: {confidence_label} | "
-            if confidence_label is not None
-            else ""
-        )
+        if confidence_label is not None:
+            segments.append(f"Confidence: {confidence_label}")
         icon_label = "on" if self.mana_icons_enabled else "off"
-        text = (
-            f"Account: {self._active_account_label} | "
-            f"View: {self._view_mode} | "
-            f"Pair: {pair_label} ({self._commitment_label}) | "
-            f"Pick: {self._pick_label} | "
-            f"Pool: {self._pool_size} | "
-            f"Data: {self._data_source} | "
-            f"{sort_label} | "
-            f"{confidence_text}"
-            f"Mana icons: {icon_label} | "
-            f"{SEVENTEEN_LANDS_ATTRIBUTION}"
-        )
+        segments.append(f"Mana icons: {icon_label}")
+        if self.visibility_preferences.attribution:
+            segments.append(SEVENTEEN_LANDS_ATTRIBUTION)
         if self._forced_pair is not None:
             override = _format_pair_label(
                 pair=self._forced_pair,
                 mana_icons_enabled=self.mana_icons_enabled,
             )
-            text = f"Override: {override} | {text}"
+            segments.insert(0, f"Override: {override}")
 
         unresolved_count = self._unresolved_metadata_count()
         if unresolved_count > 0:
-            text = f"Warning: {unresolved_count} unresolved card metadata | {text}"
-
+            segments.insert(0, f"Warning: {unresolved_count} unresolved card metadata")
         if self._build_error is not None:
-            text = f"Build: {self._build_error} | {text}"
-
+            segments.insert(0, f"Build: {self._build_error}")
         if self._build_action_status is not None:
-            text = f"Build action: {self._build_action_status} | {text}"
-
+            segments.insert(0, f"Build action: {self._build_action_status}")
         if self._backtest_action_status is not None:
-            text = f"Backtest action: {self._backtest_action_status} | {text}"
-
+            segments.insert(0, f"Backtest action: {self._backtest_action_status}")
         if self._backtest_error is not None and self._view_mode == "backtest":
-            text = f"Backtest: {self._backtest_error} | {text}"
-
+            segments.insert(0, f"Backtest: {self._backtest_error}")
         if self._last_error is not None:
-            text = f"Error: {self._last_error} | {text}"
+            segments.insert(0, f"Error: {self._last_error}")
+        if self._preferences_save_warning is not None:
+            segments.insert(0, self._preferences_save_warning)
+        if self._preferences_load_warning is not None:
+            segments.insert(0, self._preferences_load_warning)
 
-        status.update(text)
+        status.update(" | ".join(segments))
 
     def _column_keys_for_width(self) -> tuple[str, ...]:
         show_secondary = (
@@ -2092,6 +2367,7 @@ class DraftgoblinTuiApp(App[None]):
             show_details=self._build_show_details,
             focused_card_index=self._build_focused_card_index,
             width=self._build_text_width(),
+            visibility_preferences=self.visibility_preferences,
             mana_icons_enabled=self.mana_icons_enabled,
         )
 
@@ -2244,6 +2520,7 @@ def _format_tui_build_result(
     show_details: bool,
     focused_card_index: int,
     width: int,
+    visibility_preferences: TuiVisibilityPreferences,
     mana_icons_enabled: bool = False,
 ) -> str:
     chosen_label = "forced" if selection.forced_pair is not None else "automatic"
@@ -2272,7 +2549,7 @@ def _format_tui_build_result(
         ),
         (
             "Keys: b checks build status; ↑/↓/←/→ or j/k browse cards; "
-            "PgUp/PgDn page; s changes spell sort; c shows details/pool; "
+            "PgUp/PgDn page; s changes spell sort; c opens config; "
             "p changes pair; m toggles Mana icons"
         ),
         "",
@@ -2301,6 +2578,7 @@ def _format_tui_build_result(
                 selection=selection,
                 spell_selection=spell_selection,
                 mana_base=mana_base,
+                visibility_preferences=visibility_preferences,
                 mana_icons_enabled=mana_icons_enabled,
             )
         )
@@ -2338,7 +2616,7 @@ def _format_tui_build_result(
     else:
         lines.append("")
         lines.append(
-            "Details hidden: press c for build context, picked pool, "
+            "Details hidden: open config with c to show build context, picked pool, "
             "color-pair reasoning, structure checks, and bench cuts."
         )
 
@@ -2351,32 +2629,36 @@ def _format_tui_build_context(
     selection: PairSelection,
     spell_selection: SpellSelection,
     mana_base: ManaBase,
+    visibility_preferences: TuiVisibilityPreferences,
     mana_icons_enabled: bool = False,
 ) -> list[str]:
-    lines = [
-        "Build context",
-        _format_tui_curve_summary(spells=spell_selection.spells),
-        f"Pool: {pool.source_label}",
-        f"Pool size: {selection.pool_size} cards",
-    ]
-    if pool.account_id is not None:
+    lines = ["Build context"]
+    if visibility_preferences.pool_mana_curve:
+        lines.append(_format_tui_curve_summary(spells=spell_selection.spells))
+    if visibility_preferences.pool_metadata:
+        lines.extend(
+            (
+                f"Pool: {pool.source_label}",
+                f"Pool size: {selection.pool_size} cards",
+            )
+        )
+    if visibility_preferences.account_identifier and pool.account_id is not None:
         lines.append(f"Account: {pool.account_id}")
-
-    if pool.draft_id is not None:
+    if visibility_preferences.draft_identifier and pool.draft_id is not None:
         lines.append(f"Draft: {pool.draft_id}")
-
-    mana_pips = _format_plain_color_counts(
-        mana_base.pip_counts,
-        mana_icons_enabled=mana_icons_enabled,
-    )
-    mana_sources = _format_plain_color_counts(
-        mana_base.source_counts,
-        mana_icons_enabled=mana_icons_enabled,
-    )
-    lines.extend([
-        f"Mana pips: {mana_pips}",
-        f"Mana sources: {mana_sources}",
-    ])
+    if visibility_preferences.mana_pips_and_sources:
+        mana_pips = _format_plain_color_counts(
+            mana_base.pip_counts,
+            mana_icons_enabled=mana_icons_enabled,
+        )
+        mana_sources = _format_plain_color_counts(
+            mana_base.source_counts,
+            mana_icons_enabled=mana_icons_enabled,
+        )
+        lines.extend([
+            f"Mana pips: {mana_pips}",
+            f"Mana sources: {mana_sources}",
+        ])
     return lines
 
 

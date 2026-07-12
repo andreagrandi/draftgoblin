@@ -12,7 +12,7 @@ It watches MTG Arena's local `Player.log`, identifies each Quick Draft pack and 
 
 Draftgoblin is in early scaffold form. The `draftgoblin` CLI entry point exists with parser-backed `replay`, default Textual `watch`, and `watch --plain` commands, 17Lands win-rate and grade pick tables, a `refresh-data` command, a `refresh-structure-targets` command, a `build` subcommand with pair selection, constrained spells, mana base, and bench output, a `backtest` subcommand that compares saved post-draft recommendations to actual picks, and a `benchmark-picks` subcommand for offline 17Lands public-data calibration. Draft completion in replay and plain watch automatically prints the build sheet.
 
-See [docs/pick-scoring.md](docs/pick-scoring.md) for the 17Lands WR/grade display, the 0-100 Draftgoblin scoring model, and integer tie-display decision. See [docs/benchmarking.md](docs/benchmarking.md) for the offline 17Lands public-data workflow used to compare raw 17L WR against DG Score. The Textual watch view uses `q` to quit, `c` to toggle secondary columns, `s` to cycle ranking between DG Score (default), 17L WR, ALSA, and mana value, `b` to open the build view, `t` to open the post-draft backtest report, and `m` to toggle opt-in Mana font icons. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, 17Lands structure targets, mana-base defaults, relaxation order, and `--allow-splash`.
+See [docs/pick-scoring.md](docs/pick-scoring.md) for the 17Lands WR/grade display, the 0-100 Draftgoblin scoring model, and integer tie-display decision. See [docs/benchmarking.md](docs/benchmarking.md) for the offline 17Lands public-data workflow used to compare raw 17L WR against DG Score. The Textual watch view uses `q` to quit, `c` to configure persisted optional elements, `s` to cycle ranking between DG Score (default), 17L WR, ALSA, and mana value, `b` to open the build view, `t` to open the post-draft backtest report, and `m` to toggle opt-in Mana font icons. See [docs/deck-builder.md](docs/deck-builder.md) for deck-builder constraints, 17Lands structure targets, mana-base defaults, relaxation order, and `--allow-splash`.
 
 Card metadata comes from the cached Scryfall bulk data and is automatically overlaid with MTG Arena's local `data_cards`/`data_loc` files when available, so newly released Arena grpIds can resolve before Scryfall publishes `arena_id` mappings. In Kitty-compatible terminals such as Ghostty, the Textual watch sidebar can show Scryfall image previews for the focused card using image URLs indexed from the local Scryfall bulk cache; run `refresh-data` once after upgrading to populate that image index. Set `DRAFTGOBLIN_CARD_IMAGES=0` to keep the text-only fallback.
 
@@ -172,6 +172,26 @@ To enable icons, start the TUI with `--mana-icons` or press `m` inside the TUI. 
    ```
 
    Reload Ghostty or restart it after changing the config.
+
+## TUI configuration
+
+Press `c` in the Textual watch view to open the **TUI config** dialog. It describes every option and offers **Save**, **Cancel**, and **Reset defaults** actions. Saved choices persist in `~/.draftgoblin/tui-preferences.json` (or `<app-dir>/tui-preferences.json` when using the development-only `--app-dir` override). The file is versioned JSON and may also be edited manually while Draftgoblin is not running.
+
+| Setting | Default | Affects |
+| --- | --- | --- |
+| Secondary pack columns | On | Shows Fit, ALSA, mana value, and source columns when the terminal is wide enough. |
+| Build details | Off | Shows build context, picked pool, pair reasoning, structure checks, and bench cuts. |
+| Pool metadata | On | Shows the set, event, pool size, pair information, build status, and card-metadata status. |
+| Pool color distribution | On | Shows the sidebar color bar. |
+| Mana curve | On | Shows pool and detailed-build mana curves. |
+| Account identifier | On | Shows the active account in the status bar and build context. |
+| Draft identifier | On | Shows draft IDs in pool and build metadata. |
+| Mana pips and sources | On | Shows detailed-build mana requirements and source counts. |
+| 17Lands attribution | On | Shows the card-data attribution in the status bar. Project disclaimers remain in this README. |
+| Focused card details | On | Shows highlighted-card statistics in the sidebar. |
+| Card image preview | Auto | `Auto` follows terminal detection; `Show` requests previews where `textual-image` can render them; `Hide` prevents preview loading. |
+
+Responsive layout remains authoritative: a narrow terminal can temporarily hide the sidebar or secondary columns without changing the saved preference. The `DRAFTGOBLIN_CARD_IMAGES` environment variable still controls image detection in `Auto` mode. These settings apply only to `draftgoblin watch`'s Textual TUI; `watch --plain`, `replay`, and `build` keep their existing output.
 
 ## Branding and compliance
 
