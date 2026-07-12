@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 from textual.containers import VerticalScroll
-from textual.widgets import DataTable, Static
+from textual.pilot import Pilot
+from textual.widgets import DataTable, Select, Static, Switch
 
 from draftgoblin.carddb import (
     CardDatabase,
@@ -19,6 +20,7 @@ from draftgoblin.carddb import (
     CardInfo,
     build_card_database_from_bulk_file,
 )
+from draftgoblin.preferences import TuiVisibilityPreferences, tui_preferences_path
 from draftgoblin.pool import (
     DraftPick,
     DraftState,
@@ -645,8 +647,8 @@ async def _assert_build_view_refuses_unknown_metadata_pool(tmp_path: Path) -> No
         )
 
 
-def test_tui_keybindings_toggle_columns_and_cycle_sort(tmp_path: Path) -> None:
-    asyncio.run(_assert_keybindings_toggle_columns_and_sort(tmp_path=tmp_path))
+def test_tui_config_updates_columns_and_rank_cycle(tmp_path: Path) -> None:
+    asyncio.run(_assert_config_updates_columns_and_rank_cycle(tmp_path=tmp_path))
 
 
 def test_tui_pack_navigation_preserves_focus_and_updates_details(
@@ -655,7 +657,7 @@ def test_tui_pack_navigation_preserves_focus_and_updates_details(
     asyncio.run(_assert_pack_navigation_preserves_focus_and_details(tmp_path=tmp_path))
 
 
-async def _assert_keybindings_toggle_columns_and_sort(tmp_path: Path) -> None:
+async def _assert_config_updates_columns_and_rank_cycle(tmp_path: Path) -> None:
     app = _tui_app(tmp_path=tmp_path)
 
     async with app.run_test(size=(120, 24)) as pilot:
@@ -675,7 +677,11 @@ async def _assert_keybindings_toggle_columns_and_sort(tmp_path: Path) -> None:
             "source",
         )
 
-        await pilot.press("c")
+        await _save_tui_config(
+            app=app,
+            pilot=pilot,
+            secondary_columns=False,
+        )
         assert app.visible_column_keys == (
             "rank",
             "win_rate",
@@ -865,8 +871,11 @@ async def _assert_mana_icons_toggle_updates_surfaces(tmp_path: Path) -> None:
             for color in ("W", "U", "B", "R", "G")
         )
 
-        await pilot.press("c")
-        await pilot.pause()
+        await _save_tui_config(
+            app=app,
+            pilot=pilot,
+            build_details=True,
+        )
 
         assert f"01. Fixture Spider | Colors {green_icon} | MV 4" in app.build_view_text
 
@@ -895,8 +904,11 @@ async def _assert_build_view_lists_full_picked_pool(tmp_path: Path) -> None:
 
         assert "Picked pool" not in app.build_view_text
 
-        await pilot.press("c")
-        await pilot.pause()
+        await _save_tui_config(
+            app=app,
+            pilot=pilot,
+            build_details=True,
+        )
 
         text = app.build_view_text
         assert "Picked pool (2)" in text
@@ -929,11 +941,14 @@ async def _assert_build_keybinding_opens_build_view(tmp_path: Path) -> None:
         assert "Picked pool" not in app.build_view_text
         assert "Color-pair reasoning" not in app.build_view_text
         assert "Pair scores" not in app.build_view_text
-        assert "Details hidden: press c" in app.build_view_text
+        assert "Details hidden: open config with c" in app.build_view_text
         assert "Build action: rebuilt current pool" in _status_text(app=app)
 
-        await pilot.press("c")
-        await pilot.pause()
+        await _save_tui_config(
+            app=app,
+            pilot=pilot,
+            build_details=True,
+        )
 
         assert "Build context" in app.build_view_text
         assert "Pool size: 1 cards" in app.build_view_text
@@ -1063,8 +1078,11 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         assert "Selected spells by score" in app.build_view_text
         assert "Build sort: score" in _status_text(app=app)
 
-        await pilot.press("c")
-        await pilot.pause()
+        await _save_tui_config(
+            app=app,
+            pilot=pilot,
+            build_details=True,
+        )
 
         assert "Color-pair reasoning" in app.build_view_text
         assert "top 23 sum" in app.build_view_text
@@ -1313,8 +1331,11 @@ async def _assert_account_event_recovers_latest_persisted_state(tmp_path: Path) 
         assert "Draft: recovered-draft" not in app.build_view_text
         assert "Pool size: 2 cards" not in app.build_view_text
 
-        await pilot.press("c")
-        await pilot.pause()
+        await _save_tui_config(
+            app=app,
+            pilot=pilot,
+            build_details=True,
+        )
 
         assert "Draft: recovered-draft" in app.build_view_text
         assert "Pool size: 2 cards" in app.build_view_text
@@ -1350,8 +1371,11 @@ async def _assert_account_key_cycles_recovered_drafts(tmp_path: Path) -> None:
         assert "Draft: test-draft" not in app.build_view_text
         assert "Pool size: 2 cards" not in app.build_view_text
 
-        await pilot.press("c")
-        await pilot.pause()
+        await _save_tui_config(
+            app=app,
+            pilot=pilot,
+            build_details=True,
+        )
 
         assert "Draft: test-draft" in app.build_view_text
         assert "Pool size: 2 cards" in app.build_view_text
@@ -1495,6 +1519,262 @@ async def _assert_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
             release.set()
 
 
+def test_tui_visibility_dialog_saves_preferences_and_restores_them_after_restart(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_visibility_dialog_persists_preferences(tmp_path=tmp_path))
+
+
+async def _assert_visibility_dialog_persists_preferences(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        await pilot.pause()
+
+        await pilot.press("c")
+        await pilot.pause()
+        dialog = app.screen
+        secondary_columns = dialog.query_one(
+            "#visibility-secondary-columns",
+            Switch,
+        )
+        secondary_columns.focus()
+        await pilot.press("space")
+        dialog.query_one("#visibility-account-identifier", Switch).value = False
+        dialog.query_one("#visibility-attribution", Switch).value = False
+        dialog.query_one("#visibility-card-image-preview", Select).value = "hide"
+        await pilot.click("#save-visibility")
+        await pilot.pause()
+
+        assert app.show_secondary_columns is False
+        assert app.visibility_preferences.account_identifier is False
+        assert app.visibility_preferences.attribution is False
+        assert app.visibility_preferences.card_image_preview == "hide"
+        assert app.visible_column_keys == (
+            "rank",
+            "win_rate",
+            "grade",
+            "score",
+            "card",
+            "colors",
+        )
+        assert "Account:" not in _status_text(app=app)
+        assert "Card data from 17Lands" not in _status_text(app=app)
+        assert tui_preferences_path(app_dir=tmp_path / "app").exists()
+
+    restarted_app = _tui_app(tmp_path=tmp_path)
+    async with restarted_app.run_test(size=(120, 30)) as pilot:
+        restarted_app.process_lines(lines=_first_pack_lines())
+        await pilot.pause()
+
+        assert restarted_app.show_secondary_columns is False
+        assert restarted_app.visibility_preferences.account_identifier is False
+        assert restarted_app.visibility_preferences.attribution is False
+        assert restarted_app.visibility_preferences.card_image_preview == "hide"
+        assert restarted_app.visible_column_keys == (
+            "rank",
+            "win_rate",
+            "grade",
+            "score",
+            "card",
+            "colors",
+        )
+
+
+def test_tui_config_persists_pack_and_build_preferences(tmp_path: Path) -> None:
+    asyncio.run(_assert_config_persists_pack_and_build_preferences(tmp_path=tmp_path))
+
+
+async def _assert_config_persists_pack_and_build_preferences(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_first_pick_lines())
+        await pilot.pause()
+
+        await _save_tui_config(
+            app=app,
+            pilot=pilot,
+            secondary_columns=False,
+        )
+        assert app.show_secondary_columns is False
+
+        await pilot.press("b")
+        await pilot.pause()
+        await _save_tui_config(
+            app=app,
+            pilot=pilot,
+            build_details=True,
+        )
+        assert app.visibility_preferences.build_details is True
+        assert "Build context" in app.build_view_text
+
+    restarted_app = _tui_app(tmp_path=tmp_path)
+    async with restarted_app.run_test(size=(140, 40)) as pilot:
+        restarted_app.process_lines(lines=_first_pick_lines())
+        await pilot.pause()
+
+        assert restarted_app.show_secondary_columns is False
+        await pilot.press("b")
+        await pilot.pause()
+        assert "Build context" in restarted_app.build_view_text
+
+
+def test_tui_visibility_dialog_cancel_and_reset_do_not_apply_preferences(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_visibility_dialog_cancel_and_reset(tmp_path=tmp_path))
+
+
+async def _assert_visibility_dialog_cancel_and_reset(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("c")
+        await pilot.pause()
+        dialog = app.screen
+        secondary_columns = dialog.query_one(
+            "#visibility-secondary-columns",
+            Switch,
+        )
+        secondary_columns.focus()
+        await pilot.press("space")
+        assert secondary_columns.value is False
+
+        await pilot.click("#reset-visibility")
+        await pilot.pause()
+        assert secondary_columns.value is True
+
+        await pilot.click("#cancel-visibility")
+        await pilot.pause()
+
+        assert app.show_secondary_columns is True
+        assert app.visibility_preferences == TuiVisibilityPreferences()
+        assert not tui_preferences_path(app_dir=tmp_path / "app").exists()
+
+
+def test_tui_visibility_preferences_filter_sidebar_build_and_image_elements(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_visibility_preferences_filter_elements(tmp_path=tmp_path))
+
+
+async def _assert_visibility_preferences_filter_elements(tmp_path: Path) -> None:
+    image_fetches: list[str] = []
+    fixture_database = _fixture_card_database()
+
+    def image_fetcher(image_uri: str, cache_dir: Path) -> Path:
+        image_fetches.append(image_uri)
+        raise AssertionError("hidden image previews must not fetch images")
+
+    preferences = TuiVisibilityPreferences(
+        build_details=True,
+        pool_metadata=False,
+        pool_color_distribution=False,
+        pool_mana_curve=False,
+        account_identifier=False,
+        draft_identifier=False,
+        mana_pips_and_sources=False,
+        attribution=False,
+        card_image_preview="hide",
+    )
+    app = _tui_app(
+        tmp_path=tmp_path,
+        card_database=CardDatabase(
+            cards=fixture_database.cards,
+            image_uris_by_name={"fixture spider": "https://cards.example/spider.jpg"},
+        ),
+        image_preview_enabled=True,
+        card_image_fetcher=image_fetcher,
+        visibility_preferences=preferences,
+    )
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=_first_pick_lines())
+        await pilot.pause()
+
+        pool_summary = app.query_one("#pool-summary", Static)
+        assert pool_summary.display is False
+        assert "Account:" not in _status_text(app=app)
+        assert "Card data from 17Lands" not in _status_text(app=app)
+
+        await pilot.press("b")
+        await pilot.pause()
+
+        assert "Build context" in app.build_view_text
+        assert "Mana curve:" not in app.build_view_text
+        assert "Pool: live draft" not in app.build_view_text
+        assert "Pool size:" not in app.build_view_text
+        assert "Account:" not in app.build_view_text
+        assert "Draft:" not in app.build_view_text
+        assert "Mana pips:" not in app.build_view_text
+        assert "Mana sources:" not in app.build_view_text
+        assert app.query_one("#card-image-preview", Static).display is False
+        assert image_fetches == []
+
+
+def test_tui_narrow_layout_does_not_change_enabled_visibility_preferences(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_narrow_layout_keeps_preferences(tmp_path=tmp_path))
+
+
+async def _assert_narrow_layout_keeps_preferences(tmp_path: Path) -> None:
+    preferences = TuiVisibilityPreferences()
+    app = _tui_app(tmp_path=tmp_path, visibility_preferences=preferences)
+
+    async with app.run_test(size=(60, 24)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        await pilot.pause()
+
+        assert app.visibility_preferences.secondary_columns is True
+        assert app.visible_column_keys == (
+            "rank",
+            "win_rate",
+            "grade",
+            "score",
+            "card",
+            "colors",
+        )
+        assert app.query_one("#sidebar").display is True
+
+
+def test_tui_shows_non_fatal_preferences_load_warning(tmp_path: Path) -> None:
+    asyncio.run(_assert_preferences_load_warning_is_visible(tmp_path=tmp_path))
+
+
+async def _assert_preferences_load_warning_is_visible(tmp_path: Path) -> None:
+    path = tui_preferences_path(app_dir=tmp_path / "app")
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        await pilot.pause()
+
+        assert "Could not load TUI preferences" in _status_text(app=app)
+
+
+async def _save_tui_config(
+    *,
+    app: DraftgoblinTuiApp,
+    pilot: Pilot,
+    **values: bool | str,
+) -> None:
+    await pilot.press("c")
+    await pilot.pause()
+    dialog = app.screen
+    for field_name, value in values.items():
+        control_id = f"#visibility-{field_name.replace('_', '-')}"
+        if type(value) is bool:
+            dialog.query_one(control_id, Switch).value = value
+        else:
+            dialog.query_one(control_id, Select).value = value
+    await pilot.click("#save-visibility")
+    await pilot.pause()
+
+
 def _tui_app(
     *,
     tmp_path: Path,
@@ -1505,6 +1785,7 @@ def _tui_app(
     mana_icons_enabled: bool = False,
     card_image_fetcher: Callable[[str, Path], Path] | None = None,
     poll_enabled: bool = False,
+    visibility_preferences: TuiVisibilityPreferences | None = None,
 ) -> DraftgoblinTuiApp:
     return DraftgoblinTuiApp(
         log_path=tmp_path / "Player.log",
@@ -1520,6 +1801,7 @@ def _tui_app(
         image_preview_enabled=image_preview_enabled,
         mana_icons_enabled=mana_icons_enabled,
         card_image_fetcher=card_image_fetcher,
+        visibility_preferences=visibility_preferences,
     )
 
 
