@@ -62,6 +62,16 @@ For repeatable local development or offline tests, pass a local Scryfall bulk fi
 uv run draftgoblin refresh-data --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl
 ```
 
+## Development
+
+Run the full local verification suite with:
+
+```bash
+uv run nox -s ci
+```
+
+This is the same command GitHub Actions runs.
+
 ## Platform support
 
 | OS | Default `Player.log` location | Support level |
@@ -198,4 +208,3 @@ Responsive layout remains authoritative: a narrow terminal can temporarily hide 
 Draftgoblin uses Wizards of the Coast and 17Lands names only for descriptive attribution. The project is not affiliated with, sponsored by, approved by, or endorsed by Wizards of the Coast or 17Lands.
 
 Draftgoblin is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC. Card data from 17Lands (17lands.com); 17Lands does not endorse this tool.
-
