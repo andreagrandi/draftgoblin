@@ -23,20 +23,5 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
-      - name: Run tests
-        run: uv run pytest
-
-      - name: Run replay fixture regression
-        run: |
-          for logfile in tests/fixtures/*-player.log; do
-            name="$(basename "$logfile" .log)"
-            output="$RUNNER_TEMP/$name.replay.txt"
-            golden="tests/golden/$name.replay.txt"
-            uv run draftgoblin replay "$logfile" \
-              --bulk-file tests/fixtures/scryfall-default-cards-sample.jsonl \
-              > "$output"
-            diff -u "$golden" "$output"
-          done
-
-      - name: Smoke-test CLI version
-        run: uv run draftgoblin --version
+      - name: Run checks
+        run: uv run nox -s ci

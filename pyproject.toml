@@ -16,6 +16,7 @@ draftgoblin = "draftgoblin.cli:main"
 
 [dependency-groups]
 dev = [
+    "nox>=2026.4.10",
     "pytest>=8.4.0",
 ]
 
