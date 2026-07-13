@@ -63,6 +63,5 @@ The open-pick phase remains a caution area: DG Score was slightly worse than 17L
 
 Benchmark misses should be reviewed before further default or scoring changes. The first non-ML heuristic to inspect is the color commitment ramp and off-color penalty: all current reports showed many building/locked DG Score misses where trophy drafters still took off-color cards. Other non-ML follow-ups include pair-specific pick priorities and maindeck-rate weighting from the same public draft data.
 
-This calibration is intentionally separate from #37. The benchmark can tune transparent heuristics now; ML-based recommendations should use these reports as baseline evidence rather than replacing them.
-
+This calibration is intentionally separate from #37. The benchmark can tune transparent heuristics now; ML-based recommendations should use these reports as baseline evidence rather than replacing them. See [ML-based pick recommendations](ml-pick-recommendations.md) for the historical-data research design, leakage rules, evaluation gate, and future integration boundary.
 
