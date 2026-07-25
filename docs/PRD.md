@@ -139,7 +139,7 @@ Both defaults derive from the running OS user's home directory, which is what gu
 ### FR-2 Quick Draft event parser & account awareness
 
 - FR-2.1 Detect the **active MTGA account** from session-start log events; expose it to the UI and state layer. If the account changes mid-stream (relog), close out the previous account's context cleanly.
-- FR-2.2 Detect Quick Draft start, including set code and event identity.
+- FR-2.2 Detect Quick Draft entry from the live `EventJoin` request before the first pack, then confirm draft start from course state, including set code and event identity. Historical startup scans must not present an old entry as the upcoming draft.
 - FR-2.3 For each pick: extract pack number, pick number, offered card `grpId`s.
 - FR-2.4 Extract the player's chosen card for each pick; maintain the pool.
 - FR-2.5 Detect **draft completion** (explicit event if present; otherwise inferred at final pick with full pool count) — this is the auto-trigger for the deck builder.
@@ -155,6 +155,7 @@ Both defaults derive from the running OS user's home directory, which is what gu
 - FR-3.4 Color-pair win rates for the set (10 two-color pairs) fetched and cached on the same cadence.
 - FR-3.5 Attribution line "Card data from 17Lands (17lands.com)" visible in the TUI footer and on build sheets.
 - FR-3.6 All caches and state live under a single app data directory (e.g., `~/.draftgoblin/`), with per-account subdirectories for draft state.
+- FR-3.7 Before P1P1, show exactly one set-level 0–100 reliability value derived from aggregate Quick Draft coverage, Premier fallback coverage, and sample depth. Hide it when the first pack appears. This value is presentation-only and must never enter card scoring, ranking, fallback resolution, color commitment, backtests, benchmarks, or deck building.
 
 ### FR-4 Pick engine & pick display
 

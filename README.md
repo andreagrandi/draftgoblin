@@ -116,6 +116,8 @@ draftgoblin --version
 
 Watch `Player.log` and show live draft recommendations. The default view is a Textual TUI; `--plain` streams replay-compatible text.
 
+When Draftgoblin is running before a Quick Draft begins, the TUI waits for Arena's live `EventJoin` record, detects the set, and shows exactly one set-level 17Lands reliability value before P1P1. The value summarizes Quick Draft coverage, Premier fallback coverage, and aggregate sample depth. It disappears when the first pack arrives and is never used to calculate or rank card scores.
+
 When the TUI sees a set with no local 17Lands cache, it warns that neutral-prior scores are active and offers to download the Quick Draft and Premier fallback data. Downloads use 17Lands' all-time period, so returning sets retain their historical samples. The TUI shows request progress, reports how many cards in the current pack have usable ratings, and recalculates the pack as soon as the data is ready. Press `d` to reopen the offer after choosing **Not now**. Existing caches continue to refresh on their normal daily cadence, and legacy date-range caches are replaced automatically.
 
 ```bash

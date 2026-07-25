@@ -12,6 +12,7 @@ from draftgoblin.events import (
     DraftStartedEvent,
     PackOfferedEvent,
     PickMadeEvent,
+    QuickDraftDetectedEvent,
     parse_events,
 )
 from draftgoblin.pool import (
@@ -380,7 +381,13 @@ def _without_account_ids(*, events: list[DraftEvent]) -> list[DraftEvent]:
     for event in events:
         if isinstance(
             event,
-            (DraftStartedEvent, PackOfferedEvent, PickMadeEvent, DraftCompletedEvent),
+            (
+                QuickDraftDetectedEvent,
+                DraftStartedEvent,
+                PackOfferedEvent,
+                PickMadeEvent,
+                DraftCompletedEvent,
+            ),
         ):
             stripped_events.append(replace(event, account_id=None))
         else:
@@ -406,4 +413,3 @@ def _index_after_pick(*, events: list[DraftEvent], pick_count: int) -> int:
                 return index
 
     raise AssertionError(f"Fixture does not contain {pick_count} picks.")
-

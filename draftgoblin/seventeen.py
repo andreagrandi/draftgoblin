@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from os import PathLike
 from pathlib import Path
+from statistics import median
 from typing import Any, TypeAlias
 
 from draftgoblin import __version__
@@ -77,6 +78,12 @@ GRADE_LABELS = (
     "A+",
 )
 GRADE_CENTER_INDEX = GRADE_LABELS.index("C")
+RELIABILITY_PREMIER_FACTOR = 0.65
+RELIABILITY_SAMPLE_DEPTH_CAP = 20_000
+RELIABILITY_LOW_MAXIMUM = 24
+RELIABILITY_MEDIUM_MINIMUM = 50
+RELIABILITY_HIGH_MINIMUM = 70
+RELIABILITY_VERY_HIGH_MINIMUM = 85
 
 
 class SeventeenLandsError(RuntimeError):
@@ -646,6 +653,17 @@ class ResolvedCardRating:
 
 
 @dataclass(frozen=True, slots=True)
+class SetDataReliability:
+    """One aggregate 17Lands reliability value for a set before drafting.
+    It is presentation metadata and is never an input to card scoring.
+    """
+
+    set_code: str
+    score: int
+    tier: str
+
+
+@dataclass(frozen=True, slots=True)
 class SeventeenLandsData:
     """High-level 17Lands view with Quick→Premier→neutral fallback.
     Pair win rates come from the requested primary event format.
@@ -677,6 +695,14 @@ class SeventeenLandsData:
         """
 
         return self.primary.pair_win_rates
+
+    @property
+    def set_reliability(self) -> SetDataReliability:
+        """Return one aggregate reliability value for this set's data.
+        The calculation is independent from rating resolution and ranking.
+        """
+
+        return _set_data_reliability(data=self)
 
     @property
     def ratings(self) -> dict[int, ResolvedCardRating]:
@@ -2334,6 +2360,108 @@ def _has_strong_gih_signal(
         stats.gih_win_rate is not None
         and stats.sample_counts.games_in_hand >= thin_sample_minimum
     )
+
+
+def _set_data_reliability(*, data: SeventeenLandsData) -> SetDataReliability:
+    card_ids = set(data.primary.card_ratings)
+    if data.fallback is not None:
+        card_ids.update(data.fallback.card_ratings)
+
+    if not card_ids:
+        return SetDataReliability(
+            set_code=data.set_code,
+            score=0,
+            tier=_reliability_tier(score=0),
+        )
+
+    quick_samples: list[int] = []
+    premier_samples: list[int] = []
+    for grp_id in card_ids:
+        quick_stats = data.primary.card_ratings.get(grp_id)
+        if _has_strong_gih_signal(
+            stats=quick_stats,
+            thin_sample_minimum=data.thin_sample_minimum,
+        ):
+            if quick_stats is None:
+                raise AssertionError("Strong Quick Draft stats cannot be missing.")
+            quick_samples.append(quick_stats.sample_counts.games_in_hand)
+            continue
+
+        premier_stats = (
+            None
+            if data.fallback is None
+            else data.fallback.card_ratings.get(grp_id)
+        )
+        if _has_strong_gih_signal(
+            stats=premier_stats,
+            thin_sample_minimum=data.thin_sample_minimum,
+        ):
+            if premier_stats is None:
+                raise AssertionError("Strong Premier Draft stats cannot be missing.")
+            premier_samples.append(premier_stats.sample_counts.games_in_hand)
+
+    card_count = len(card_ids)
+    quick_share = len(quick_samples) / card_count
+    premier_share = len(premier_samples) / card_count
+    coverage_quality = (
+        quick_share + RELIABILITY_PREMIER_FACTOR * premier_share
+    )
+    depth_quality = (
+        quick_share
+        * _normalized_reliability_sample_depth(
+            samples=quick_samples,
+            minimum=data.thin_sample_minimum,
+        )
+        + RELIABILITY_PREMIER_FACTOR
+        * premier_share
+        * _normalized_reliability_sample_depth(
+            samples=premier_samples,
+            minimum=data.thin_sample_minimum,
+        )
+    )
+    score = math.floor(
+        100.0 * (0.5 * coverage_quality + 0.5 * depth_quality) + 0.5
+    )
+    score = _clamp_int(value=score, lower=0, upper=100)
+    return SetDataReliability(
+        set_code=data.set_code,
+        score=score,
+        tier=_reliability_tier(score=score),
+    )
+
+
+def _normalized_reliability_sample_depth(
+    *,
+    samples: list[int],
+    minimum: int,
+) -> float:
+    if not samples:
+        return 0.0
+
+    sample_median = float(median(samples))
+    if sample_median <= minimum:
+        return 0.0
+
+    if minimum >= RELIABILITY_SAMPLE_DEPTH_CAP:
+        return 1.0
+
+    depth = math.log(sample_median / minimum) / math.log(
+        RELIABILITY_SAMPLE_DEPTH_CAP / minimum
+    )
+    return min(max(depth, 0.0), 1.0)
+
+
+def _reliability_tier(*, score: int) -> str:
+    if score >= RELIABILITY_VERY_HIGH_MINIMUM:
+        return "Very high"
+    if score >= RELIABILITY_HIGH_MINIMUM:
+        return "High"
+    if score >= RELIABILITY_MEDIUM_MINIMUM:
+        return "Medium"
+    if score > RELIABILITY_LOW_MAXIMUM:
+        return "Low"
+
+    return "Very low"
 
 
 def _default_fetch_json(url: str, timeout_seconds: int) -> Any:
