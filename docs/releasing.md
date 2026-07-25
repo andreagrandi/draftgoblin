@@ -2,6 +2,12 @@
 
 Draftgoblin publishes a Python wheel and source distribution to PyPI. Releases use GitHub Actions and PyPI Trusted Publishing, so the repository does not store a long-lived PyPI token.
 
+## Release trigger
+
+Normal pushes and merges to `master` run CI but do not publish anything. A release starts only when a tag matching `v*` is pushed, and the workflow rejects tags that do not match the version in `pyproject.toml`.
+
+For an agent-managed release, ask `release X.Y.Z`. The repository's `release-draftgoblin` skill covers the complete version PR, merge, tag, publish, and public-install verification workflow.
+
 ## One-time setup
 
 1. Sign in to PyPI and create a pending Trusted Publisher with:
