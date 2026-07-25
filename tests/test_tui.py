@@ -1503,7 +1503,7 @@ async def _assert_card_metadata_load_starts_after_shell_renders(tmp_path: Path) 
 
     def slow_loader() -> CardDatabase:
         started.set()
-        release.wait(timeout=0.5)
+        release.wait()
         return _fixture_card_database()
 
     app = _tui_app(
@@ -1512,8 +1512,8 @@ async def _assert_card_metadata_load_starts_after_shell_renders(tmp_path: Path) 
         poll_enabled=True,
     )
 
-    async with app.run_test(size=(120, 24)) as pilot:
-        try:
+    try:
+        async with app.run_test(size=(120, 24)) as pilot:
             assert await asyncio.to_thread(started.wait, 0.5)
             assert app.card_database_loading
             assert "Loading card metadata" in _status_text(app=app)
@@ -1533,8 +1533,8 @@ async def _assert_card_metadata_load_starts_after_shell_renders(tmp_path: Path) 
             assert not app.card_database_loading
             assert not table.loading
             assert table.row_count == 14
-        finally:
-            release.set()
+    finally:
+        release.set()
 
 
 def test_tui_shows_actionable_error_when_card_metadata_load_fails(
