@@ -50,9 +50,11 @@ from draftgoblin.replay import ReplayError, replay_log_file
 from draftgoblin.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
+    DownloadProgressCallback,
     ResolvedCardRating,
     SeventeenLandsData,
     SeventeenLandsError,
+    has_cached_17lands_data,
     load_cached_17lands_data,
     load_or_refresh_17lands_data,
     refresh_17lands_structure_targets,
@@ -462,13 +464,22 @@ def handle_watch(args: argparse.Namespace) -> int:
             poll_interval=args.poll_interval,
             once=args.once,
             startup_scan=args.startup_scan,
-            ratings_loader_factory=lambda database: _metadata_augmenting_ratings_loader(
-                args=args,
-                database=database,
-                load_ratings=lambda set_code: load_or_refresh_17lands_data(
-                    set_code=set_code,
-                    app_dir=args.app_dir,
-                ),
+            ratings_progress_loader_factory=lambda database: (
+                _metadata_augmenting_ratings_progress_loader(
+                    args=args,
+                    database=database,
+                    load_ratings=lambda set_code, progress_callback: (
+                        load_or_refresh_17lands_data(
+                            set_code=set_code,
+                            app_dir=args.app_dir,
+                            progress_callback=progress_callback,
+                        )
+                    ),
+                )
+            ),
+            ratings_cache_checker=lambda set_code: has_cached_17lands_data(
+                set_code=set_code,
+                app_dir=args.app_dir,
             ),
             mana_icons_enabled=args.mana_icons,
         )
@@ -761,6 +772,31 @@ def _metadata_augmenting_ratings_loader(
 ) -> Callable[[str], SeventeenLandsData]:
     def load_and_augment(set_code: str) -> SeventeenLandsData:
         ratings_data = load_ratings(set_code)
+        _augment_card_database_from_ratings(
+            args=args,
+            database=database,
+            set_code=set_code,
+            ratings_data=ratings_data,
+        )
+        return ratings_data
+
+    return load_and_augment
+
+
+def _metadata_augmenting_ratings_progress_loader(
+    *,
+    args: argparse.Namespace,
+    database: CardDatabase,
+    load_ratings: Callable[
+        [str, DownloadProgressCallback],
+        SeventeenLandsData,
+    ],
+) -> Callable[[str, DownloadProgressCallback], SeventeenLandsData]:
+    def load_and_augment(
+        set_code: str,
+        progress_callback: DownloadProgressCallback,
+    ) -> SeventeenLandsData:
+        ratings_data = load_ratings(set_code, progress_callback)
         _augment_card_database_from_ratings(
             args=args,
             database=database,

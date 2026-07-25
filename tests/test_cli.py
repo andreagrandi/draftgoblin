@@ -205,6 +205,8 @@ def test_watch_mana_icons_flag_is_explicit_tui_opt_in(
     assert exit_code == 0
     assert default_args.mana_icons is False
     assert callable(captured["card_database_loader"])
+    assert callable(captured["ratings_progress_loader_factory"])
+    assert callable(captured["ratings_cache_checker"])
     assert captured["mana_icons_enabled"] is True
 
 

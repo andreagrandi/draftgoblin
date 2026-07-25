@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from textual.containers import VerticalScroll
 from textual.pilot import Pilot
-from textual.widgets import DataTable, Select, Static, Switch
+from textual.widgets import DataTable, ProgressBar, Select, Static, Switch
 
 from draftgoblin.carddb import (
     CardDatabase,
@@ -33,12 +33,14 @@ from draftgoblin.seventeen import (
     RatingSampleCounts,
     SeventeenCardStats,
     SeventeenLandsData,
+    SeventeenLandsDownloadProgress,
     SeventeenLandsFormatData,
 )
 from draftgoblin.tui import (
     MANA_CARD_TYPE_GLYPHS,
     MANA_ICON_GLYPHS,
     DraftgoblinTuiApp,
+    MissingRatingsScreen,
     _format_card_colors,
     _format_card_types,
 )
@@ -85,6 +87,28 @@ def test_tui_account_indicator_uses_login_display_name_without_auth_screen_name(
             tmp_path=tmp_path,
         )
     )
+
+
+def test_tui_explains_when_cached_17lands_samples_are_not_usable(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_cached_thin_ratings_are_explained(tmp_path=tmp_path))
+
+
+async def _assert_cached_thin_ratings_are_explained(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path, ratings_loader=_thin_ratings_data)
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        for _ in range(10):
+            await pilot.pause(0.05)
+            if "MSH" not in app.loading_rating_sets:
+                break
+
+        assert (
+            "Data: neutral prior (17Lands cached; samples unavailable or thin)"
+            in _status_text(app=app)
+        )
 
 
 async def _assert_account_indicator_uses_login_display_name_without_auth_screen_name(
@@ -1483,6 +1507,112 @@ def test_tui_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
     asyncio.run(_assert_slow_ratings_refresh_stays_responsive(tmp_path=tmp_path))
 
 
+def test_tui_offers_missing_ratings_download_and_rescores_when_ready(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_missing_ratings_download_rescores_pack(tmp_path=tmp_path))
+
+
+async def _assert_missing_ratings_download_rescores_pack(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def progress_loader(
+        set_code: str,
+        progress_callback: Callable[[SeventeenLandsDownloadProgress], None],
+    ) -> SeventeenLandsData:
+        progress_callback(
+            SeventeenLandsDownloadProgress(
+                completed_requests=1,
+                total_requests=4,
+                message="Downloaded QuickDraft card ratings",
+            )
+        )
+        started.set()
+        release.wait(timeout=1.0)
+        for completed, message in (
+            (2, "Downloaded QuickDraft color ratings"),
+            (3, "Downloaded PremierDraft card ratings"),
+            (4, "Downloaded PremierDraft color ratings"),
+        ):
+            progress_callback(
+                SeventeenLandsDownloadProgress(
+                    completed_requests=completed,
+                    total_requests=4,
+                    message=message,
+                )
+            )
+        return _graded_ratings_data(set_code)
+
+    app = _tui_app(
+        tmp_path=tmp_path,
+        ratings_progress_loader=progress_loader,
+        ratings_cache_checker=lambda set_code: False,
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            app.process_lines(lines=_first_pack_lines())
+            await pilot.pause()
+
+            assert isinstance(app.screen, MissingRatingsScreen)
+            assert "No local 17Lands data for MSH" in str(
+                app.screen.query_one("#missing-ratings-title", Static).content
+            )
+            assert not started.is_set()
+
+            await pilot.click("#cancel-ratings-download")
+            await pilot.pause()
+            assert "Press d to download" in str(
+                app.query_one("#ratings-download-label", Static).content
+            )
+            assert "Data: neutral prior (no local 17Lands data)" in _status_text(
+                app=app
+            )
+
+            await pilot.press("d")
+            await pilot.pause()
+            assert isinstance(app.screen, MissingRatingsScreen)
+            await pilot.click("#download-ratings")
+            assert await asyncio.to_thread(started.wait, 0.5)
+            await pilot.pause()
+
+            progress_bar = app.query_one(
+                "#ratings-download-progress",
+                ProgressBar,
+            )
+            assert progress_bar.display
+            assert progress_bar.progress == 1
+            assert progress_bar.total == 4
+            assert "1/4" in str(
+                app.query_one("#ratings-download-label", Static).content
+            )
+            assert "Data: neutral prior (downloading ratings)" in _status_text(
+                app=app
+            )
+
+            release.set()
+            for _ in range(20):
+                await pilot.pause(0.05)
+                if "MSH" not in app.loading_rating_sets:
+                    break
+
+            assert "MSH" not in app.loading_rating_sets
+            assert not progress_bar.display
+            ready_notice = str(
+                app.query_one("#ratings-download-label", Static).content
+            )
+            assert "17Lands data ready for MSH; scores recalculated" in ready_notice
+            assert "5/14 offered cards have usable ratings" in ready_notice
+
+            table = app.query_one("#pack-table", DataTable)
+            rows = [table.get_row_at(index) for index in range(table.row_count)]
+            assert any(str(row[1]) != "—" for row in rows)
+            assert "Data: QuickDraft + neutral prior" in _status_text(app=app)
+        finally:
+            release.set()
+
+
 async def _assert_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
     started = threading.Event()
     release = threading.Event()
@@ -1781,6 +1911,12 @@ def _tui_app(
     card_database: CardDatabase | None = None,
     card_database_loader: Callable[[], CardDatabase] | None = None,
     ratings_loader: Callable[[str], SeventeenLandsData] | None = None,
+    ratings_progress_loader: Callable[
+        [str, Callable[[SeventeenLandsDownloadProgress], None]],
+        SeventeenLandsData,
+    ]
+    | None = None,
+    ratings_cache_checker: Callable[[str], bool] | None = None,
     image_preview_enabled: bool | None = None,
     mana_icons_enabled: bool = False,
     card_image_fetcher: Callable[[str, Path], Path] | None = None,
@@ -1797,6 +1933,8 @@ def _tui_app(
         card_database_loader=card_database_loader,
         app_dir=tmp_path / "app",
         ratings_loader=ratings_loader,
+        ratings_progress_loader=ratings_progress_loader,
+        ratings_cache_checker=ratings_cache_checker,
         poll_enabled=poll_enabled,
         image_preview_enabled=image_preview_enabled,
         mana_icons_enabled=mana_icons_enabled,
@@ -1952,6 +2090,32 @@ def _close_pick_ratings_data(set_code: str) -> SeventeenLandsData:
                 gih=0.604,
                 games_in_hand=900,
                 alsa=2.1,
+            ),
+        },
+        pair_win_rates={},
+    )
+    return SeventeenLandsData(
+        set_code=set_code,
+        requested_format=QUICK_DRAFT_FORMAT,
+        primary=primary,
+        fallback=None,
+        thin_sample_minimum=500,
+    )
+
+
+def _thin_ratings_data(set_code: str) -> SeventeenLandsData:
+    primary = SeventeenLandsFormatData(
+        set_code=set_code,
+        event_format=QUICK_DRAFT_FORMAT,
+        fetched_at=datetime(2999, 1, 1, tzinfo=UTC),
+        card_ratings={
+            104894: _stats(
+                grp_id=104894,
+                name="Fixture Split Card",
+                color="WU",
+                gih=None,
+                games_in_hand=100,
+                alsa=1.2,
             ),
         },
         pair_win_rates={},

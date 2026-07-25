@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from os import PathLike
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -39,7 +39,7 @@ FetchJson: TypeAlias = Callable[[str, int], Any]
 
 SEVENTEEN_LANDS_ATTRIBUTION = "Card data from 17Lands (17lands.com)"
 SEVENTEEN_LANDS_BASE_URL = "https://www.17lands.com"
-CARD_RATINGS_ENDPOINT = f"{SEVENTEEN_LANDS_BASE_URL}/card_ratings/data"
+CARD_RATINGS_ENDPOINT = f"{SEVENTEEN_LANDS_BASE_URL}/api/card_data"
 COLOR_RATINGS_ENDPOINT = f"{SEVENTEEN_LANDS_BASE_URL}/color_ratings/data"
 PUBLIC_DRAFT_DATA_URL_TEMPLATE = (
     "https://17lands-public.s3.amazonaws.com/analysis_data/draft_data/"
@@ -53,13 +53,13 @@ QUICK_DRAFT_FORMAT = "QuickDraft"
 PREMIER_DRAFT_FORMAT = "PremierDraft"
 FORMAT_RATING_SOURCE = "format"
 NEUTRAL_PRIOR_SOURCE = "neutral-prior"
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 STRUCTURE_CACHE_SCHEMA_VERSION = 1
 SEVENTEEN_CACHE_DIRECTORY_NAME = "17lands"
 STRUCTURE_TARGET_SOURCE = "17lands-public-draft-data"
 CURVE_BUCKETS = ("0-1", "2", "3", "4", "5", "6+")
 HTTP_TIMEOUT_SECONDS = 60
-ALL_TIME_START_DATE = date(year=2020, month=1, day=1)
+ALL_TIME_PERIOD = "ALL_TIME"
 GRADE_STEP_STANDARD_DEVIATIONS = 0.33
 GRADE_LABELS = (
     "F",
@@ -89,6 +89,26 @@ class SeventeenLandsCacheMissingError(SeventeenLandsError):
     """Raised when a 17Lands cache has not been built yet.
     The auto-refresh path normally handles this before callers see it.
     """
+
+
+class SeventeenLandsCacheOutdatedError(SeventeenLandsError):
+    """Raised when a legacy cache predates the current 17Lands data API.
+    Live loaders replace it automatically instead of serving incomplete data.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class SeventeenLandsDownloadProgress:
+    """Describe completed network requests during a ratings download.
+    TUI callers can render determinate progress without owning fetch details.
+    """
+
+    completed_requests: int
+    total_requests: int
+    message: str
+
+
+DownloadProgressCallback: TypeAlias = Callable[[SeventeenLandsDownloadProgress], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -519,6 +539,12 @@ class SeventeenLandsFormatData:
             data.get("schema_version"),
             field_name="schema_version",
         )
+        if schema_version < CACHE_SCHEMA_VERSION:
+            raise SeventeenLandsCacheOutdatedError(
+                "Outdated 17Lands cache schema "
+                f"{schema_version}; current schema is {CACHE_SCHEMA_VERSION}."
+            )
+
         if schema_version != CACHE_SCHEMA_VERSION:
             raise SeventeenLandsError(
                 "Unsupported 17Lands cache schema "
@@ -782,6 +808,23 @@ def seventeen_lands_cache_path(
     return root / SEVENTEEN_CACHE_DIRECTORY_NAME / filename
 
 
+def has_cached_17lands_data(
+    *,
+    set_code: str,
+    event_format: str = QUICK_DRAFT_FORMAT,
+    app_dir: PathInput | None = None,
+) -> bool:
+    """Return whether primary ratings exist locally for a set and format.
+    Callers can request consent before the first network download.
+    """
+
+    return seventeen_lands_cache_path(
+        set_code=set_code,
+        event_format=event_format,
+        app_dir=app_dir,
+    ).is_file()
+
+
 def seventeen_lands_pair_card_cache_path(
     *,
     set_code: str,
@@ -843,18 +886,16 @@ def card_ratings_url(
     *,
     set_code: str,
     event_format: str,
-    end_date: date,
     colors: str | None = None,
 ) -> str:
     """Build the 17Lands card-ratings endpoint URL.
-    A broad date range gives the same all-time table as the website filters.
+    ALL_TIME preserves historical samples when an old set returns to draft.
     """
 
     params = {
         "expansion": set_code.upper(),
         "event_type": event_format,
-        "start_date": ALL_TIME_START_DATE.isoformat(),
-        "end_date": end_date.isoformat(),
+        "time_period": ALL_TIME_PERIOD,
     }
     if colors is not None:
         params["colors"] = colors
@@ -866,10 +907,9 @@ def color_ratings_url(
     *,
     set_code: str,
     event_format: str,
-    end_date: date,
 ) -> str:
     """Build the 17Lands color-ratings endpoint URL.
-    Splashes are not combined so exact two-color pair rows are preserved.
+    ALL_TIME keeps exact pair rows useful across repeated draft windows.
     """
 
     return _url_with_query(
@@ -877,8 +917,7 @@ def color_ratings_url(
         params={
             "expansion": set_code.upper(),
             "event_type": event_format,
-            "start_date": ALL_TIME_START_DATE.isoformat(),
-            "end_date": end_date.isoformat(),
+            "time_period": ALL_TIME_PERIOD,
             "combine_splash": "false",
         },
     )
@@ -896,11 +935,23 @@ def load_or_refresh_17lands_data(
     cache_ttl: timedelta | None = None,
     thin_sample_minimum: int = PICK_ENGINE.thin_sample_minimum,
     premier_fallback_enabled: bool = PICK_ENGINE.premier_fallback_enabled,
+    progress_callback: DownloadProgressCallback | None = None,
 ) -> SeventeenLandsData:
     """Load 17Lands data with the configured fallback chain.
     Premier fallback failures degrade to neutral-prior ratings.
     """
 
+    total_requests = (
+        4
+        if premier_fallback_enabled and event_format != PREMIER_DRAFT_FORMAT
+        else 2
+    )
+    _report_download_progress(
+        callback=progress_callback,
+        completed_requests=0,
+        total_requests=total_requests,
+        message=f"Checking local {event_format} ratings",
+    )
     primary = load_or_refresh_17lands_format_data(
         set_code=set_code,
         event_format=event_format,
@@ -910,6 +961,9 @@ def load_or_refresh_17lands_data(
         fetch_json=fetch_json,
         timeout_seconds=timeout_seconds,
         cache_ttl=cache_ttl,
+        progress_callback=progress_callback,
+        progress_offset=0,
+        progress_total=total_requests,
     )
     fallback = None
     if premier_fallback_enabled and event_format != PREMIER_DRAFT_FORMAT:
@@ -923,6 +977,9 @@ def load_or_refresh_17lands_data(
                 fetch_json=fetch_json,
                 timeout_seconds=timeout_seconds,
                 cache_ttl=cache_ttl,
+                progress_callback=progress_callback,
+                progress_offset=2,
+                progress_total=total_requests,
             )
         except SeventeenLandsError:
             fallback = None
@@ -1061,6 +1118,9 @@ def load_or_refresh_17lands_format_data(
     fetch_json: FetchJson | None = None,
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
     cache_ttl: timedelta | None = None,
+    progress_callback: DownloadProgressCallback | None = None,
+    progress_offset: int = 0,
+    progress_total: int = 2,
 ) -> SeventeenLandsFormatData:
     """Load cached format data, refreshing only when stale.
     Stale but valid cache data is served when a refresh fails offline.
@@ -1078,6 +1138,12 @@ def load_or_refresh_17lands_format_data(
         now=now,
         cache_ttl=ttl,
     ):
+        _report_download_progress(
+            callback=progress_callback,
+            completed_requests=progress_offset + 2,
+            total_requests=progress_total,
+            message=f"Loaded cached {event_format} ratings",
+        )
         return cached
 
     try:
@@ -1088,9 +1154,18 @@ def load_or_refresh_17lands_format_data(
             fetched_at=now,
             fetch_json=fetch_json,
             timeout_seconds=timeout_seconds,
+            progress_callback=progress_callback,
+            progress_offset=progress_offset,
+            progress_total=progress_total,
         )
     except SeventeenLandsError:
         if cached is not None and not refresh:
+            _report_download_progress(
+                callback=progress_callback,
+                completed_requests=progress_offset + 2,
+                total_requests=progress_total,
+                message=f"Using cached {event_format} ratings",
+            )
             return cached
 
         raise
@@ -1427,6 +1502,9 @@ def refresh_17lands_format_data(
     fetched_at: datetime | None = None,
     fetch_json: FetchJson | None = None,
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+    progress_callback: DownloadProgressCallback | None = None,
+    progress_offset: int = 0,
+    progress_total: int = 2,
 ) -> SeventeenLandsFormatData:
     """Fetch 17Lands endpoints and write the normalized cache.
     Tests pass a fetch_json callable so no live network is required.
@@ -1439,6 +1517,9 @@ def refresh_17lands_format_data(
         fetched_at=timestamp,
         fetch_json=fetch_json,
         timeout_seconds=timeout_seconds,
+        progress_callback=progress_callback,
+        progress_offset=progress_offset,
+        progress_total=progress_total,
     )
     save_17lands_format_data(dataset, app_dir=app_dir, cache_path=cache_path)
     return dataset
@@ -1486,29 +1567,41 @@ def fetch_17lands_format_data(
     fetched_at: datetime | None = None,
     fetch_json: FetchJson | None = None,
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+    progress_callback: DownloadProgressCallback | None = None,
+    progress_offset: int = 0,
+    progress_total: int = 2,
 ) -> SeventeenLandsFormatData:
     """Fetch and normalize one set/format from 17Lands.
     The fetch_json hook receives each URL and timeout in seconds.
     """
 
     timestamp = datetime.now(tz=UTC) if fetched_at is None else fetched_at.astimezone(UTC)
-    end_date = timestamp.date()
     json_fetcher = _default_fetch_json if fetch_json is None else fetch_json
     card_payload = json_fetcher(
         card_ratings_url(
             set_code=set_code,
             event_format=event_format,
-            end_date=end_date,
         ),
         timeout_seconds,
+    )
+    _report_download_progress(
+        callback=progress_callback,
+        completed_requests=progress_offset + 1,
+        total_requests=progress_total,
+        message=f"Downloaded all-time {event_format} card ratings",
     )
     color_payload = json_fetcher(
         color_ratings_url(
             set_code=set_code,
             event_format=event_format,
-            end_date=end_date,
         ),
         timeout_seconds,
+    )
+    _report_download_progress(
+        callback=progress_callback,
+        completed_requests=progress_offset + 2,
+        total_requests=progress_total,
+        message=f"Downloaded all-time {event_format} color ratings",
     )
     return build_17lands_format_data(
         set_code=set_code,
@@ -1533,13 +1626,11 @@ def fetch_17lands_pair_card_data(
     """
 
     timestamp = datetime.now(tz=UTC) if fetched_at is None else fetched_at.astimezone(UTC)
-    end_date = timestamp.date()
     json_fetcher = _default_fetch_json if fetch_json is None else fetch_json
     card_payload = json_fetcher(
         card_ratings_url(
             set_code=set_code,
             event_format=event_format,
-            end_date=end_date,
             colors=_required_pair(pair, field_name="pair"),
         ),
         timeout_seconds,
@@ -1586,7 +1677,7 @@ def _load_existing_format_data(
             event_format=event_format,
             app_dir=app_dir,
         )
-    except SeventeenLandsCacheMissingError:
+    except (SeventeenLandsCacheMissingError, SeventeenLandsCacheOutdatedError):
         return None
 
 
@@ -1625,7 +1716,7 @@ def _load_optional_cached_format_data(
             event_format=event_format,
             app_dir=app_dir,
         )
-    except SeventeenLandsCacheMissingError:
+    except (SeventeenLandsCacheMissingError, SeventeenLandsCacheOutdatedError):
         return None
 
 
@@ -1647,7 +1738,7 @@ def _load_optional_pair_card_data(
                 app_dir=app_dir,
             ),
         )
-    except SeventeenLandsCacheMissingError:
+    except (SeventeenLandsCacheMissingError, SeventeenLandsCacheOutdatedError):
         return None
 
 
@@ -1996,8 +2087,13 @@ def _structure_cache_path(
 
 
 def _parse_card_ratings(*, payload: Any) -> dict[int, SeventeenCardStats]:
+    if isinstance(payload, dict):
+        payload = payload.get("data")
+
     if not isinstance(payload, list):
-        raise SeventeenLandsError("17Lands card ratings payload is not a list.")
+        raise SeventeenLandsError(
+            "17Lands card ratings payload does not contain a data list."
+        )
 
     ratings: dict[int, SeventeenCardStats] = {}
     for index, item in enumerate(payload):
@@ -2255,6 +2351,25 @@ def _default_fetch_json(url: str, timeout_seconds: int) -> Any:
         raise SeventeenLandsError(f"Failed to query 17Lands data: {error}") from error
     except json.JSONDecodeError as error:
         raise SeventeenLandsError(f"Malformed 17Lands JSON response: {error}") from error
+
+
+def _report_download_progress(
+    *,
+    callback: DownloadProgressCallback | None,
+    completed_requests: int,
+    total_requests: int,
+    message: str,
+) -> None:
+    if callback is None:
+        return
+
+    callback(
+        SeventeenLandsDownloadProgress(
+            completed_requests=completed_requests,
+            total_requests=total_requests,
+            message=message,
+        )
+    )
 
 
 def _url_with_query(*, endpoint: str, params: Mapping[str, str]) -> str:
