@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,10 @@ from draftgoblin.seventeen import seventeen_lands_structure_targets_cache_path
 SCRYFALL_BULK_SAMPLE_PATH = (
     Path(__file__).parent / "fixtures" / "scryfall-default-cards-sample.jsonl"
 )
+
+
+def test_package_version_matches_installed_distribution_metadata() -> None:
+    assert __version__ == version(distribution_name="draftgoblin")
 
 
 def test_version_output_includes_required_disclaimer(

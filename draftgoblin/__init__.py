@@ -2,7 +2,12 @@
 Keep shared version and disclaimer text in one place.
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version(distribution_name="draftgoblin")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 
 DISCLAIMER = (
     "Draftgoblin is unofficial Fan Content permitted under the Fan Content Policy. "

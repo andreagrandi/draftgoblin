@@ -6,10 +6,33 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Andrea Grandi" }]
+keywords = [
+    "draft",
+    "magic-the-gathering",
+    "mtg-arena",
+    "terminal",
+    "tui",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Games/Entertainment",
+]
 dependencies = [
     "textual>=8.2.8",
     "textual-image>=0.13.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/andreagrandi/draftgoblin"
+Repository = "https://github.com/andreagrandi/draftgoblin"
+Issues = "https://github.com/andreagrandi/draftgoblin/issues"
 
 [project.scripts]
 draftgoblin = "draftgoblin.cli:main"
