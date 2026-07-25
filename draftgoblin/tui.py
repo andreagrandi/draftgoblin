@@ -26,7 +26,16 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Header, Select, Static, Switch
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    ProgressBar,
+    Select,
+    Static,
+    Switch,
+)
 from textual.worker import get_current_worker
 
 try:  # pragma: no cover - import availability depends on optional terminal extras.
@@ -70,13 +79,27 @@ from draftgoblin.ranking import (
     rank_scored_cards,
     ranking_label,
 )
-from draftgoblin.seventeen import SEVENTEEN_LANDS_ATTRIBUTION, SeventeenLandsData
+from draftgoblin.seventeen import (
+    SEVENTEEN_LANDS_ATTRIBUTION,
+    DownloadProgressCallback,
+    SeventeenLandsData,
+    SeventeenLandsDownloadProgress,
+)
 from draftgoblin.setinfo import format_set_label
 
 PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
 CardDatabaseLoader: TypeAlias = Callable[[], CardDatabase]
 RatingsLoaderFactory: TypeAlias = Callable[[CardDatabase], RatingsLoader]
+RatingsProgressLoader: TypeAlias = Callable[
+    [str, DownloadProgressCallback],
+    SeventeenLandsData,
+]
+RatingsProgressLoaderFactory: TypeAlias = Callable[
+    [CardDatabase],
+    RatingsProgressLoader,
+]
+RatingsCacheChecker: TypeAlias = Callable[[str], bool]
 CardImageFetcher: TypeAlias = Callable[[str, Path], Path]
 BuildSignature: TypeAlias = tuple[str, tuple[int, ...], str | None]
 TuiCardQuantityKey: TypeAlias = tuple[str, str]
@@ -341,6 +364,85 @@ def _visibility_control_id(*, field_name: str) -> str:
     return f"visibility-{field_name.replace('_', '-')}"
 
 
+class MissingRatingsScreen(ModalScreen[bool]):
+    """Ask before the first 17Lands download for an uncached set.
+    The active draft continues using neutral priors until the user confirms.
+    """
+
+    CSS = """
+    MissingRatingsScreen {
+        align: center middle;
+    }
+
+    #missing-ratings-dialog {
+        width: 68;
+        height: auto;
+        border: thick $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #missing-ratings-title {
+        height: auto;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #missing-ratings-message {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    #missing-ratings-actions {
+        height: auto;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Not now", show=False)]
+
+    def __init__(self, *, set_code: str) -> None:
+        super().__init__()
+        self.set_code = set_code.upper()
+
+    def compose(self) -> ComposeResult:
+        """Compose the missing-data warning and explicit download choice.
+        Downloaded Quick and Premier data will be cached for later drafts.
+        """
+
+        with Vertical(id="missing-ratings-dialog"):
+            yield Static(
+                f"No local 17Lands data for {self.set_code}",
+                id="missing-ratings-title",
+            )
+            yield Static(
+                "Draftgoblin is using neutral-prior scores. Download the all-time "
+                "Quick Draft and Premier fallback ratings now? Progress will be "
+                "shown, then the current pack will be rescored automatically.",
+                id="missing-ratings-message",
+            )
+            with Horizontal(id="missing-ratings-actions"):
+                yield Button(
+                    "Download data",
+                    id="download-ratings",
+                    variant="primary",
+                )
+                yield Button("Not now", id="cancel-ratings-download")
+
+    def action_cancel(self) -> None:
+        """Keep neutral-prior scores without starting a network request.
+        The data action remains available if the user changes their mind.
+        """
+
+        self.dismiss(False)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Return whether the user explicitly approved the download.
+        The app owns the worker and progress state after this screen closes.
+        """
+
+        self.dismiss(event.button.id == "download-ratings")
+
+
 class DraftgoblinTuiApp(App[None]):
     """Textual app for live Quick Draft recommendations.
     The app can tail a real log or accept fixture lines in tests.
@@ -419,6 +521,21 @@ class DraftgoblinTuiApp(App[None]):
         color: $text;
         padding: 0 1;
     }
+
+    #ratings-download-panel {
+        height: auto;
+        display: none;
+        background: $panel;
+        padding: 0 1;
+    }
+
+    #ratings-download-label {
+        height: 1;
+    }
+
+    #ratings-download-progress {
+        height: 1;
+    }
     """
 
     BINDINGS = [
@@ -430,6 +547,7 @@ class DraftgoblinTuiApp(App[None]):
         Binding("a", "cycle_account", "Account", show=True),
         Binding("p", "rebuild_with_pair_override", "Pair", show=True),
         Binding("m", "toggle_mana_icons", "Mana", show=True),
+        Binding("d", "download_ratings", "Data", show=True),
         Binding("up", "navigate_previous_card", "Previous", show=False, priority=True),
         Binding("left", "navigate_previous_card", "Previous", show=False, priority=True),
         Binding("k", "navigate_previous_card", "Previous", show=False, priority=True),
@@ -453,6 +571,9 @@ class DraftgoblinTuiApp(App[None]):
         previous_log_path: PathInput | None = None,
         ratings_loader: RatingsLoader | None = None,
         ratings_loader_factory: RatingsLoaderFactory | None = None,
+        ratings_progress_loader: RatingsProgressLoader | None = None,
+        ratings_progress_loader_factory: RatingsProgressLoaderFactory | None = None,
+        ratings_cache_checker: RatingsCacheChecker | None = None,
         startup_scan: bool = False,
         once: bool = False,
         poll_enabled: bool = True,
@@ -466,8 +587,17 @@ class DraftgoblinTuiApp(App[None]):
             raise ValueError("card_database or card_database_loader is required.")
         if card_database is not None and card_database_loader is not None:
             raise ValueError("card_database and card_database_loader are mutually exclusive.")
-        if ratings_loader is not None and ratings_loader_factory is not None:
-            raise ValueError("ratings_loader and ratings_loader_factory are mutually exclusive.")
+        configured_ratings_loaders = sum(
+            loader is not None
+            for loader in (
+                ratings_loader,
+                ratings_loader_factory,
+                ratings_progress_loader,
+                ratings_progress_loader_factory,
+            )
+        )
+        if configured_ratings_loaders > 1:
+            raise ValueError("Configure exactly one ratings loader or loader factory.")
 
         self.log_path = Path(log_path).expanduser().resolve(strict=False)
         self._preferences_app_dir = app_dir
@@ -485,6 +615,7 @@ class DraftgoblinTuiApp(App[None]):
         self._card_database_error: str | None = None
         self._log_processing_started = False
         self._ratings_loader_factory = ratings_loader_factory
+        self._ratings_progress_loader_factory = ratings_progress_loader_factory
         self.follower = LogFollower(
             log_path=self.log_path,
             app_dir=app_dir,
@@ -495,6 +626,8 @@ class DraftgoblinTuiApp(App[None]):
         self._login_generation = self.parser.login_generation
         self.store = DraftPoolStore(app_dir=app_dir)
         self.ratings_loader = ratings_loader
+        self.ratings_progress_loader = ratings_progress_loader
+        self.ratings_cache_checker = ratings_cache_checker
         self.startup_scan = startup_scan
         self.once = once
         self.poll_enabled = poll_enabled
@@ -553,6 +686,12 @@ class DraftgoblinTuiApp(App[None]):
         self._ratings_data_by_set: dict[str, SeventeenLandsData | None] = {}
         self._rating_errors_by_set: dict[str, str] = {}
         self._loading_rating_sets: set[str] = set()
+        self._missing_rating_sets: set[str] = set()
+        self._rating_prompted_sets: set[str] = set()
+        self._rating_prompt_open_sets: set[str] = set()
+        self._rating_progress_by_set: dict[str, SeventeenLandsDownloadProgress] = {}
+        self._rating_notices_by_set: dict[str, str] = {}
+        self._rating_network_download_sets: set[str] = set()
         self._draft_states_by_key: dict[tuple[str, str], DraftState] = {}
 
     @property
@@ -622,6 +761,13 @@ class DraftgoblinTuiApp(App[None]):
                 yield Static("Pool: no draft yet", id="pool-summary")
                 yield Static("", id="card-image-preview")
                 yield CardDetailsPanel("Focused card: none", id="focused-card")
+        with Vertical(id="ratings-download-panel"):
+            yield Static("", id="ratings-download-label")
+            yield ProgressBar(
+                total=4,
+                show_eta=False,
+                id="ratings-download-progress",
+            )
         yield Static("", id="status-bar")
         yield Footer()
 
@@ -718,6 +864,29 @@ class DraftgoblinTuiApp(App[None]):
             self._rebuild_build_view()
 
         self._render_all()
+
+    def action_download_ratings(self) -> None:
+        """Offer or retry the ratings download for the active draft set.
+        Existing ready data is left untouched.
+        """
+
+        set_code = self._set_code
+        if set_code is None:
+            self._last_error = "No active draft set is available for a data download."
+            self._render_all()
+            return
+
+        if set_code in self._loading_rating_sets:
+            return
+
+        if self._ratings_data_by_set.get(set_code) is not None:
+            self._rating_notices_by_set[set_code] = (
+                f"17Lands data is already ready for {set_code}."
+            )
+            self._render_all()
+            return
+
+        self._show_missing_ratings_prompt(set_code=set_code, force=True)
 
     def action_cycle_sort(self) -> None:
         """Cycle pack ranking or build spell grouping.
@@ -984,6 +1153,8 @@ class DraftgoblinTuiApp(App[None]):
         self._card_database = database
         if self._ratings_loader_factory is not None:
             self.ratings_loader = self._ratings_loader_factory(database)
+        if self._ratings_progress_loader_factory is not None:
+            self.ratings_progress_loader = self._ratings_progress_loader_factory(database)
         self._render_all()
         self._start_log_processing()
 
@@ -1036,7 +1207,25 @@ class DraftgoblinTuiApp(App[None]):
         ratings_data = None
         error_message = None
         try:
-            if self.ratings_loader is not None:
+            if self.ratings_progress_loader is not None:
+
+                def report_progress(
+                    progress: SeventeenLandsDownloadProgress,
+                ) -> None:
+                    if worker.is_cancelled:
+                        return
+
+                    self.call_from_thread(
+                        self._update_ratings_progress,
+                        set_code,
+                        progress,
+                    )
+
+                ratings_data = self.ratings_progress_loader(
+                    set_code,
+                    report_progress,
+                )
+            elif self.ratings_loader is not None:
                 ratings_data = self.ratings_loader(set_code)
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             error_message = str(error)
@@ -1233,15 +1422,107 @@ class DraftgoblinTuiApp(App[None]):
             self._view_mode = "build"
 
     def _ensure_ratings_load_started(self, *, set_code: str) -> None:
-        if self.ratings_loader is None:
+        if self.ratings_loader is None and self.ratings_progress_loader is None:
             return
 
-        if set_code in self._ratings_data_by_set or set_code in self._loading_rating_sets:
+        if (
+            self._ratings_data_by_set.get(set_code) is not None
+            or set_code in self._loading_rating_sets
+        ):
+            return
+
+        if (
+            self.ratings_cache_checker is not None
+            and not self.ratings_cache_checker(set_code)
+        ):
+            self._missing_rating_sets.add(set_code)
+            self._rating_notices_by_set[set_code] = (
+                f"No local 17Lands data for {set_code}; neutral-prior scores are "
+                "active. Choose Download data, or press d later."
+            )
+            self._show_missing_ratings_prompt(set_code=set_code)
+            return
+
+        self._start_ratings_load(set_code=set_code)
+
+    def _show_missing_ratings_prompt(
+        self,
+        *,
+        set_code: str,
+        force: bool = False,
+    ) -> None:
+        if not self.is_running or set_code in self._rating_prompt_open_sets:
+            return
+
+        if not force and set_code in self._rating_prompted_sets:
+            return
+
+        self._rating_prompted_sets.add(set_code)
+        self._rating_prompt_open_sets.add(set_code)
+        self._render_all()
+        self.push_screen(
+            MissingRatingsScreen(set_code=set_code),
+            lambda approved: self._handle_ratings_download_choice(
+                set_code=set_code,
+                approved=approved,
+            ),
+        )
+
+    def _handle_ratings_download_choice(
+        self,
+        *,
+        set_code: str,
+        approved: bool,
+    ) -> None:
+        self._rating_prompt_open_sets.discard(set_code)
+        if approved:
+            self._start_ratings_load(set_code=set_code)
+            return
+
+        self._rating_notices_by_set[set_code] = (
+            f"No local 17Lands data for {set_code}; neutral-prior scores remain. "
+            "Press d to download."
+        )
+        self._render_all()
+
+    def _start_ratings_load(self, *, set_code: str) -> None:
+        if set_code in self._loading_rating_sets:
             return
 
         self._loading_rating_sets.add(set_code)
+        self._rating_progress_by_set[set_code] = SeventeenLandsDownloadProgress(
+            completed_requests=0,
+            total_requests=4,
+            message=f"Checking 17Lands data for {set_code}",
+        )
+        self._rating_notices_by_set[set_code] = (
+            f"Checking 17Lands data for {set_code}…"
+        )
+        if (
+            self._current_pack_event is not None
+            and self._current_pack_event.set_code == set_code
+        ):
+            self._score_current_pack()
+        self._render_all()
         if self.is_running:
             self._load_ratings_worker(set_code)
+
+    def _update_ratings_progress(
+        self,
+        set_code: str,
+        progress: SeventeenLandsDownloadProgress,
+    ) -> None:
+        if set_code not in self._loading_rating_sets:
+            return
+
+        if progress.message.startswith("Downloaded "):
+            self._rating_network_download_sets.add(set_code)
+        self._rating_progress_by_set[set_code] = progress
+        self._rating_notices_by_set[set_code] = (
+            f"{progress.message} for {set_code} "
+            f"({progress.completed_requests}/{progress.total_requests})"
+        )
+        self._render_all()
 
     def _finish_ratings_load(
         self,
@@ -1253,6 +1534,7 @@ class DraftgoblinTuiApp(App[None]):
         self._ratings_data_by_set[set_code] = ratings_data
         if error_message is None:
             self._rating_errors_by_set.pop(set_code, None)
+            self._missing_rating_sets.discard(set_code)
         else:
             self._rating_errors_by_set[set_code] = error_message
 
@@ -1268,7 +1550,54 @@ class DraftgoblinTuiApp(App[None]):
         if self._view_mode == "backtest" and self._set_code == set_code:
             self._rebuild_backtest_view()
 
+        if (
+            error_message is not None
+            or ratings_data is None
+            or set_code in self._rating_network_download_sets
+        ):
+            self._rating_notices_by_set[set_code] = self._ratings_load_notice(
+                set_code=set_code,
+                ratings_data=ratings_data,
+                error_message=error_message,
+            )
+        else:
+            self._rating_notices_by_set.pop(set_code, None)
         self._render_all()
+
+    def _ratings_load_notice(
+        self,
+        *,
+        set_code: str,
+        ratings_data: SeventeenLandsData | None,
+        error_message: str | None,
+    ) -> str:
+        if error_message is not None or ratings_data is None:
+            detail = error_message or "no ratings were returned"
+            return (
+                f"17Lands download failed for {set_code}: {detail}. "
+                "Neutral-prior scores remain; press d to retry."
+            )
+
+        if (
+            self._current_pack is None
+            or self._current_pack_event is None
+            or self._current_pack_event.set_code != set_code
+        ):
+            return f"17Lands data ready for {set_code}; future scores will use it."
+
+        total_cards = len(self._current_pack.cards)
+        rated_cards = sum(not card.no_data for card in self._current_pack.cards)
+        if rated_cards == total_cards:
+            return (
+                f"17Lands data ready for {set_code}; scores recalculated. "
+                f"All {total_cards} offered cards have usable ratings."
+            )
+
+        return (
+            f"17Lands data ready for {set_code}; scores recalculated. "
+            f"{rated_cards}/{total_cards} offered cards have usable ratings; "
+            "neutral priors remain where 17Lands samples are unavailable or thin."
+        )
 
     def _remember_draft_state(self, *, state: DraftState) -> None:
         self._draft_states_by_key[(state.account_id, state.draft_id)] = state
@@ -1500,11 +1829,21 @@ class DraftgoblinTuiApp(App[None]):
 
         label = self._current_pack.source_summary
         if set_code in self._loading_rating_sets:
-            return f"{label} (loading ratings)"
+            return f"{label} (downloading ratings)"
 
         error_message = self._rating_errors_by_set.get(set_code)
         if error_message is not None:
             return f"{label} (ratings unavailable)"
+
+        if set_code in self._missing_rating_sets:
+            return f"{label} (no local 17Lands data)"
+
+        if (
+            self._ratings_data_by_set.get(set_code) is not None
+            and self._current_pack.cards
+            and all(card.no_data for card in self._current_pack.cards)
+        ):
+            return f"{label} (17Lands cached; samples unavailable or thin)"
 
         return label
 
@@ -1517,7 +1856,36 @@ class DraftgoblinTuiApp(App[None]):
         self._render_pack_table()
         self._render_sidebar()
         self._ensure_visible_focus()
+        self._render_ratings_download_status()
         self._render_status_bar()
+
+    def _render_ratings_download_status(self) -> None:
+        panel = self.query_one("#ratings-download-panel", Vertical)
+        label = self.query_one("#ratings-download-label", Static)
+        progress_bar = self.query_one("#ratings-download-progress", ProgressBar)
+        set_code = self._set_code
+        notice = (
+            None
+            if set_code is None
+            else self._rating_notices_by_set.get(set_code)
+        )
+        panel.display = notice is not None
+        if notice is None:
+            return
+
+        label.update(notice)
+        downloading = (
+            set_code is not None and set_code in self._loading_rating_sets
+        )
+        progress_bar.display = downloading
+        if not downloading or set_code is None:
+            return
+
+        progress = self._rating_progress_by_set[set_code]
+        progress_bar.update(
+            total=progress.total_requests,
+            progress=progress.completed_requests,
+        )
 
     def _update_responsive_visibility(self) -> None:
         sidebar = self.query_one("#sidebar", Vertical)
@@ -3294,6 +3662,9 @@ def run_tui_watch(
     startup_scan: bool = False,
     ratings_loader: RatingsLoader | None = None,
     ratings_loader_factory: RatingsLoaderFactory | None = None,
+    ratings_progress_loader: RatingsProgressLoader | None = None,
+    ratings_progress_loader_factory: RatingsProgressLoaderFactory | None = None,
+    ratings_cache_checker: RatingsCacheChecker | None = None,
     mana_icons_enabled: bool = False,
 ) -> int:
     """Run Textual watch mode and return a process-style exit code.
@@ -3308,6 +3679,9 @@ def run_tui_watch(
         poll_interval=poll_interval,
         ratings_loader=ratings_loader,
         ratings_loader_factory=ratings_loader_factory,
+        ratings_progress_loader=ratings_progress_loader,
+        ratings_progress_loader_factory=ratings_progress_loader_factory,
+        ratings_cache_checker=ratings_cache_checker,
         startup_scan=startup_scan,
         once=once,
         mana_icons_enabled=mana_icons_enabled,

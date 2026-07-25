@@ -116,6 +116,8 @@ draftgoblin --version
 
 Watch `Player.log` and show live draft recommendations. The default view is a Textual TUI; `--plain` streams replay-compatible text.
 
+When the TUI sees a set with no local 17Lands cache, it warns that neutral-prior scores are active and offers to download the Quick Draft and Premier fallback data. Downloads use 17Lands' all-time period, so returning sets retain their historical samples. The TUI shows request progress, reports how many cards in the current pack have usable ratings, and recalculates the pack as soon as the data is ready. Press `d` to reopen the offer after choosing **Not now**. Existing caches continue to refresh on their normal daily cadence, and legacy date-range caches are replaced automatically.
+
 ```bash
 draftgoblin watch
 draftgoblin watch --mana-icons
@@ -179,7 +181,7 @@ draftgoblin refresh-structure-targets --set-code VOW --draft-data-file path/to/d
 ## Known limitations
 
 - Live recommendations target Quick Draft. Premier Draft, Traditional Draft, Sealed, Cube, and other formats are out of scope for live mode.
-- Day-one or very new sets may have missing or thin 17Lands data. Draftgoblin falls back when possible, but recommendations may be weaker until enough public data exists.
+- Day-one or otherwise thin formats may have a valid downloaded 17Lands dataset without enough game-in-hand samples for every card. The TUI reports usable coverage after download; cards without a strong sample keep their visible neutral-prior fallback until upstream data matures.
 - GIH WR is biased by deck quality, player choices, and card context. DG Score normalizes and adds color-commitment logic, but it is still guidance, not a perfect pick order.
 - The deck builder prints a build sheet for manual use in Arena. It does not import decks or automate game input.
 - Windows support is best-effort until tested on real installations. Linux is unsupported except by pointing `--log-path` at a Wine or Proton log.

@@ -12,8 +12,10 @@ from draftgoblin.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
     SEVENTEEN_LANDS_ATTRIBUTION,
+    SeventeenLandsDownloadProgress,
     SeventeenLandsError,
     build_17lands_structure_targets_from_draft_rows,
+    has_cached_17lands_data,
     load_17lands_structure_targets,
     load_cached_17lands_data,
     load_or_refresh_17lands_data,
@@ -52,14 +54,14 @@ class RecordingFetcher:
         if self.fail:
             raise SeventeenLandsError("network unavailable")
 
-        if "/card_ratings/data" in url and "colors=WU" in url:
-            return self.pair_card_ratings
+        if "/api/card_data" in url and "colors=WU" in url:
+            return {"data": self.pair_card_ratings}
 
-        if "/card_ratings/data" in url and "event_type=PremierDraft" in url:
-            return self.premier_card_ratings
+        if "/api/card_data" in url and "event_type=PremierDraft" in url:
+            return {"data": self.premier_card_ratings}
 
-        if "/card_ratings/data" in url:
-            return self.quick_card_ratings
+        if "/api/card_data" in url:
+            return {"data": self.quick_card_ratings}
 
         if "/color_ratings/data" in url:
             return self.color_ratings
@@ -90,6 +92,9 @@ def test_17lands_format_data_is_cached_and_not_refetched_within_24h(
     )
 
     assert len(fetcher.urls) == 2
+    assert "/api/card_data" in fetcher.urls[0]
+    assert "time_period=ALL_TIME" in fetcher.urls[0]
+    assert "start_date" not in fetcher.urls[0]
     assert second.fetched_at == first.fetched_at
     assert second.card_ratings[1001].gih_win_rate == 0.61
     assert seventeen_lands_cache_path(
@@ -97,6 +102,70 @@ def test_17lands_format_data_is_cached_and_not_refetched_within_24h(
         event_format=QUICK_DRAFT_FORMAT,
         app_dir=tmp_path,
     ).exists()
+
+
+def test_first_17lands_download_reports_request_progress_and_builds_cache(
+    tmp_path: Path,
+) -> None:
+    progress: list[SeventeenLandsDownloadProgress] = []
+
+    assert not has_cached_17lands_data(set_code="TST", app_dir=tmp_path)
+
+    load_or_refresh_17lands_data(
+        set_code="TST",
+        app_dir=tmp_path,
+        clock=FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC)),
+        fetch_json=RecordingFetcher(),
+        progress_callback=progress.append,
+    )
+
+    assert has_cached_17lands_data(set_code="TST", app_dir=tmp_path)
+    assert [
+        (update.completed_requests, update.total_requests)
+        for update in progress
+    ] == [
+        (0, 4),
+        (1, 4),
+        (2, 4),
+        (3, 4),
+        (4, 4),
+    ]
+    assert progress[-1].message == "Downloaded all-time PremierDraft color ratings"
+
+
+def test_legacy_date_range_cache_is_replaced_with_all_time_data(
+    tmp_path: Path,
+) -> None:
+    clock = FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC))
+    load_or_refresh_17lands_format_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=clock,
+        fetch_json=RecordingFetcher(),
+    )
+    cache_path = seventeen_lands_cache_path(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+    )
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 1
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+    replacement_fetcher = RecordingFetcher()
+
+    refreshed = load_or_refresh_17lands_format_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=clock,
+        fetch_json=replacement_fetcher,
+    )
+
+    assert len(replacement_fetcher.urls) == 2
+    assert refreshed.card_ratings[1001].gih_win_rate == 0.61
+    refreshed_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert refreshed_payload["schema_version"] == 2
 
 
 def test_stale_17lands_cache_serves_last_good_data_when_offline(

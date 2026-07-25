@@ -150,7 +150,7 @@ Both defaults derive from the running OS user's home directory, which is what gu
 ### FR-3 Static data layer
 
 - FR-3.1 Scryfall bulk download → local `grpId → {name, colors, mana_value, rarity, types}` map; cached; manual `refresh-data` command.
-- FR-3.2 17lands ratings fetch per (set, format=QuickDraft): GIH WR, OH WR, ALSA, IWD, sample counts; cached with timestamp; auto-refresh if cache > 24 h.
+- FR-3.2 17lands ratings fetch per (set, format=QuickDraft) and all-time period: GIH WR, OH WR, ALSA, IWD, sample counts; cached with timestamp. The all-time period preserves historical samples when a set returns to draft. The TUI asks before the first download for a set, shows request progress, replaces legacy date-range caches, and auto-refreshes an existing current cache if it is > 24 h old.
 - FR-3.3 Fallback chain: QuickDraft data → PremierDraft data (flagged in UI) → neutral prior.
 - FR-3.4 Color-pair win rates for the set (10 two-color pairs) fetched and cached on the same cadence.
 - FR-3.5 Attribution line "Card data from 17Lands (17lands.com)" visible in the TUI footer and on build sheets.
@@ -185,7 +185,7 @@ Both defaults derive from the running OS user's home directory, which is what gu
 
 - FR-6.1 **Live mode is a TUI** (full-screen terminal app): pack panel (score-sorted table, FR-4.6), sidebar with pool summary (color distribution bar, mana curve sparkline, last picks), footer status bar (account, pair, pick counter, data source, 17lands attribution).
 - FR-6.2 On draft completion, the TUI switches to the **build view** (build sheet + bench), with a keybind to force a rebuild with another pair.
-- FR-6.3 Minimal keybindings: quit, toggle secondary stat columns, cycle ranking (17L WR / DG score / ALSA / MV), open build view, rebuild with pair override.
+- FR-6.3 Minimal keybindings: quit, toggle secondary stat columns, cycle ranking (17L WR / DG score / ALSA / MV), open build view, rebuild with pair override, and reopen the missing-ratings download offer.
 - FR-6.4 `replay <logfile>` and `build --pool <file>` run in **plain-text mode** (deterministic, pipe-friendly, no TUI) for testing and scripting. `watch --plain` also available for minimal environments.
 - FR-6.5 Graceful degradation on narrow terminals (hide secondary columns first).
 
