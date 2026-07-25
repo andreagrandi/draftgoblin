@@ -21,6 +21,7 @@ from draftgoblin.events import (
     DraftStartedEvent,
     PackOfferedEvent,
     PickMadeEvent,
+    QuickDraftDetectedEvent,
 )
 from draftgoblin.paths import app_data_dir
 
@@ -393,6 +394,9 @@ class DraftPoolStore:
 
         if isinstance(event, AccountEvent):
             return self._consume_account(event=event)
+
+        if isinstance(event, QuickDraftDetectedEvent):
+            return None
 
         if isinstance(event, DraftStartedEvent):
             return self._consume_started(event=event)
@@ -1228,4 +1232,3 @@ def _optional_int_tuple(value: Any, *, field_name: str) -> tuple[int, ...] | Non
         return None
 
     return _int_tuple(value, field_name=field_name)
-

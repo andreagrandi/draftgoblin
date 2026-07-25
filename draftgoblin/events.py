@@ -47,6 +47,17 @@ class AccountEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class QuickDraftDetectedEvent:
+    """Quick Draft entry detected before Arena creates its draft course.
+    This informational event lets the UI prepare set-level data before P1P1.
+    """
+
+    event_name: str
+    set_code: str
+    account_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class DraftStartedEvent:
     """Quick Draft course start detected from Arena course state.
     Event name identifies the draft event and set code identifies the set.
@@ -104,6 +115,7 @@ class DraftCompletedEvent:
 
 DraftEvent: TypeAlias = (
     AccountEvent
+    | QuickDraftDetectedEvent
     | DraftStartedEvent
     | PackOfferedEvent
     | PickMadeEvent
@@ -230,8 +242,11 @@ def _parse_request_line(
     state: _ParserState,
 ) -> tuple[DraftEvent, ...]:
     if token == "EventJoin":
-        _validate_event_join_request(body=body, raw_line=raw_line)
-        return ()
+        return _parse_event_join_request(
+            body=body,
+            raw_line=raw_line,
+            state=state,
+        )
 
     if token == "BotDraftDraftStatus":
         request = _request_payload(body=body, raw_line=raw_line)
@@ -294,9 +309,14 @@ def _parse_request_line(
     return ()
 
 
-def _validate_event_join_request(*, body: str, raw_line: str) -> None:
+def _parse_event_join_request(
+    *,
+    body: str,
+    raw_line: str,
+    state: _ParserState,
+) -> tuple[DraftEvent, ...]:
     if QUICK_DRAFT_PREFIX not in raw_line:
-        return
+        return ()
 
     request = _request_payload(body=body, raw_line=raw_line)
     event_name = _required_str(
@@ -304,7 +324,14 @@ def _validate_event_join_request(*, body: str, raw_line: str) -> None:
         field_name="request.EventName",
         raw_line=raw_line,
     )
-    _set_code(event_name=event_name, raw_line=raw_line)
+    set_code = _set_code(event_name=event_name, raw_line=raw_line)
+    return (
+        QuickDraftDetectedEvent(
+            event_name=event_name,
+            set_code=set_code,
+            account_id=state.account_id,
+        ),
+    )
 
 
 def _request_payload(*, body: str, raw_line: str) -> dict[str, Any]:
@@ -743,4 +770,3 @@ def _contains_unparsed_draft_shape(line: str) -> bool:
 
 def _raise(message: str, *, raw_line: str) -> NoReturn:
     raise DraftLogParseError(message, raw_line=raw_line)
-

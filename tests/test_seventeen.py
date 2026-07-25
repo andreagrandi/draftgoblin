@@ -234,6 +234,25 @@ def test_quickdraft_ratings_fall_back_to_premier_then_neutral_prior(
     assert data.attribution == SEVENTEEN_LANDS_ATTRIBUTION
 
 
+def test_set_reliability_is_one_aggregate_quick_and_premier_value(
+    tmp_path: Path,
+) -> None:
+    data = load_or_refresh_17lands_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path,
+        clock=FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC)),
+        fetch_json=RecordingFetcher(),
+        thin_sample_minimum=500,
+    )
+
+    reliability = data.set_reliability
+
+    assert reliability.set_code == "TST"
+    assert reliability.score == 43
+    assert reliability.tier == "Low"
+
+
 def test_cached_17lands_data_uses_empty_primary_when_cache_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -243,6 +262,8 @@ def test_cached_17lands_data_uses_empty_primary_when_cache_is_missing(
 
     assert data.primary.card_ratings == {}
     assert data.fallback is None
+    assert data.set_reliability.score == 0
+    assert data.set_reliability.tier == "Very low"
     assert rating.neutral_prior is True
     assert rating.metadata.source == NEUTRAL_PRIOR_SOURCE
 

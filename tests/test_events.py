@@ -13,6 +13,7 @@ from draftgoblin.events import (
     DraftStartedEvent,
     PackOfferedEvent,
     PickMadeEvent,
+    QuickDraftDetectedEvent,
     parse_events,
 )
 
@@ -89,7 +90,11 @@ def test_parse_fixture_yields_account_start_all_picks_and_completion() -> None:
 
     events = list(parse_events(lines=fixture_lines))
 
-    expected_sequence: list[type[object]] = [AccountEvent, DraftStartedEvent]
+    expected_sequence: list[type[object]] = [
+        AccountEvent,
+        QuickDraftDetectedEvent,
+        DraftStartedEvent,
+    ]
     for _ in range(42):
         expected_sequence.extend([PackOfferedEvent, PickMadeEvent])
     expected_sequence.append(DraftCompletedEvent)
@@ -101,7 +106,13 @@ def test_parse_fixture_yields_account_start_all_picks_and_completion() -> None:
     assert account.screen_name == "FixturePlayer"
     assert account.previous_client_id is None
 
-    draft_started = events[1]
+    detected = events[1]
+    assert isinstance(detected, QuickDraftDetectedEvent)
+    assert detected.event_name == "QuickDraft_MSH_20260702"
+    assert detected.set_code == "MSH"
+    assert detected.account_id == account.client_id
+
+    draft_started = events[2]
     assert isinstance(draft_started, DraftStartedEvent)
     assert draft_started.event_name == "QuickDraft_MSH_20260702"
     assert draft_started.set_code == "MSH"
@@ -460,4 +471,3 @@ def test_malformed_or_unknown_draft_lines_raise_diagnostic_with_raw_line(
 
     assert error.value.raw_line == raw_line
     assert raw_line in str(error.value)
-

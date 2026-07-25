@@ -40,6 +40,24 @@ def test_pick_engine_scores_and_sorts_with_fallback_sources() -> None:
     assert all(isinstance(card.score, int) for card in scored_pack.cards)
 
 
+def test_set_reliability_calculation_does_not_change_card_scores() -> None:
+    ratings_data = _ratings_data()
+    database = _card_database()
+    before = PickEngine(ratings_data=ratings_data).score_pack(
+        offered_grp_ids=(4, 3, 2, 1),
+        card_database=database,
+    )
+
+    reliability = ratings_data.set_reliability
+
+    after = PickEngine(ratings_data=ratings_data).score_pack(
+        offered_grp_ids=(4, 3, 2, 1),
+        card_database=database,
+    )
+    assert reliability.set_code == ratings_data.set_code
+    assert after == before
+
+
 def test_alsa_adjusts_neutral_prior_when_gih_is_absent() -> None:
     engine = PickEngine(ratings_data=_ratings_data())
 

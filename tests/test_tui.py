@@ -57,6 +57,71 @@ def test_tui_fixture_stream_updates_pack_panel_and_status_bar(tmp_path: Path) ->
     asyncio.run(_assert_fixture_stream_updates_pack_panel(tmp_path=tmp_path))
 
 
+def test_tui_shows_one_set_reliability_value_only_before_p1p1(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_one_set_reliability_value_only_before_p1p1(tmp_path=tmp_path))
+
+
+async def _assert_one_set_reliability_value_only_before_p1p1(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path, ratings_loader=_graded_ratings_data)
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.process_lines(lines=_first_pack_lines()[:3])
+        for _ in range(10):
+            await pilot.pause(0.05)
+            if "MSH" not in app.loading_rating_sets:
+                break
+
+        readiness = app.query_one("#pre-draft-readiness", Static)
+        readiness_text = str(readiness.render())
+        assert readiness.display
+        assert (
+            "17Lands reliability for MSH — Marvel Super Heroes Quick Draft: "
+            "Medium — 58/100"
+            in readiness_text
+        )
+        assert readiness_text.count("/100") == 1
+        assert app.query_one("#pack-table", DataTable).display is False
+
+        app.process_lines(lines=_first_pack_lines()[3:])
+        await pilot.pause()
+
+        table = app.query_one("#pack-table", DataTable)
+        assert readiness.display is False
+        assert table.display
+        assert table.row_count == 14
+        assert "/100" not in _status_text(app=app)
+        assert all(
+            "/100" not in str(table.get_row_at(index))
+            for index in range(table.row_count)
+        )
+
+
+def test_tui_ignores_pre_draft_detection_from_historical_scan(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_historical_detection_is_ignored(tmp_path=tmp_path))
+
+
+async def _assert_historical_detection_is_ignored(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path, ratings_loader=_graded_ratings_data)
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.process_lines(
+            lines=_first_pack_lines()[:3],
+            include_pre_draft_detection=False,
+        )
+        await pilot.pause()
+
+        readiness = app.query_one("#pre-draft-readiness", Static)
+        assert readiness.display
+        assert "Quick Draft set not detected yet" in str(readiness.render())
+        assert app.loading_rating_sets == frozenset()
+
+
 async def _assert_fixture_stream_updates_pack_panel(tmp_path: Path) -> None:
     app = _tui_app(tmp_path=tmp_path)
 

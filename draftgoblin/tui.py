@@ -63,6 +63,7 @@ from draftgoblin.events import (
     DraftStartedEvent,
     PackOfferedEvent,
     PickMadeEvent,
+    QuickDraftDetectedEvent,
 )
 from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
@@ -477,6 +478,13 @@ class DraftgoblinTuiApp(App[None]):
         text-style: bold;
     }
 
+    #pre-draft-readiness {
+        height: 1fr;
+        content-align: center middle;
+        text-align: center;
+        text-style: bold;
+    }
+
     #pack-table,
     #build-scroll,
     #focused-card {
@@ -754,6 +762,10 @@ class DraftgoblinTuiApp(App[None]):
         with Horizontal(id="main"):
             with Vertical(id="pack-panel"):
                 yield Static("Waiting for a Quick Draft pack…", id="pack-title")
+                yield Static(
+                    "Quick Draft set not detected yet.",
+                    id="pre-draft-readiness",
+                )
                 yield DataTable(id="pack-table")
                 with VerticalScroll(id="build-scroll", can_focus=True):
                     yield Static("Build view: no picked cards yet.", id="build-view")
@@ -1082,7 +1094,12 @@ class DraftgoblinTuiApp(App[None]):
         )
         self._render_all()
 
-    def process_lines(self, *, lines: Iterable[str]) -> None:
+    def process_lines(
+        self,
+        *,
+        lines: Iterable[str],
+        include_pre_draft_detection: bool = True,
+    ) -> None:
         """Process complete Player.log lines and refresh the TUI.
         Tests call this directly to simulate a live fixture stream.
         """
@@ -1095,6 +1112,12 @@ class DraftgoblinTuiApp(App[None]):
                 events_tuple = tuple(self.parser.parse_lines(lines=(line,)))
                 self._discard_previous_login_account_context()
                 for parsed_event in events_tuple:
+                    if (
+                        isinstance(parsed_event, QuickDraftDetectedEvent)
+                        and not include_pre_draft_detection
+                    ):
+                        continue
+
                     event = self._event_with_active_account(event=parsed_event)
                     state = self._consume_store_event(event=event)
                     if state is not None:
@@ -1190,7 +1213,11 @@ class DraftgoblinTuiApp(App[None]):
                 self.call_from_thread(self.exit)
             return
 
-        self.call_from_thread(self.process_lines, lines=lines)
+        self.call_from_thread(
+            self.process_lines,
+            lines=lines,
+            include_pre_draft_detection=False,
+        )
         if exit_after:
             self.call_from_thread(self.exit)
 
@@ -1271,6 +1298,10 @@ class DraftgoblinTuiApp(App[None]):
             self._consume_account_event(event=event)
             return
 
+        if isinstance(event, QuickDraftDetectedEvent):
+            self._consume_detected_event(event=event)
+            return
+
         if isinstance(event, DraftStartedEvent):
             self._consume_started_event(event=event)
             return
@@ -1335,6 +1366,37 @@ class DraftgoblinTuiApp(App[None]):
         self._set_code = event.set_code
         self._draft_id = event.course_id
         self._pick_label = "waiting"
+        self._pool_size = 0
+        self._pool_grp_ids = ()
+        self._last_picks = []
+        self._current_pack_event = None
+        self._current_pack = None
+        self._pair_label = "open"
+        self._commitment_label = "0% open"
+        self._view_mode = "pack"
+        self._forced_pair = None
+        self._build_pair_label = "—"
+        self._build_text = "Build view: no picked cards yet."
+        self._build_error = None
+        self._build_action_status = None
+        self._backtest_text = "Backtest view: complete a draft, then press t."
+        self._backtest_error = None
+        self._backtest_action_status = None
+        self._last_build_signature = None
+        self._build_spell_sort_mode = "curve"
+        self._build_show_details = self.visibility_preferences.build_details
+        self._clear_build_render_state()
+        self._ensure_ratings_load_started(set_code=event.set_code)
+
+    def _consume_detected_event(self, *, event: QuickDraftDetectedEvent) -> None:
+        self._active_account_id = self._display_account_id(account_id=event.account_id)
+        self._active_account_label = self._account_label(
+            account_id=self._active_account_id
+        )
+        self._event_name = event.event_name
+        self._set_code = event.set_code
+        self._draft_id = None
+        self._pick_label = "preparing"
         self._pool_size = 0
         self._pool_grp_ids = ()
         self._last_picks = []
@@ -1853,6 +1915,7 @@ class DraftgoblinTuiApp(App[None]):
 
         self._update_responsive_visibility()
         self._render_pack_title()
+        self._render_pre_draft_readiness()
         self._render_pack_table()
         self._render_sidebar()
         self._ensure_visible_focus()
@@ -1967,6 +2030,12 @@ class DraftgoblinTuiApp(App[None]):
         if self._current_pack_event is None:
             if self._pick_label == "complete":
                 title.update("Draft complete")
+            elif self._set_code is not None:
+                title.update(
+                    "Quick Draft detected — "
+                    f"{format_set_label(set_code=self._set_code)}; "
+                    "waiting for the first pack…"
+                )
             else:
                 title.update("Waiting for a Quick Draft pack…")
             return
@@ -1980,12 +2049,59 @@ class DraftgoblinTuiApp(App[None]):
             f"— ranked by {SORT_LABELS[self.sort_mode]}"
         )
 
+    def _render_pre_draft_readiness(self) -> None:
+        readiness = self.query_one("#pre-draft-readiness", Static)
+        readiness.display = self._show_pre_draft_readiness()
+        if not readiness.display:
+            return
+
+        set_code = self._set_code
+        if set_code is None:
+            readiness.update(
+                "Quick Draft set not detected yet.\n"
+                "Waiting for Arena to report a Quick Draft entry."
+            )
+            return
+
+        set_label = format_set_label(set_code=set_code)
+        prefix = f"17Lands reliability for {set_label} Quick Draft:"
+        if set_code in self._loading_rating_sets:
+            readiness.update(f"{prefix} Checking…")
+            return
+
+        if set_code in self._rating_errors_by_set:
+            readiness.update(f"{prefix} Unavailable")
+            return
+
+        ratings_data = self._ratings_data_by_set.get(set_code)
+        if ratings_data is not None:
+            reliability = ratings_data.set_reliability
+            readiness.update(
+                f"{prefix} {reliability.tier} — {reliability.score}/100"
+            )
+            return
+
+        if set_code in self._missing_rating_sets:
+            readiness.update(f"{prefix} Not checked — press d to download data")
+            return
+
+        readiness.update(f"{prefix} Not checked")
+
+    def _show_pre_draft_readiness(self) -> bool:
+        return (
+            self._view_mode == "pack"
+            and self._current_pack_event is None
+            and self._pick_label != "complete"
+        )
+
     def _render_pack_table(self) -> None:
         table = self.query_one("#pack-table", DataTable)
         build_scroll = self.query_one("#build-scroll", VerticalScroll)
         build_view = self.query_one("#build-view", Static)
         table.loading = self.card_database_loading
-        table.display = self._view_mode == "pack"
+        table.display = (
+            self._view_mode == "pack" and not self._show_pre_draft_readiness()
+        )
         build_scroll.display = self._view_mode in {"build", "backtest"}
         build_view.update(self._active_text_view())
         if self._view_mode in {"build", "backtest"}:
@@ -3786,7 +3902,13 @@ def _event_is_missing_account(*, event: DraftEvent) -> bool:
     return (
         isinstance(
             event,
-            (DraftStartedEvent, PackOfferedEvent, PickMadeEvent, DraftCompletedEvent),
+            (
+                QuickDraftDetectedEvent,
+                DraftStartedEvent,
+                PackOfferedEvent,
+                PickMadeEvent,
+                DraftCompletedEvent,
+            ),
         )
         and event.account_id is None
     )
