@@ -14,13 +14,13 @@ Draftgoblin is read-only: it does not write to, inject into, or automate MTG Are
 
 Cards are ranked in real time, with the raw 17Lands win rate and grade shown alongside Draftgoblin's pool-aware score.
 
-![Draftgoblin ranking the cards in a Quick Draft pack](docs/assets/draft-pick-recommendations.png)
+![Draftgoblin ranking the cards in a Quick Draft pack](https://raw.githubusercontent.com/andreagrandi/draftgoblin/master/docs/assets/draft-pick-recommendations.png)
 
 ### Suggested deck
 
 At the end of the draft, Draftgoblin selects a color pair, spells, and mana base for a 40-card build.
 
-![Draftgoblin suggested deck build](docs/assets/suggested-deck-build.png)
+![Draftgoblin suggested deck build](https://raw.githubusercontent.com/andreagrandi/draftgoblin/master/docs/assets/suggested-deck-build.png)
 
 ## How recommendations work
 
