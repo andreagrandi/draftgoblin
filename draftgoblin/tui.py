@@ -67,7 +67,14 @@ from draftgoblin.events import (
 )
 from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
-from draftgoblin.pool import DraftPoolError, DraftPoolStore, DraftState, list_draft_states
+from draftgoblin.pool import (
+    AccountProfile,
+    DraftPoolError,
+    DraftPoolStore,
+    DraftState,
+    list_account_profiles,
+    list_draft_states,
+)
 from draftgoblin.preferences import (
     TuiVisibilityPreferences,
     load_tui_preferences,
@@ -1048,7 +1055,12 @@ class DraftgoblinTuiApp(App[None]):
 
         states = self._available_account_draft_states()
         state_by_account_id = {state.account_id: state for state in states}
-        account_ids = set(state_by_account_id) | set(self._account_labels)
+        profiles = self._known_account_profiles()
+        account_ids = (
+            set(state_by_account_id)
+            | {profile.account_id for profile in profiles}
+            | set(self._account_labels)
+        )
         if self._log_account_id is not None:
             account_ids.add(self._log_account_id)
         if self._active_account_id is not None:
@@ -1274,6 +1286,29 @@ class DraftgoblinTuiApp(App[None]):
         self._login_generation = self.parser.login_generation
         self._log_account_id = None
         self.store.clear_active_account()
+        self._restore_pending_login_account_context()
+
+    def _restore_pending_login_account_context(self) -> None:
+        profile = self._pending_login_account_profile()
+        if profile is None:
+            return
+
+        self._log_account_id = profile.account_id
+        self.store.set_active_account(
+            account_id=profile.account_id,
+            screen_name=profile.screen_name,
+        )
+        if (
+            self._active_account_id in {None, profile.account_id}
+            and self._draft_id is None
+            and self._current_pack_event is None
+            and not self._pool_grp_ids
+        ):
+            self._active_account_id = profile.account_id
+            self._active_account_label = self._account_label(
+                account_id=profile.account_id
+            )
+            self._recover_latest_account_state(account_id=profile.account_id)
 
     def _consume_store_event(self, *, event: DraftEvent) -> DraftState | None:
         try:
@@ -1689,6 +1724,36 @@ class DraftgoblinTuiApp(App[None]):
                 screen_name=screen_name,
             )
 
+    def _known_account_profiles(self) -> tuple[AccountProfile, ...]:
+        profiles = list_account_profiles(app_dir=self.store.app_dir)
+        for profile in profiles:
+            self._remember_account_label_for(
+                client_id=profile.account_id,
+                screen_name=profile.screen_name,
+                replace=False,
+            )
+
+        return profiles
+
+    def _pending_login_account_profile(self) -> AccountProfile | None:
+        pending_screen_name = self.parser.pending_login_screen_name
+        if pending_screen_name is None:
+            return None
+
+        pending_key = _account_screen_name_match_key(
+            screen_name=pending_screen_name
+        )
+        matches = tuple(
+            profile
+            for profile in self._known_account_profiles()
+            if _account_screen_name_match_key(screen_name=profile.screen_name)
+            == pending_key
+        )
+        if len(matches) != 1:
+            return None
+
+        return matches[0]
+
     def _recovered_draft_states(self) -> tuple[DraftState, ...]:
         states = dict(self._draft_states_by_key)
         states.update(
@@ -1839,7 +1904,7 @@ class DraftgoblinTuiApp(App[None]):
         self._pick_label = "complete" if state.completed else "recovered"
         self._pool_grp_ids = state.pool_grp_ids
         self._pool_size = len(state.pool_grp_ids)
-        self._current_pack_event = None
+        self._current_pack_event = self._pending_pack_event_for_state(state=state)
         self._current_pack = None
         self._pair_label = "open"
         self._commitment_label = "0% recovered"
@@ -1851,9 +1916,57 @@ class DraftgoblinTuiApp(App[None]):
             for grp_id in state.pool_grp_ids[-5:]
         ]
         self._ensure_ratings_load_started(set_code=state.set_code)
+        if self._current_pack_event is not None:
+            self._pick_label = (
+                f"P{self._current_pack_event.pack_number + 1}"
+                f"P{self._current_pack_event.pick_number + 1}"
+            )
+            self._view_mode = "pack"
+            self._score_current_pack()
+            return
+
         if self._rebuild_build_view():
             self._view_mode = "build"
 
+    def _pending_pack_event_for_state(
+        self,
+        *,
+        state: DraftState,
+    ) -> PackOfferedEvent | None:
+        """Rebuild the latest unchosen offer from persisted draft history.
+        Account cycling can then restore the in-progress recommendation view.
+        """
+
+        if state.completed:
+            return None
+
+        pending_picks = tuple(
+            pick
+            for pick in state.picks
+            if pick.offered_grp_ids and pick.chosen_grp_id is None
+        )
+        if not pending_picks:
+            return None
+
+        pending_pick = max(pending_picks, key=lambda pick: pick.coordinate)
+        offered_grp_ids = pending_pick.offered_grp_ids
+        if offered_grp_ids is None:
+            return None
+
+        pool_grp_ids = (
+            state.pool_grp_ids
+            if pending_pick.pool_before_pick is None
+            else pending_pick.pool_before_pick
+        )
+        return PackOfferedEvent(
+            event_name=state.event_name,
+            set_code=state.set_code,
+            pack_number=pending_pick.pack_number,
+            pick_number=pending_pick.pick_number,
+            offered_grp_ids=offered_grp_ids,
+            pool_grp_ids=pool_grp_ids,
+            account_id=state.account_id,
+        )
 
     def _score_current_pack(self) -> None:
         event = self._current_pack_event
@@ -3919,6 +4032,15 @@ def _format_account_label(*, client_id: str, screen_name: str | None) -> str:
         return client_id
 
     return screen_name
+
+
+def _account_screen_name_match_key(*, screen_name: str) -> str:
+    normalized = screen_name.strip()
+    name, separator, discriminator = normalized.rpartition("#")
+    if separator and name and discriminator.isdigit():
+        normalized = name
+
+    return normalized.casefold()
 
 
 def _format_card_name(*, card: CardInfo) -> str:

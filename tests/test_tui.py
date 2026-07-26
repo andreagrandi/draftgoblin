@@ -23,6 +23,7 @@ from draftgoblin.carddb import (
 from draftgoblin.preferences import TuiVisibilityPreferences, tui_preferences_path
 from draftgoblin.pool import (
     DraftPick,
+    DraftPoolStore,
     DraftState,
     account_profile_path,
     draft_state_path,
@@ -437,6 +438,118 @@ async def _assert_account_cycle_returns_to_live_account_without_a_saved_draft(
         await pilot.pause()
         assert app._active_account_id == recovered_account_id
         assert app._draft_id == "recovered-draft"
+
+
+def test_tui_login_name_resolves_profile_only_account_and_cycles_back_to_it(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _assert_login_name_resolves_profile_only_account_and_cycles_back_to_it(
+            tmp_path=tmp_path,
+        )
+    )
+
+
+async def _assert_login_name_resolves_profile_only_account_and_cycles_back_to_it(
+    tmp_path: Path,
+) -> None:
+    live_account_id = "mago-anubi"
+    recovered_account_id = "mago-anubi-test"
+    app_dir = tmp_path / "app"
+    store = DraftPoolStore(app_dir=app_dir)
+    store.set_active_account(
+        account_id=live_account_id,
+        screen_name="MagoAnubi",
+    )
+    save_draft_state(
+        state=_draft_state(
+            account_id=recovered_account_id,
+            account_screen_name="MagoAnubiTest",
+            draft_id="recovered-draft",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(104894, 105097),
+        ),
+        app_dir=app_dir,
+    )
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(
+            lines=[
+                _auth_line(
+                    client_id=recovered_account_id,
+                    screen_name="MagoAnubiTest",
+                ),
+                _course_line(
+                    event_name="QuickDraft_MSH_20260702",
+                    course_id="recovered-draft",
+                ),
+                "[Accounts - Login] Logged in successfully. "
+                "Display Name: MagoAnubi#57647",
+            ]
+        )
+        await pilot.pause()
+
+        assert app._active_account_id == recovered_account_id
+        assert "Account: MagoAnubiTest" in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == live_account_id
+        assert app._draft_id is None
+        assert "Account: MagoAnubi" in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == recovered_account_id
+        assert "Account: MagoAnubiTest" in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == live_account_id
+        assert app._draft_id is None
+        assert "Account: MagoAnubi" in _status_text(app=app)
+
+        app.process_lines(
+            lines=[
+                _course_line(
+                    event_name="QuickDraft_MSH_20260702",
+                    course_id="live-draft",
+                ),
+                _first_pack_lines()[6],
+            ]
+        )
+        await pilot.pause()
+
+        table = app.query_one("#pack-table", DataTable)
+        assert app._draft_id == "live-draft"
+        assert table.row_count == 14
+        assert "Account: MagoAnubi" in _status_text(app=app)
+        assert draft_state_path(
+            account_id=live_account_id,
+            draft_id="live-draft",
+            app_dir=app_dir,
+        ).exists()
+        assert not draft_state_path(
+            account_id=recovered_account_id,
+            draft_id="live-draft",
+            app_dir=app_dir,
+        ).exists()
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == recovered_account_id
+        assert "Account: MagoAnubiTest" in _status_text(app=app)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._active_account_id == live_account_id
+        assert app._draft_id == "live-draft"
+        assert table.row_count == 14
+        assert app._current_pack_event is not None
+        assert "Pick: P1P1" in _status_text(app=app)
+        assert "View: pack" in _status_text(app=app)
+        assert "Account: MagoAnubi" in _status_text(app=app)
 
 
 def test_tui_newer_account_name_survives_cycling_a_cached_legacy_draft(
