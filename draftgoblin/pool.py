@@ -292,6 +292,31 @@ def account_profile_path(
     )
 
 
+def list_account_profiles(
+    *,
+    app_dir: PathInput | None = None,
+) -> tuple[AccountProfile, ...]:
+    """Load every persisted account profile in stable account-id order.
+    Profiles remain discoverable even when an account has no saved draft.
+    """
+
+    root = Path(app_data_dir() if app_dir is None else app_dir)
+    profile_root = root / ACCOUNT_PROFILE_DIRECTORY_NAME
+    if not profile_root.exists():
+        return ()
+
+    profiles: list[AccountProfile] = []
+    for path in sorted(profile_root.glob("*.json")):
+        profile = _load_account_profile(
+            account_id=path.stem,
+            app_dir=app_dir,
+        )
+        if profile is not None:
+            profiles.append(profile)
+
+    return tuple(profiles)
+
+
 def load_draft_state(
     *,
     account_id: str,

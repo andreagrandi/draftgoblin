@@ -20,6 +20,7 @@ from draftgoblin.pool import (
     DraftPoolStore,
     DraftState,
     draft_state_path,
+    list_account_profiles,
     list_draft_states,
     load_draft_state,
     save_draft_state,
@@ -313,6 +314,23 @@ def test_account_profile_labels_legacy_drafts_after_a_restart(tmp_path: Path) ->
     assert loaded.account_screen_name == "First"
     assert listed == (replace(legacy_state, account_screen_name="First"),)
     assert (tmp_path / "accounts" / "ACCOUNT-A.json").exists()
+
+
+def test_list_account_profiles_includes_accounts_without_drafts(
+    tmp_path: Path,
+) -> None:
+    store = DraftPoolStore(app_dir=tmp_path, clock=_fixed_clock)
+    store.set_active_account(account_id="ACCOUNT-B", screen_name="Second")
+    store.set_active_account(account_id="ACCOUNT-A", screen_name="First")
+
+    profiles = list_account_profiles(app_dir=tmp_path)
+
+    assert tuple(
+        (profile.account_id, profile.screen_name) for profile in profiles
+    ) == (
+        ("ACCOUNT-A", "First"),
+        ("ACCOUNT-B", "Second"),
+    )
 
 
 def test_conflicting_first_pack_starts_new_synthetic_draft_state(

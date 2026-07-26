@@ -30,9 +30,11 @@ Draftgoblin stores the latest verified display name in a separate per-account
 profile in its app data directory. That profile labels every recovered draft for
 that account, including legacy snapshots written before display-name support.
 When Arena emits a login line without its matching authentication response, the
-TUI may associate it only with recovered drafts whose Quick Draft course id is
-present in the same session's course snapshot; otherwise it leaves the raw id
-unchanged rather than guessing.
+TUI first tries to uniquely match that display name, with or without its numeric
+`#` discriminator, to a saved account profile. It can otherwise associate the
+login only with recovered drafts whose Quick Draft course id is present in the
+same session's course snapshot; if neither method is unambiguous, it leaves the
+account unresolved rather than guessing.
 
 ## Quick Draft start
 
@@ -58,7 +60,7 @@ The initial P1P1 pack is requested with `BotDraftDraftStatus`; the response body
 {"CurrentModule":"BotDraft","Payload":"{\"Result\":\"Success\",\"EventName\":\"QuickDraft_MSH_20260702\",\"DraftStatus\":\"PickNext\",\"PackNumber\":0,\"PickNumber\":0,\"NumCardsToPick\":1,\"DraftPack\":[\"104894\",\"104976\",\"105080\",\"104995\",\"105027\",\"105030\",\"105170\",\"104932\",\"104893\",\"105091\",\"104969\",\"105097\",\"104979\",\"105164\"],\"PackStyles\":[],\"PickedCards\":[],\"PickedStyles\":[]}"}
 ```
 
-Parse `Payload.DraftPack` as the offered card `grpId` list. The IDs are strings in this fixture and should be normalized to integers by the parser.
+Parse `Payload.DraftPack` as the offered card `grpId` list. The IDs are strings in this fixture and should be normalized to integers by the parser. Draft state retains each offered pack and its pool snapshot. When the latest offer has no chosen card yet, cycling back to that account reconstructs and rescores the pending pack instead of showing an empty recovered-draft view.
 
 After each chosen card, the response to `BotDraftDraftPick` presents the next pack using the same `Payload` fields:
 
