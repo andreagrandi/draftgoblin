@@ -228,6 +228,7 @@ def format_pack_offered_event(
     event: PackOfferedEvent,
     card_database: CardDatabase,
     pick_engine: PickEngine | None = None,
+    scored_pack: ScoredPack | None = None,
 ) -> list[str]:
     """Format a pack offer with the same plain text replay uses.
     Live watch mode calls this so pack rendering stays byte-compatible.
@@ -237,6 +238,7 @@ def format_pack_offered_event(
         event=event,
         card_database=card_database,
         pick_engine=pick_engine,
+        scored_pack=scored_pack,
     )
 
 
@@ -301,14 +303,16 @@ def _format_pack(
     event: PackOfferedEvent,
     card_database: CardDatabase,
     pick_engine: PickEngine | None,
+    scored_pack: ScoredPack | None = None,
 ) -> list[str]:
-    engine = pick_engine if pick_engine is not None else PickEngine()
-    scored_pack = engine.score_pack(
-        offered_grp_ids=event.offered_grp_ids,
-        card_database=card_database,
-        pool_grp_ids=event.pool_grp_ids,
-        pick_index=_draft_pick_index(event=event),
-    )
+    if scored_pack is None:
+        engine = pick_engine if pick_engine is not None else PickEngine()
+        scored_pack = engine.score_pack(
+            offered_grp_ids=event.offered_grp_ids,
+            card_database=card_database,
+            pool_grp_ids=event.pool_grp_ids,
+            pick_index=_draft_pick_index(event=event),
+        )
     lines = [
         f"Pack {event.pack_number + 1} Pick {event.pick_number + 1}",
         _format_pack_status(scored_pack=scored_pack),

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import NoReturn
 
+from draftgoblin.audit import load_draft_audit_records
 from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
 from draftgoblin.pool import draft_state_path, load_draft_state
 from draftgoblin.seventeen import SeventeenLandsError
@@ -158,6 +159,17 @@ def test_plain_watch_recovers_rotation_tail_without_loss_or_duplication(
     assert state.completed is True
     assert state.chosen_pick_count == 42
     assert len(state.pool_grp_ids) == 42
+    audit_records = load_draft_audit_records(
+        account_id=FIXTURE_ACCOUNT_ID,
+        draft_id=FIXTURE_DRAFT_ID,
+        app_dir=app_dir,
+    )
+    assert len(audit_records) == 86
+    assert sum(
+        record["record_type"] == "decision_evaluated" for record in audit_records
+    ) == 42
+    assert sum(record["record_type"] == "choice_made" for record in audit_records) == 42
+    assert audit_records[-1]["record_type"] == "draft_completed"
 
 
 def test_plain_watch_account_switch_announces_and_separates_state(

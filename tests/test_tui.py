@@ -14,6 +14,7 @@ from textual.containers import VerticalScroll
 from textual.pilot import Pilot
 from textual.widgets import DataTable, ProgressBar, Select, Static, Switch
 
+from draftgoblin.audit import load_draft_audit_records
 from draftgoblin.carddb import (
     CardDatabase,
     CardDatabaseError,
@@ -56,6 +57,41 @@ SCRYFALL_BULK_SAMPLE_PATH = (
 
 def test_tui_fixture_stream_updates_pack_panel_and_status_bar(tmp_path: Path) -> None:
     asyncio.run(_assert_fixture_stream_updates_pack_panel(tmp_path=tmp_path))
+
+
+def test_tui_audit_records_ranking_visible_when_the_pick_is_made(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_tui_audit_records_visible_ranking(tmp_path=tmp_path))
+
+
+async def _assert_tui_audit_records_visible_ranking(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+
+        app.process_lines(lines=[_first_pick_lines()[7]])
+        await pilot.pause()
+
+    records = load_draft_audit_records(
+        account_id=FIXTURE_ACCOUNT_ID,
+        draft_id=FIXTURE_DRAFT_ID,
+        app_dir=tmp_path / "app",
+    )
+    assert [record["record_type"] for record in records] == [
+        "draft_started",
+        "decision_evaluated",
+        "choice_made",
+    ]
+    choice = records[-1]
+    assert choice["ranking_mode"] == "win_rate"
+    assert choice["chosen_grp_id"] == 105097
+    assert choice["recommended_grp_id"] == 104894
+    assert choice["recommendation_followed"] is False
 
 
 def test_tui_shows_one_set_reliability_value_only_before_p1p1(

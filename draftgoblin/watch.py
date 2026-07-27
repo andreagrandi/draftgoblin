@@ -12,10 +12,12 @@ from os import PathLike
 from pathlib import Path
 from typing import TextIO, TypeAlias
 
+from draftgoblin.audit import DraftAuditStore
 from draftgoblin.carddb import CardDatabase
 from draftgoblin.config import POLL_INTERVAL_SECONDS
 from draftgoblin.deckbuilder import BuildPool, build_deck_from_pool, format_build_result
 from draftgoblin.events import (
+    EXPECTED_PICKS_PER_PACK,
     AccountEvent,
     DraftCompletedEvent,
     DraftEvent,
@@ -27,6 +29,7 @@ from draftgoblin.events import (
 from draftgoblin.logfollow import LogFollower
 from draftgoblin.pickengine import PickEngine
 from draftgoblin.pool import DraftPoolError, DraftPoolStore, DraftState
+from draftgoblin.ranking import DEFAULT_RANKING_MODE
 from draftgoblin.replay import (
     format_draft_completed_event,
     format_pack_offered_event,
@@ -64,6 +67,7 @@ class PlainLogWatcher:
         self.parser = DraftLogParser()
         self._login_generation = self.parser.login_generation
         self.store = DraftPoolStore(app_dir=app_dir)
+        self.audit_store = DraftAuditStore(app_dir=self.store.root.parent)
         self.ratings_loader = ratings_loader
         self._pick_engines_by_set: dict[str, PickEngine] = {}
         self._ratings_data_by_set: dict[str, SeventeenLandsData | None] = {}
@@ -147,6 +151,8 @@ class PlainLogWatcher:
 
         if isinstance(event, DraftStartedEvent):
             self._active_account_id = event.account_id or self._active_account_id
+            if state is not None:
+                self.audit_store.record_draft_started(state=state)
             return [
                 "Draft started: "
                 f"{event.event_name} (set {event.set_code}, draft {event.course_id})",
@@ -158,10 +164,25 @@ class PlainLogWatcher:
 
         if isinstance(event, PackOfferedEvent):
             self._active_account_id = event.account_id or self._active_account_id
+            pick_engine = self._pick_engine_for_set(set_code=event.set_code)
+            scored_pack = pick_engine.score_pack(
+                offered_grp_ids=event.offered_grp_ids,
+                card_database=self.card_database,
+                pool_grp_ids=event.pool_grp_ids,
+                pick_index=_draft_pick_index(event=event),
+            )
+            if state is not None:
+                self.audit_store.record_decision(
+                    state=state,
+                    event=event,
+                    scored_pack=scored_pack,
+                    config=pick_engine.config,
+                    ratings_data=pick_engine.ratings_data,
+                )
             pack_lines = format_pack_offered_event(
                 event=event,
                 card_database=self.card_database,
-                pick_engine=self._pick_engine_for_set(set_code=event.set_code),
+                scored_pack=scored_pack,
             )
             color_status = _color_status_from_pack_lines(lines=pack_lines)
             lines = [
@@ -176,6 +197,12 @@ class PlainLogWatcher:
 
         if isinstance(event, PickMadeEvent):
             self._active_account_id = event.account_id or self._active_account_id
+            if state is not None:
+                self.audit_store.record_choice(
+                    state=state,
+                    event=event,
+                    ranking_mode=DEFAULT_RANKING_MODE,
+                )
             lines = format_pick_made_event(
                 event=event,
                 card_database=self.card_database,
@@ -185,6 +212,8 @@ class PlainLogWatcher:
 
         if isinstance(event, DraftCompletedEvent):
             self._active_account_id = event.account_id or self._active_account_id
+            if state is not None:
+                self.audit_store.record_draft_completed(state=state, event=event)
             lines = format_draft_completed_event(event=event)
             lines.append("")
             if state is not None:
@@ -366,6 +395,10 @@ def _color_status_from_pack_lines(*, lines: list[str]) -> str:
 
 def _pack_lines_without_color_status(*, lines: list[str]) -> list[str]:
     return [line for line in lines if not line.startswith("Status: inferred pair ")]
+
+
+def _draft_pick_index(*, event: PackOfferedEvent) -> int:
+    return (event.pack_number * EXPECTED_PICKS_PER_PACK) + event.pick_number + 1
 
 
 def _is_missing_account_error(*, event: DraftEvent, error: DraftPoolError) -> bool:

@@ -1,0 +1,360 @@
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+import draftgoblin.audit as audit_module
+from draftgoblin.audit import (
+    DraftAuditError,
+    DraftAuditStore,
+    draft_audit_path,
+    load_draft_audit_records,
+)
+from draftgoblin.carddb import CardDatabase, CardInfo
+from draftgoblin.config import PICK_ENGINE
+from draftgoblin.events import DraftCompletedEvent, PackOfferedEvent, PickMadeEvent
+from draftgoblin.pickengine import PickEngine
+from draftgoblin.pool import DraftState
+
+ACCOUNT_ID = "account-a"
+DRAFT_ID = "draft-a"
+EVENT_NAME = "QuickDraft_ABC_20260727"
+SET_CODE = "ABC"
+
+
+def test_audit_records_complete_decision_and_choice_without_duplicates(
+    tmp_path: Path,
+) -> None:
+    state = _draft_state()
+    offer = _pack_event()
+    engine = PickEngine()
+    scored_pack = engine.score_pack(
+        offered_grp_ids=offer.offered_grp_ids,
+        card_database=_card_database(),
+        pool_grp_ids=offer.pool_grp_ids,
+        pick_index=1,
+    )
+    store = DraftAuditStore(
+        app_dir=tmp_path,
+        clock=_fixed_clock,
+        app_version="1.2.3",
+    )
+
+    store.record_draft_started(state=state)
+    store.record_draft_started(state=state)
+    store.record_decision(
+        state=state,
+        event=offer,
+        scored_pack=scored_pack,
+        config=engine.config,
+        ratings_data=engine.ratings_data,
+    )
+    store.record_decision(
+        state=state,
+        event=offer,
+        scored_pack=scored_pack,
+        config=engine.config,
+        ratings_data=engine.ratings_data,
+    )
+    store.record_choice(
+        state=state,
+        event=_pick_event(),
+        ranking_mode="mv",
+    )
+    store.record_decision(
+        state=state,
+        event=offer,
+        scored_pack=scored_pack,
+        config=engine.config,
+        ratings_data=engine.ratings_data,
+    )
+    store.record_draft_completed(
+        state=_completed_state(),
+        event=_completed_event(),
+    )
+    store.record_draft_completed(
+        state=_completed_state(),
+        event=_completed_event(),
+    )
+
+    records = load_draft_audit_records(
+        account_id=ACCOUNT_ID,
+        draft_id=DRAFT_ID,
+        app_dir=tmp_path,
+    )
+
+    assert [record["record_type"] for record in records] == [
+        "draft_started",
+        "decision_evaluated",
+        "choice_made",
+        "draft_completed",
+    ]
+    decision = records[1]
+    assert decision["schema_version"] == 1
+    assert decision["app_version"] == "1.2.3"
+    assert decision["recorded_at"] == "2026-07-27T10:30:00+00:00"
+    assert decision["offered_grp_ids"] == [101, 102]
+    assert decision["pool_before_pick"] == []
+    assert decision["recommended_grp_id"] == 101
+    assert decision["rankings"]["score"] == [101, 102]
+    assert decision["rankings"]["mv"] == [102, 101]
+    assert decision["algorithm"]["config"]["locked_pick_index"] == (
+        PICK_ENGINE.locked_pick_index
+    )
+    assert decision["ratings_snapshot"] is None
+    assert decision["commitment"] == {
+        "color_weights": {"B": 0.0, "G": 0.0, "R": 0.0, "U": 0.0, "W": 0.0},
+        "inferred_pair": None,
+        "level": 0.0,
+        "locked": False,
+        "phase": "open",
+        "pick_index": 1,
+        "pool_size": 0,
+    }
+    assert len(decision["candidates"]) == 2
+    assert decision["candidates"][0]["scoring"]["source_label"] == "Prior*"
+    assert decision["candidates"][0]["rating"]["sample_counts"]["games_in_hand"] == 0
+
+    choice = records[2]
+    assert choice["evaluation_id"] == decision["evaluation_id"]
+    assert choice["chosen_grp_id"] == 102
+    assert choice["ranking_mode"] == "mv"
+    assert choice["recommended_grp_id"] == 102
+    assert choice["recommendation_followed"] is True
+
+    completion = records[3]
+    assert completion["picked_grp_ids"] == [102]
+    assert completion["pick_count"] == 1
+    assert completion["inferred"] is False
+
+
+def test_restart_does_not_re_evaluate_a_pick_with_a_recorded_choice(
+    tmp_path: Path,
+) -> None:
+    state = _draft_state()
+    offer = _pack_event()
+    engine = PickEngine()
+    scored_pack = engine.score_pack(
+        offered_grp_ids=offer.offered_grp_ids,
+        card_database=_card_database(),
+        pool_grp_ids=offer.pool_grp_ids,
+        pick_index=1,
+    )
+    first_store = DraftAuditStore(app_dir=tmp_path, clock=_fixed_clock)
+    first_store.record_decision(
+        state=state,
+        event=offer,
+        scored_pack=scored_pack,
+        config=engine.config,
+        ratings_data=None,
+    )
+    first_store.record_choice(
+        state=state,
+        event=_pick_event(),
+        ranking_mode="score",
+    )
+
+    restarted_store = DraftAuditStore(app_dir=tmp_path, clock=_later_clock)
+    restarted_store.record_decision(
+        state=state,
+        event=offer,
+        scored_pack=scored_pack,
+        config=engine.config,
+        ratings_data=None,
+    )
+    restarted_store.record_choice(
+        state=state,
+        event=_pick_event(),
+        ranking_mode="score",
+    )
+
+    records = load_draft_audit_records(
+        account_id=ACCOUNT_ID,
+        draft_id=DRAFT_ID,
+        app_dir=tmp_path,
+    )
+    assert [record["record_type"] for record in records] == [
+        "decision_evaluated",
+        "choice_made",
+    ]
+    assert {record["recorded_at"] for record in records} == {
+        "2026-07-27T10:30:00+00:00"
+    }
+
+
+def test_audit_loader_rejects_a_malformed_json_line(tmp_path: Path) -> None:
+    path = draft_audit_path(
+        account_id=ACCOUNT_ID,
+        draft_id=DRAFT_ID,
+        app_dir=tmp_path,
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"schema_version": 1, "record_id": "valid"}) + "\nnot-json\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DraftAuditError) as error:
+        load_draft_audit_records(
+            account_id=ACCOUNT_ID,
+            draft_id=DRAFT_ID,
+            app_dir=tmp_path,
+        )
+
+    assert "at line 2" in str(error.value)
+
+
+def test_audit_append_failure_is_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = DraftAuditStore(app_dir=tmp_path, clock=_fixed_clock)
+
+    def fail_open(*args: object, **kwargs: object) -> int:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(audit_module.os, "open", fail_open)
+
+    with pytest.raises(DraftAuditError) as error:
+        store.record_draft_started(state=_draft_state())
+
+    assert "disk full" in str(error.value)
+    assert not draft_audit_path(
+        account_id=ACCOUNT_ID,
+        draft_id=DRAFT_ID,
+        app_dir=tmp_path,
+    ).exists()
+
+
+def test_audit_path_rejects_unsafe_account_and_draft_ids(tmp_path: Path) -> None:
+    with pytest.raises(DraftAuditError):
+        draft_audit_path(
+            account_id="../account",
+            draft_id=DRAFT_ID,
+            app_dir=tmp_path,
+        )
+
+    with pytest.raises(DraftAuditError):
+        draft_audit_path(
+            account_id=ACCOUNT_ID,
+            draft_id="draft/name",
+            app_dir=tmp_path,
+        )
+
+
+def test_audit_file_is_compact_jsonl_with_one_object_per_record(tmp_path: Path) -> None:
+    store = DraftAuditStore(app_dir=tmp_path, clock=_fixed_clock)
+    path = store.record_draft_started(state=_draft_state())
+    store.record_draft_completed(
+        state=_completed_state(),
+        event=_completed_event(),
+    )
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+
+    assert len(lines) == 2
+    assert all(isinstance(json.loads(line), dict) for line in lines)
+    assert all("\n" not in line for line in lines)
+
+
+def _draft_state() -> DraftState:
+    started_at = "2026-07-27T10:00:00+00:00"
+    return DraftState(
+        account_id=ACCOUNT_ID,
+        draft_id=DRAFT_ID,
+        event_name=EVENT_NAME,
+        set_code=SET_CODE,
+        course_id=DRAFT_ID,
+        started_at=started_at,
+        updated_at=started_at,
+        completed_at=None,
+        completed=False,
+        picks=(),
+        pool_grp_ids=(),
+    )
+
+
+def _completed_state() -> DraftState:
+    state = _draft_state()
+    return DraftState(
+        account_id=state.account_id,
+        draft_id=state.draft_id,
+        event_name=state.event_name,
+        set_code=state.set_code,
+        course_id=state.course_id,
+        started_at=state.started_at,
+        updated_at="2026-07-27T10:45:00+00:00",
+        completed_at="2026-07-27T10:45:00+00:00",
+        completed=True,
+        picks=state.picks,
+        pool_grp_ids=(102,),
+    )
+
+
+def _pack_event() -> PackOfferedEvent:
+    return PackOfferedEvent(
+        event_name=EVENT_NAME,
+        set_code=SET_CODE,
+        pack_number=0,
+        pick_number=0,
+        offered_grp_ids=(101, 102),
+        pool_grp_ids=(),
+        account_id=ACCOUNT_ID,
+    )
+
+
+def _pick_event() -> PickMadeEvent:
+    return PickMadeEvent(
+        event_name=EVENT_NAME,
+        set_code=SET_CODE,
+        pack_number=0,
+        pick_number=0,
+        chosen_grp_id=102,
+        account_id=ACCOUNT_ID,
+    )
+
+
+def _completed_event() -> DraftCompletedEvent:
+    return DraftCompletedEvent(
+        event_name=EVENT_NAME,
+        set_code=SET_CODE,
+        pack_number=2,
+        pick_number=13,
+        picked_grp_ids=(102,),
+        inferred=False,
+        account_id=ACCOUNT_ID,
+    )
+
+
+def _card_database() -> CardDatabase:
+    return CardDatabase(
+        cards={
+            101: CardInfo(
+                grp_id=101,
+                name="Large Green Card",
+                colors=("G",),
+                mana_value=5.0,
+                rarity="common",
+                types=("Creature",),
+            ),
+            102: CardInfo(
+                grp_id=102,
+                name="Small Black Card",
+                colors=("B",),
+                mana_value=2.0,
+                rarity="common",
+                types=("Creature",),
+            ),
+        }
+    )
+
+
+def _fixed_clock() -> datetime:
+    return datetime(2026, 7, 27, 10, 30, tzinfo=UTC)
+
+
+def _later_clock() -> datetime:
+    return datetime(2026, 7, 27, 11, 30, tzinfo=UTC)
