@@ -43,6 +43,7 @@ try:  # pragma: no cover - import availability depends on optional terminal extr
 except Exception:  # pragma: no cover - graceful fallback when unavailable.
     TgpImage = None
 
+from draftgoblin.audit import DraftAuditStore
 from draftgoblin.backtest import format_backtest_report, generate_backtest_report
 from draftgoblin.carddb import SCRYFALL_USER_AGENT, CardDatabase, CardInfo
 from draftgoblin.config import COLOR_PAIRS, POLL_INTERVAL_SECONDS
@@ -640,6 +641,7 @@ class DraftgoblinTuiApp(App[None]):
         self.parser = DraftLogParser()
         self._login_generation = self.parser.login_generation
         self.store = DraftPoolStore(app_dir=app_dir)
+        self.audit_store = DraftAuditStore(app_dir=self.store.root.parent)
         self.ratings_loader = ratings_loader
         self.ratings_progress_loader = ratings_progress_loader
         self.ratings_cache_checker = ratings_cache_checker
@@ -1338,11 +1340,11 @@ class DraftgoblinTuiApp(App[None]):
             return
 
         if isinstance(event, DraftStartedEvent):
-            self._consume_started_event(event=event)
+            self._consume_started_event(event=event, state=state)
             return
 
         if isinstance(event, PackOfferedEvent):
-            self._consume_pack_event(event=event)
+            self._consume_pack_event(event=event, state=state)
             return
 
         if isinstance(event, PickMadeEvent):
@@ -1392,7 +1394,12 @@ class DraftgoblinTuiApp(App[None]):
 
         self._select_draft_state(state=max(states, key=_latest_draft_state_sort_key))
 
-    def _consume_started_event(self, *, event: DraftStartedEvent) -> None:
+    def _consume_started_event(
+        self,
+        *,
+        event: DraftStartedEvent,
+        state: DraftState | None,
+    ) -> None:
         self._active_account_id = self._display_account_id(account_id=event.account_id)
         self._active_account_label = self._account_label(
             account_id=self._active_account_id
@@ -1422,6 +1429,8 @@ class DraftgoblinTuiApp(App[None]):
         self._build_show_details = self.visibility_preferences.build_details
         self._clear_build_render_state()
         self._ensure_ratings_load_started(set_code=event.set_code)
+        if state is not None:
+            self.audit_store.record_draft_started(state=state)
 
     def _consume_detected_event(self, *, event: QuickDraftDetectedEvent) -> None:
         self._active_account_id = self._display_account_id(account_id=event.account_id)
@@ -1454,11 +1463,22 @@ class DraftgoblinTuiApp(App[None]):
         self._clear_build_render_state()
         self._ensure_ratings_load_started(set_code=event.set_code)
 
-    def _consume_pack_event(self, *, event: PackOfferedEvent) -> None:
-        self._active_account_id = self._display_account_id(account_id=event.account_id)
+    def _consume_pack_event(
+        self,
+        *,
+        event: PackOfferedEvent,
+        state: DraftState | None,
+    ) -> None:
+        self._active_account_id = (
+            state.account_id
+            if state is not None
+            else self._display_account_id(account_id=event.account_id)
+        )
         self._active_account_label = self._account_label(
             account_id=self._active_account_id
         )
+        if state is not None:
+            self._draft_id = state.draft_id
         self._event_name = event.event_name
         self._set_code = event.set_code
         self._pick_label = f"P{event.pack_number + 1}P{event.pick_number + 1}"
@@ -1491,6 +1511,12 @@ class DraftgoblinTuiApp(App[None]):
 
         self._build_action_status = None
         self._backtest_action_status = None
+        if state is not None:
+            self.audit_store.record_choice(
+                state=state,
+                event=event,
+                ranking_mode=self.sort_mode,
+            )
         card = self.card_database.lookup(grp_id=event.chosen_grp_id)
         self._last_picks.append(_format_card_name(card=card))
         self._last_picks = self._last_picks[-5:]
@@ -1514,6 +1540,8 @@ class DraftgoblinTuiApp(App[None]):
         self._backtest_action_status = None
         self._current_pack_event = None
         self._current_pack = None
+        if state is not None:
+            self.audit_store.record_draft_completed(state=state, event=event)
         self._ensure_ratings_load_started(set_code=event.set_code)
         if self._rebuild_build_view():
             self._view_mode = "build"
@@ -1990,6 +2018,27 @@ class DraftgoblinTuiApp(App[None]):
         )
         self._pool_size = commitment.pool_size
         self._data_source = self._data_source_label(set_code=event.set_code)
+        state = self._active_draft_state()
+        if state is not None:
+            self.audit_store.record_decision(
+                state=state,
+                event=event,
+                scored_pack=self._current_pack,
+                config=engine.config,
+                ratings_data=ratings_data,
+            )
+
+    def _active_draft_state(self) -> DraftState | None:
+        """Return the persisted state backing the currently displayed draft.
+        Audit logging skips unresolved account or course contexts.
+        """
+
+        if self._active_account_id is None or self._draft_id is None:
+            return None
+
+        return self._draft_states_by_key.get(
+            (self._active_account_id, self._draft_id)
+        )
 
     def _ratings_data_for_scoring(self, *, set_code: str) -> SeventeenLandsData | None:
         ratings_data = self._ratings_data_by_set.get(set_code)

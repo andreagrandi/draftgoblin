@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from draftgoblin import DISCLAIMER, __version__
+from draftgoblin.audit import DraftAuditError
 from draftgoblin.backtest import (
     BacktestError,
     format_backtest_report,
@@ -488,6 +489,7 @@ def handle_watch(args: argparse.Namespace) -> int:
     except (
         CardDatabaseError,
         DeckBuilderError,
+        DraftAuditError,
         DraftLogParseError,
         DraftPoolError,
         LogFollowError,

@@ -97,6 +97,19 @@ uv tool upgrade draftgoblin
 
 Live recommendations currently support Quick Draft. Windows support is best-effort; Linux can be used only by pointing `--log-path` to an Arena log inside Wine or Proton.
 
+## Local draft audit data
+
+Live TUI and `watch --plain` sessions keep an independent, append-only JSONL
+audit log for every draft under
+`~/.draftgoblin/audit/drafts/<account-id>/<draft-id>.jsonl`. Each record includes
+the offered pack, pool snapshot, ratings source, scoring configuration, complete
+candidate calculations, all supported rankings, the recommendation visible when
+the pick was made, and the card actually chosen. Stable record IDs prevent
+startup scans and log rotation from rewriting prior evidence.
+
+Offline `replay` and backtest commands do not write audit records. For the schema
+and retention details, see [draft audit logging](docs/draft-audit-log.md).
+
 ## Branding and compliance
 
 Draftgoblin is not affiliated with, sponsored by, approved by, or endorsed by Wizards of the Coast, Scryfall, or 17Lands.
