@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from draftgoblin.carddb import CardDatabase, CardInfo
+from draftgoblin.events import PackOfferedEvent
 from draftgoblin.pickengine import PickEngine
 from draftgoblin.ranking import rank_scored_cards
+from draftgoblin.replay import format_pack_offered_event
 from draftgoblin.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
@@ -14,6 +16,7 @@ from draftgoblin.seventeen import (
     SeventeenLandsData,
     SeventeenLandsFormatData,
 )
+from draftgoblin.splash import card_is_castable_in_pair, splash_requirement
 
 
 def test_pick_engine_scores_and_sorts_with_fallback_sources() -> None:
@@ -248,6 +251,182 @@ def test_locked_pair_uses_pair_filtered_rating_when_samples_are_adequate() -> No
     assert scored_pack.cards[0].base_rating == 0.64
 
 
+def test_supported_single_pip_bomb_is_marked_as_a_splash_and_can_win_pick() -> None:
+    engine = PickEngine(ratings_data=_splash_ratings_data())
+    database = _splash_card_database()
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(105, 108),
+        card_database=database,
+        pool_grp_ids=(101, 102, 101, 102, 103, 104),
+        pick_index=10,
+    )
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+
+    assert scored_pack.commitment.inferred_pair == "WU"
+    assert by_id[105].color_fit == "splash-ready"
+    assert by_id[105].splash.splash_color == "R"
+    assert by_id[105].splash.available_sources == 3
+    assert by_id[105].splash.required_sources == 3
+    assert scored_pack.cards[0].card.grp_id == 105
+    rendered = "\n".join(
+        format_pack_offered_event(
+            event=PackOfferedEvent(
+                event_name="QuickDraft_TST_20260727",
+                set_code="TST",
+                pack_number=0,
+                pick_number=9,
+                offered_grp_ids=(105, 108),
+                pool_grp_ids=(101, 102, 101, 102, 103, 104),
+                account_id="account",
+            ),
+            card_database=database,
+            scored_pack=scored_pack,
+        )
+    )
+    assert "Splash R" in rendered
+
+
+def test_disabling_splash_treats_same_bomb_as_an_ordinary_off_color_card() -> None:
+    engine = PickEngine(
+        ratings_data=_splash_ratings_data(),
+        splash_enabled=False,
+    )
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(105, 108),
+        card_database=_splash_card_database(),
+        pool_grp_ids=(101, 102, 101, 102, 103, 104),
+        pick_index=10,
+    )
+    red_bomb = next(
+        card for card in scored_pack.cards if card.card.grp_id == 105
+    )
+
+    assert scored_pack.splash_state.enabled is False
+    assert red_bomb.color_fit == "off-color"
+    assert red_bomb.splash.reasons == ("splashing is disabled",)
+
+
+def test_active_splash_rejects_a_second_third_color_and_double_pips() -> None:
+    engine = PickEngine(ratings_data=_splash_ratings_data())
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(106, 107, 109),
+        card_database=_splash_card_database(),
+        pool_grp_ids=(101, 102, 101, 102, 103, 104, 110, 105),
+        pick_index=12,
+    )
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+
+    assert scored_pack.splash_state.active_color == "R"
+    assert by_id[106].color_fit == "splash-ready"
+    assert by_id[106].splash.required_sources == 4
+    assert by_id[107].color_fit == "off-color"
+    assert by_id[107].splash.reasons == ("the active splash color is R",)
+    assert by_id[109].color_fit == "off-color"
+    assert by_id[109].splash.reasons == ("card has too many off-color mana pips",)
+
+
+def test_supported_existing_splash_color_beats_stronger_unsupported_color() -> None:
+    scored_pack = PickEngine(ratings_data=_splash_ratings_data()).score_pack(
+        offered_grp_ids=(108,),
+        card_database=_splash_card_database(),
+        pool_grp_ids=(101, 102, 101, 102, 103, 104, 105, 107),
+        pick_index=12,
+    )
+
+    assert scored_pack.splash_state.active_color == "R"
+
+
+def test_fixing_land_is_marked_when_it_completes_active_splash_sources() -> None:
+    scored_pack = PickEngine(ratings_data=_splash_ratings_data()).score_pack(
+        offered_grp_ids=(103, 108),
+        card_database=_splash_card_database(),
+        pool_grp_ids=(101, 102, 101, 102, 104, 105),
+        pick_index=12,
+    )
+    fixing_land = next(card for card in scored_pack.cards if card.card.grp_id == 103)
+
+    assert fixing_land.color_fit == "splash-fixer"
+    assert fixing_land.splash.splash_color == "R"
+    assert fixing_land.splash.fixing_sources == 2
+    assert fixing_land.splash.planned_basic_sources == 1
+    assert fixing_land.splash.available_sources == 3
+    assert fixing_land.splash.required_sources == 3
+
+
+def test_drafted_basic_is_not_counted_as_extra_splash_fixing() -> None:
+    scored_pack = PickEngine(ratings_data=_splash_ratings_data()).score_pack(
+        offered_grp_ids=(105, 108),
+        card_database=_splash_card_database(),
+        pool_grp_ids=(101, 102, 101, 102, 103, 121),
+        pick_index=10,
+    )
+    red_bomb = next(card for card in scored_pack.cards if card.card.grp_id == 105)
+
+    assert scored_pack.splash_state.fixing_for(color="R") == 1
+    assert red_bomb.color_fit == "splash-speculative"
+    assert red_bomb.splash.available_sources == 2
+
+
+def test_unsupported_a_grade_bomb_is_speculative_only_before_color_lock() -> None:
+    engine = PickEngine(ratings_data=_splash_ratings_data())
+    database = _splash_card_database()
+    pool = (101, 102, 101, 102)
+
+    building = engine.score_pack(
+        offered_grp_ids=(105, 108),
+        card_database=database,
+        pool_grp_ids=pool,
+        pick_index=10,
+    )
+    locked = engine.score_pack(
+        offered_grp_ids=(105, 108),
+        card_database=database,
+        pool_grp_ids=pool,
+        pick_index=16,
+    )
+    building_bomb = next(card for card in building.cards if card.card.grp_id == 105)
+    locked_bomb = next(card for card in locked.cards if card.card.grp_id == 105)
+
+    assert building_bomb.color_fit == "splash-speculative"
+    assert building_bomb.splash.available_sources == 1
+    assert building_bomb.splash.required_sources == 3
+    assert locked_bomb.color_fit == "off-color"
+    assert "speculative splashes are disabled after color lock" in (
+        locked_bomb.splash.reasons
+    )
+
+
+def test_aggressive_pool_does_not_take_an_unsupported_speculative_splash() -> None:
+    scored_pack = PickEngine(ratings_data=_splash_ratings_data()).score_pack(
+        offered_grp_ids=(105, 108),
+        card_database=_splash_card_database(),
+        pool_grp_ids=(101, 102, 101, 102, 101, 102, 101, 102),
+        pick_index=10,
+    )
+    red_bomb = next(card for card in scored_pack.cards if card.card.grp_id == 105)
+
+    assert scored_pack.splash_state.aggressive is True
+    assert red_bomb.color_fit == "off-color"
+    assert "aggressive pools require supported exceptional splashes" in (
+        red_bomb.splash.reasons
+    )
+
+
+def test_hybrid_symbol_payable_with_primary_color_does_not_require_splash() -> None:
+    hybrid_card = _card(
+        grp_id=120,
+        name="Hybrid Primary Card",
+        colors=("W", "R"),
+        mana_cost="{2}{W/R}",
+    )
+
+    assert card_is_castable_in_pair(card=hybrid_card, base_pair="WU") is True
+    assert splash_requirement(card=hybrid_card, base_pair="WU") == (None, 0)
+
+
 def _ratings_data() -> SeventeenLandsData:
     return SeventeenLandsData(
         set_code="TST",
@@ -437,6 +616,85 @@ def _msh_pair_tiebreaker_data(*, red_gih: float = 0.552) -> SeventeenLandsData:
     )
 
 
+def _splash_ratings_data() -> SeventeenLandsData:
+    card_ratings = {
+        101: _stats(
+            grp_id=101,
+            name="White Base Card",
+            color="W",
+            gih=0.55,
+            games_in_hand=900,
+        ),
+        102: _stats(
+            grp_id=102,
+            name="Blue Base Card",
+            color="U",
+            gih=0.55,
+            games_in_hand=900,
+        ),
+        105: _stats(
+            grp_id=105,
+            name="Red Splash Bomb",
+            color="R",
+            gih=0.70,
+            games_in_hand=900,
+        ),
+        106: _stats(
+            grp_id=106,
+            name="Second Red Splash Bomb",
+            color="R",
+            gih=0.69,
+            games_in_hand=900,
+        ),
+        107: _stats(
+            grp_id=107,
+            name="Green Splash Bomb",
+            color="G",
+            gih=0.72,
+            games_in_hand=900,
+        ),
+        108: _stats(
+            grp_id=108,
+            name="White Solid Card",
+            color="W",
+            gih=0.58,
+            games_in_hand=900,
+        ),
+        109: _stats(
+            grp_id=109,
+            name="Double Red Bomb",
+            color="R",
+            gih=0.71,
+            games_in_hand=900,
+        ),
+    }
+    card_ratings.update(
+        {
+            grp_id: _stats(
+                grp_id=grp_id,
+                name=f"Distribution Card {grp_id}",
+                color="B",
+                gih=0.50 + ((grp_id - 200) * 0.003),
+                games_in_hand=900,
+            )
+            for grp_id in range(200, 220)
+        }
+    )
+    return SeventeenLandsData(
+        set_code="TST",
+        requested_format=QUICK_DRAFT_FORMAT,
+        primary=SeventeenLandsFormatData(
+            set_code="TST",
+            event_format=QUICK_DRAFT_FORMAT,
+            fetched_at=datetime(2026, 7, 3, 12, 0, tzinfo=UTC),
+            card_ratings=card_ratings,
+            pair_win_rates=_pair_win_rates(),
+        ),
+        fallback=None,
+        thin_sample_minimum=500,
+    )
+
+
 def _stats(
     *,
     grp_id: int,
@@ -510,12 +768,93 @@ def _msh_pair_tiebreaker_database() -> CardDatabase:
     )
 
 
-def _card(*, grp_id: int, name: str, colors: tuple[str, ...]) -> CardInfo:
+def _splash_card_database() -> CardDatabase:
+    return CardDatabase(
+        cards={
+            101: _card(grp_id=101, name="White Base Card", colors=("W",)),
+            102: _card(grp_id=102, name="Blue Base Card", colors=("U",)),
+            103: _card(
+                grp_id=103,
+                name="Red Fixing Land One",
+                colors=(),
+                types=("Land",),
+                mana_cost=None,
+                produced_mana=("R",),
+            ),
+            104: _card(
+                grp_id=104,
+                name="Red Fixing Land Two",
+                colors=(),
+                types=("Land",),
+                mana_cost=None,
+                produced_mana=("R",),
+            ),
+            110: _card(
+                grp_id=110,
+                name="Red Fixing Land Three",
+                colors=(),
+                types=("Land",),
+                mana_cost=None,
+                produced_mana=("R",),
+            ),
+            121: _card(
+                grp_id=121,
+                name="Mountain",
+                colors=(),
+                types=("Basic Land — Mountain",),
+                mana_cost=None,
+                produced_mana=("R",),
+            ),
+            105: _card(
+                grp_id=105,
+                name="Red Splash Bomb",
+                colors=("R",),
+                mana_cost="{4}{R}",
+            ),
+            106: _card(
+                grp_id=106,
+                name="Second Red Splash Bomb",
+                colors=("R",),
+                mana_cost="{3}{R}",
+            ),
+            107: _card(
+                grp_id=107,
+                name="Green Splash Bomb",
+                colors=("G",),
+                mana_cost="{4}{G}",
+            ),
+            108: _card(
+                grp_id=108,
+                name="White Solid Card",
+                colors=("W",),
+                mana_cost="{2}{W}",
+            ),
+            109: _card(
+                grp_id=109,
+                name="Double Red Bomb",
+                colors=("R",),
+                mana_cost="{3}{R}{R}",
+            ),
+        }
+    )
+
+
+def _card(
+    *,
+    grp_id: int,
+    name: str,
+    colors: tuple[str, ...],
+    types: tuple[str, ...] = ("Creature",),
+    mana_cost: str | None = "{2}",
+    produced_mana: tuple[str, ...] = (),
+) -> CardInfo:
     return CardInfo(
         grp_id=grp_id,
         name=name,
         colors=colors,
         mana_value=2.0,
         rarity="common",
-        types=("Creature",),
+        types=types,
+        mana_cost=mana_cost,
+        produced_mana=produced_mana,
     )

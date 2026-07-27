@@ -1,5 +1,5 @@
-"""Persisted visibility settings for the Textual interface.
-Keep user layout choices separate from scoring and deck-building defaults.
+"""Persisted user settings for the Textual interface.
+Keep optional behavior and layout choices stable across app restarts.
 """
 
 from __future__ import annotations
@@ -23,12 +23,13 @@ CARD_IMAGE_PREVIEW_MODES = frozenset({"auto", "show", "hide"})
 
 @dataclass(frozen=True)
 class TuiVisibilityPreferences:
-    """User-controlled visibility for optional Textual interface elements.
-    Responsive terminal-width rules may still temporarily hide enabled elements.
+    """User-controlled Textual behavior and optional interface elements.
+    Missing settings use safe defaults so existing files remain compatible.
     """
 
     secondary_columns: bool = True
     build_details: bool = False
+    splash_enabled: bool = True
     pool_metadata: bool = True
     pool_color_distribution: bool = True
     pool_mana_curve: bool = True

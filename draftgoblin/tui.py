@@ -121,6 +121,20 @@ BUILD_SPELL_SORT_MODES = ("curve", "score", "name")
 SECONDARY_COLUMN_MIN_WIDTH = 88
 SIDEBAR_MIN_WIDTH = 56
 COLOR_ORDER = ("W", "U", "B", "R", "G")
+COLOR_NAMES = {
+    "W": "White",
+    "U": "Blue",
+    "B": "Black",
+    "R": "Red",
+    "G": "Green",
+}
+BASIC_LAND_NAMES = {
+    "W": "Plains",
+    "U": "Island",
+    "B": "Swamp",
+    "R": "Mountain",
+    "G": "Forest",
+}
 COLORLESS_KEY = "C"
 UNKNOWN_COLOR_KEY = "?"
 CURVE_BUCKET_LABELS = ("0", "1", "2", "3", "4", "5", "6+")
@@ -179,7 +193,7 @@ COLUMN_WIDTHS = {
     "score": 5,
     "card": None,
     "colors": 10,
-    "fit": 6,
+    "fit": 10,
     "gih": 8,
     "alsa": 7,
     "mv": 5,
@@ -196,6 +210,11 @@ class CardDetailsPanel(Static, can_focus=False):
 
 
 _VISIBILITY_BOOLEAN_OPTIONS = (
+    (
+        "splash_enabled",
+        "Splash recommendations — consider one supported third color for "
+        "exceptionally strong cards.",
+    ),
     (
         "secondary_columns",
         "Secondary pack columns — show Fit, ALSA, mana value, and source on wide "
@@ -597,6 +616,7 @@ class DraftgoblinTuiApp(App[None]):
         mana_icons_enabled: bool = False,
         card_image_fetcher: CardImageFetcher | None = None,
         visibility_preferences: TuiVisibilityPreferences | None = None,
+        splash_enabled: bool | None = None,
     ) -> None:
         super().__init__()
         if card_database is None and card_database_loader is None:
@@ -625,6 +645,11 @@ class DraftgoblinTuiApp(App[None]):
         else:
             self.visibility_preferences = visibility_preferences
             self._preferences_load_warning = None
+        if splash_enabled is not None:
+            self.visibility_preferences = replace(
+                self.visibility_preferences,
+                splash_enabled=splash_enabled,
+            )
         self._preferences_save_warning: str | None = None
         self._card_database = card_database
         self.card_database_loader = card_database_loader
@@ -866,7 +891,9 @@ class DraftgoblinTuiApp(App[None]):
         self._build_show_details = preferences.build_details
         self._save_visibility_preferences()
         if self._build_render_pool is not None:
-            self._refresh_build_text_from_render_state()
+            self._rebuild_build_view()
+        else:
+            self._score_current_pack()
         self._render_all()
 
     def _save_visibility_preferences(self) -> None:
@@ -2004,7 +2031,10 @@ class DraftgoblinTuiApp(App[None]):
             return
 
         ratings_data = self._ratings_data_for_scoring(set_code=event.set_code)
-        engine = PickEngine(ratings_data=ratings_data)
+        engine = PickEngine(
+            ratings_data=ratings_data,
+            splash_enabled=self.visibility_preferences.splash_enabled,
+        )
         self._current_pack = engine.score_pack(
             offered_grp_ids=event.offered_grp_ids,
             card_database=self.card_database,
@@ -2497,6 +2527,7 @@ class DraftgoblinTuiApp(App[None]):
             f"17L Grade: {_format_letter_grade(scored_card=scored_card)}\n"
             f"DG Score: {scored_card.score}\n"
             f"Color fit: {_format_color_fit(scored_card=scored_card)}\n"
+            f"{_format_splash_details(scored_card=scored_card)}"
             f"ALSA (avg last seen): {_format_alsa(scored_card=scored_card)}\n"
             f"Data source: {_format_tui_source_label(scored_card=scored_card)}"
         )
@@ -2794,6 +2825,7 @@ class DraftgoblinTuiApp(App[None]):
         confidence_label = self._recommendation_confidence_label()
         if confidence_label is not None:
             segments.append(f"Confidence: {confidence_label}")
+        segments.append(self._splash_status_label())
         icon_label = "on" if self.mana_icons_enabled else "off"
         segments.append(f"Mana icons: {icon_label}")
         if self.visibility_preferences.attribution:
@@ -2824,6 +2856,10 @@ class DraftgoblinTuiApp(App[None]):
             segments.insert(0, self._preferences_load_warning)
 
         status.update(" | ".join(segments))
+
+    def _splash_status_label(self) -> str:
+        enabled_label = "On" if self.visibility_preferences.splash_enabled else "Off"
+        return f"Splash: {enabled_label}"
 
     def _column_keys_for_width(self) -> tuple[str, ...]:
         show_secondary = (
@@ -2910,6 +2946,7 @@ class DraftgoblinTuiApp(App[None]):
             card_database=self.card_database,
             ratings_data=self._ratings_data_for_scoring(set_code=state.set_code),
             ranking_mode=self.sort_mode,
+            splash_enabled=self.visibility_preferences.splash_enabled,
         )
         self._backtest_error = None
         self._backtest_text = format_backtest_report(report).rstrip("\n")
@@ -2955,7 +2992,7 @@ class DraftgoblinTuiApp(App[None]):
                 card_database=self.card_database,
                 ratings_data=self._ratings_data_for_scoring(set_code=pool.set_code),
                 forced_pair=self._forced_pair,
-                allow_splash=False,
+                allow_splash=self.visibility_preferences.splash_enabled,
             )
         except DeckBuilderError as error:
             self._build_error = str(error)
@@ -3944,6 +3981,7 @@ def run_tui_watch(
     ratings_progress_loader_factory: RatingsProgressLoaderFactory | None = None,
     ratings_cache_checker: RatingsCacheChecker | None = None,
     mana_icons_enabled: bool = False,
+    splash_enabled: bool | None = None,
 ) -> int:
     """Run Textual watch mode and return a process-style exit code.
     Metadata may load in a worker after the initial shell has rendered.
@@ -3963,6 +4001,7 @@ def run_tui_watch(
         startup_scan=startup_scan,
         once=once,
         mana_icons_enabled=mana_icons_enabled,
+        splash_enabled=splash_enabled,
     )
     try:
         app.run(headless=once)
@@ -4031,7 +4070,7 @@ def _row_cells(
         "win_rate": _format_win_rate(scored_card=scored_card),
         "grade": _format_letter_grade(scored_card=scored_card),
         "score": str(scored_card.score),
-        "card": _format_card_name(card=scored_card.card),
+        "card": _format_pick_card_name(scored_card=scored_card),
         "colors": _styled_colors(
             card=scored_card.card,
             mana_icons_enabled=mana_icons_enabled,
@@ -4099,6 +4138,23 @@ def _format_card_name(*, card: CardInfo) -> str:
     return card.name
 
 
+def _format_pick_card_name(*, scored_card: ScoredCard) -> str:
+    card_name = _format_card_name(card=scored_card.card)
+    splash_color = scored_card.splash.splash_color
+    if splash_color is None:
+        return card_name
+
+    color_name = COLOR_NAMES.get(splash_color, splash_color).upper()
+    if scored_card.color_fit == "splash-ready":
+        return f"SPLASH {color_name} — {card_name}"
+    if scored_card.color_fit == "splash-speculative":
+        return f"POSSIBLE SPLASH {color_name} — {card_name}"
+    if scored_card.color_fit == "splash-fixer":
+        return f"{color_name} SPLASH MANA — {card_name}"
+
+    return card_name
+
+
 def _styled_colors(*, card: CardInfo, mana_icons_enabled: bool = False) -> Text:
     if card.unknown:
         return Text("Unknown", style="bold yellow")
@@ -4133,7 +4189,53 @@ def _format_color_fit(*, scored_card: ScoredCard) -> str:
     if scored_card.color_fit == "unknown":
         return "?"
 
+    if scored_card.color_fit == "splash-ready":
+        return f"Splash {scored_card.splash.splash_color}"
+
+    if scored_card.color_fit == "splash-speculative":
+        return f"Splash? {scored_card.splash.splash_color}"
+
+    if scored_card.color_fit == "splash-fixer":
+        return f"Fix {scored_card.splash.splash_color}"
+
     return "Open"
+
+
+def _format_splash_details(*, scored_card: ScoredCard) -> str:
+    splash = scored_card.splash
+    if splash.splash_color is None:
+        return ""
+
+    color_name = COLOR_NAMES.get(splash.splash_color, splash.splash_color)
+    classification = {
+        "splash-ready": "Recommended — mana is supported",
+        "splash-speculative": "Speculative — more fixing is needed",
+        "splash-fixer": "Fixing pick for the active splash",
+        "off-color": "Not recommended as a splash",
+    }.get(splash.classification, splash.classification.replace("-", " ").title())
+    source_line = ""
+    if splash.required_sources > 0:
+        source_parts = [f"{splash.fixing_sources} fixing lands"]
+        if splash.planned_basic_sources:
+            basic_name = BASIC_LAND_NAMES.get(
+                splash.splash_color,
+                "basic land",
+            )
+            source_parts.append(
+                f"{splash.planned_basic_sources} planned {basic_name}"
+            )
+        source_line = (
+            f"Mana support: {splash.available_sources} of "
+            f"{splash.required_sources} sources "
+            f"({', '.join(source_parts)})\n"
+        )
+    reason = "; ".join(splash.reasons)
+    return (
+        f"Splash recommendation: {color_name}\n"
+        f"Splash assessment: {classification}\n"
+        f"{source_line}"
+        f"Reason: {reason}\n"
+    )
 
 
 def _format_win_rate(*, scored_card: ScoredCard) -> str:

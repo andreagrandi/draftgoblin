@@ -127,12 +127,20 @@ def generate_backtest_report(
     ratings_data: SeventeenLandsData | None = None,
     pick_engine: PickEngine | None = None,
     ranking_mode: str = DEFAULT_RANKING_MODE,
+    splash_enabled: bool = True,
 ) -> BacktestReport:
     """Score each saved pick from the persisted pre-pick state.
     The function is read-only and never writes draft state.
     """
 
-    engine = pick_engine if pick_engine is not None else PickEngine(ratings_data=ratings_data)
+    engine = (
+        pick_engine
+        if pick_engine is not None
+        else PickEngine(
+            ratings_data=ratings_data,
+            splash_enabled=splash_enabled,
+        )
+    )
     rows = tuple(
         _score_pick(
             pick=pick,
@@ -439,4 +447,3 @@ def _missing_persisted_draft_message(
         return f"No persisted draft found for draft {draft_id!r}."
 
     return "No persisted drafts found. Replay/watch a draft first."
-

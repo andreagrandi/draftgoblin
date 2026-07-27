@@ -56,6 +56,7 @@ def replay_log_file(
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData | None = None,
     ratings_loader: RatingsLoader | None = None,
+    splash_enabled: bool = True,
 ) -> str:
     """Replay one captured Player.log file into deterministic text.
     Ratings are caller-supplied or loaded once from the parsed set code.
@@ -73,6 +74,7 @@ def replay_log_file(
         card_database=card_database,
         ratings_data=ratings_data,
         ratings_loader=ratings_loader,
+        splash_enabled=splash_enabled,
     )
 
 
@@ -82,6 +84,7 @@ def render_replay_events(
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData | None = None,
     ratings_loader: RatingsLoader | None = None,
+    splash_enabled: bool = True,
 ) -> str:
     """Render parsed events to stable plain-text replay output.
     Pool validation is run first so conflicting streams fail before printing.
@@ -99,7 +102,10 @@ def render_replay_events(
         ratings_data=ratings_data,
         ratings_loader=ratings_loader,
     )
-    pick_engine = PickEngine(ratings_data=loaded_ratings)
+    pick_engine = PickEngine(
+        ratings_data=loaded_ratings,
+        splash_enabled=splash_enabled,
+    )
     lines = _format_header(header=header)
     lines.append("")
 
@@ -129,6 +135,7 @@ def render_replay_events(
                     header=header,
                     card_database=card_database,
                     ratings_data=loaded_ratings,
+                    splash_enabled=splash_enabled,
                 )
             )
 
@@ -162,6 +169,7 @@ def _format_completed_build_sheet(
     header: _ReplayHeader,
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData | None,
+    splash_enabled: bool,
 ) -> list[str]:
     pool = BuildPool(
         set_code=event.set_code,
@@ -174,6 +182,7 @@ def _format_completed_build_sheet(
         pool=pool,
         card_database=card_database,
         ratings_data=ratings_data,
+        allow_splash=splash_enabled,
     )
     return format_build_result(
         pool=pool,
@@ -342,11 +351,31 @@ def _format_pack_status(*, scored_pack: ScoredPack) -> str:
     commitment = scored_pack.commitment
     pair = commitment.inferred_pair if commitment.inferred_pair is not None else "open"
     percent = int(round(commitment.level * 100))
-    return (
+    status = (
         "Status: "
         f"inferred pair {pair}, "
         f"commitment {percent}% ({commitment.phase}), "
         f"pool {commitment.pool_size}"
+    )
+    splash_status = _format_splash_status(scored_pack=scored_pack)
+    if splash_status is None:
+        return status
+
+    return f"{status}, {splash_status}"
+
+
+def _format_splash_status(*, scored_pack: ScoredPack) -> str | None:
+    state = scored_pack.splash_state
+    if not state.enabled:
+        return "splash disabled"
+    if state.active_color is None:
+        return None
+
+    fixing_sources = state.fixing_for(color=state.active_color)
+    return (
+        f"splash {state.active_color} "
+        f"{state.picked_card_count}/2 cards, "
+        f"{fixing_sources} drafted fixing"
     )
 
 
@@ -355,10 +384,15 @@ def _format_scored_cards(*, cards: tuple[ScoredCard, ...]) -> list[str]:
         return []
 
     card_width = max(len(_format_scored_card_name(card)) for card in cards)
+    fit_width = (
+        9
+        if any(card.color_fit.startswith("splash-") for card in cards)
+        else 5
+    )
     lines = [
         "  #   Score  "
         f"{'Card':<{card_width}}  "
-        "Colors     Fit    GIH WR   ALSA    MV  Source"
+        f"Colors     {'Fit':<{fit_width}}  GIH WR   ALSA    MV  Source"
     ]
     for rank, scored_card in enumerate(cards, start=1):
         lines.append(
@@ -367,7 +401,7 @@ def _format_scored_cards(*, cards: tuple[ScoredCard, ...]) -> list[str]:
             f"{scored_card.score:>5}  "
             f"{_format_scored_card_name(scored_card):<{card_width}}  "
             f"{_format_card_colors(scored_card.card):<9}  "
-            f"{_format_color_fit(scored_card):<5}  "
+            f"{_format_color_fit(scored_card):<{fit_width}}  "
             f"{_format_win_rate(scored_card):>6}  "
             f"{_format_alsa(scored_card):>5}  "
             f"{_format_mana_value(scored_card.card):>4}  "
@@ -407,6 +441,15 @@ def _format_color_fit(card: ScoredCard) -> str:
 
     if card.color_fit == "unknown":
         return "?"
+
+    if card.color_fit == "splash-ready":
+        return f"Splash {card.splash.splash_color}"
+
+    if card.color_fit == "splash-speculative":
+        return f"Splash?{card.splash.splash_color}"
+
+    if card.color_fit == "splash-fixer":
+        return f"Fix {card.splash.splash_color}"
 
     return "Open"
 

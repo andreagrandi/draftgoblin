@@ -60,7 +60,7 @@ Two distinct notions of "account," both handled:
 - Match tracking, collection tracking, win-rate dashboards.
 - Automatic deck import into Arena (the client does not support Limited decklist import; the build sheet is applied manually).
 - Any form of gameplay automation (also a Terms-of-Service requirement, not just a scope choice).
-- Splash (3rd color) logic — stubbed behind a flag, off by default.
+- Unrestricted three-color decks or more than one splash color.
 - Official Linux support (Arena doesn't run natively on Linux; Wine/Proton log paths are undocumented — "works if you point `--log-path` at it," nothing more).
 
 ---
@@ -174,7 +174,7 @@ Both defaults derive from the running OS user's home directory, which is what gu
   - creature floor: 14–17 creatures (configurable defaults);
   - curve quotas: minimum ~5–6 cards at MV 2, soft cap ~2–3 at MV ≥ 6;
   - when a creature and non-creature are near-equal in score and the creature floor is unmet, prefer the creature;
-  - splash rule behind `--allow-splash` (off by default): ≤ 2 elite off-pair cards, only with ≥ 2 fixing sources in pool.
+  - splash rule on by default and optional through TUI configuration or `--no-splash`: one additional color, ≤ 2 `A-` or better single-pip cards, with three sources for one card or four for two (including at most one planned basic).
 - FR-5.4 **Stage 3 — mana base.** Default 17 lands; 16 if aggressive (low avg MV + 2-drop quota filled), 18 if top-heavy. Drafted in-color nonbasics slot in first (documented caveat: prefer basics over taplands in 16-land aggressive builds). Remaining basics split proportionally to colored pips in the final 23, with a per-main-color floor (~7 sources), rounding toward the double-pip-heavy color.
 - FR-5.5 **Build sheet output:** pair + its 17lands WR; spells sorted by curve, creatures and non-creatures separated; land section (nonbasics first, then basic counts); bench of 3–5 nearest cuts with one-line reasons (e.g., "cut: 5th 4-drop, curve full"). Exactly 40 cards, always.
 - FR-5.6 **Winning-deck alignment.** Two tiers:
@@ -271,7 +271,7 @@ Client language is irrelevant to correctness (numeric IDs end-to-end). Output na
 | M4 | **Color logic** | Pool weights, commitment ramp, inferred-pair status | Tuned by replaying captured drafts |
 | M5 | **Deck builder** | Auto-trigger on last pick; pair selection; constrained 23-spell fill; mana base; build sheet + bench; `build` re-run with `--pair` | Sensible 40-card builds on all fixture pools |
 | M6 | **TUI** | Textual app: pack view, sidebar, status bar, build view, keybinds | Full draft ergonomically usable end-to-end in the TUI |
-| M7 | **Stretch — winning-deck alignment** | Per-pair structural targets from 17lands trophy/winning-deck data; similarity report; `--allow-splash` | Similarity line on build sheets for sets with data |
+| M7 | **Stretch — winning-deck alignment** | Per-pair structural targets from 17lands trophy/winning-deck data; similarity report; optional conservative splashing | Similarity line on build sheets for sets with data |
 
 M0–M5 are each sized as a weekend-or-less chunk; the TUI (M6) is deliberately scheduled after the logic is proven in plain mode, so UI polish never blocks core function. M7 is the "bonus points" item and the only piece requiring 17lands deck-level data.
 
@@ -307,7 +307,7 @@ M0–M5 are each sized as a weekend-or-less chunk; the TUI (M6) is deliberately 
 ## 11. Future work (explicitly deferred)
 
 - M7 hardening: per-set/per-pair empirically fitted structure targets from 17lands public data dumps (CC BY 4.0), refreshed per set.
-- Splash logic maturation; 3-color support.
+- Broader three-color archetype support beyond the conservative one-color splash policy.
 - Premier/Traditional draft support (requires handling the P1P1 log quirk).
 - Native UI (menu-bar / floating panel) on top of the stabilized core.
 - Localized card names in output.

@@ -109,6 +109,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Opt in to Mana font icons in the Textual TUI.",
     )
+    splash_group = watch_parser.add_mutually_exclusive_group()
+    splash_group.add_argument(
+        "--splash",
+        dest="splash_enabled",
+        action="store_true",
+        help="Enable splash recommendations for this watch session.",
+    )
+    splash_group.add_argument(
+        "--no-splash",
+        dest="splash_enabled",
+        action="store_false",
+        help="Disable splash recommendations for this watch session.",
+    )
+    watch_parser.set_defaults(splash_enabled=None)
     watch_parser.add_argument(
         "--bulk-file",
         type=Path,
@@ -175,6 +189,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=argparse.SUPPRESS,
     )
+    replay_parser.add_argument(
+        "--no-splash",
+        dest="splash_enabled",
+        action="store_false",
+        help="Disable splash recommendations and splash deck building.",
+    )
+    replay_parser.set_defaults(splash_enabled=True)
     replay_parser.set_defaults(handler=handle_replay)
 
     build_parser_command = subparsers.add_parser(
@@ -206,11 +227,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_parser_command.add_argument(
         "--allow-splash",
+        dest="allow_splash",
         action="store_true",
-        help=(
-            "Allow up to two elite off-pair splash cards when the pool has "
-            "at least two fixing sources."
-        ),
+        help=argparse.SUPPRESS,
+    )
+    build_parser_command.add_argument(
+        "--no-splash",
+        dest="allow_splash",
+        action="store_false",
+        help="Build a strict two-color deck without third-color splash cards.",
     )
     build_parser_command.add_argument(
         "--set-code",
@@ -232,7 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=argparse.SUPPRESS,
     )
-    build_parser_command.set_defaults(handler=handle_build)
+    build_parser_command.set_defaults(allow_splash=True, handler=handle_build)
 
     backtest_parser = subparsers.add_parser(
         name="backtest",
@@ -273,6 +298,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=argparse.SUPPRESS,
     )
+    backtest_parser.add_argument(
+        "--no-splash",
+        dest="splash_enabled",
+        action="store_false",
+        help="Evaluate saved picks with splash recommendations disabled.",
+    )
+    backtest_parser.set_defaults(splash_enabled=True)
     backtest_parser.set_defaults(handler=handle_backtest)
 
     benchmark_parser = subparsers.add_parser(
@@ -456,6 +488,9 @@ def handle_watch(args: argparse.Namespace) -> int:
                 once=args.once,
                 startup_scan=args.startup_scan,
                 ratings_loader=ratings_loader,
+                splash_enabled=(
+                    True if args.splash_enabled is None else args.splash_enabled
+                ),
             )
 
         return run_tui_watch(
@@ -483,6 +518,7 @@ def handle_watch(args: argparse.Namespace) -> int:
                 app_dir=args.app_dir,
             ),
             mana_icons_enabled=args.mana_icons,
+            splash_enabled=args.splash_enabled,
         )
     except KeyboardInterrupt:
         return 130
@@ -528,6 +564,7 @@ def handle_replay(args: argparse.Namespace) -> int:
                     app_dir=args.app_dir,
                 ),
             ),
+            splash_enabled=args.splash_enabled,
         )
     except (
         CardDatabaseError,
@@ -637,6 +674,7 @@ def handle_backtest(args: argparse.Namespace) -> int:
             card_database=database,
             ratings_data=ratings_data,
             ranking_mode=args.ranking,
+            splash_enabled=args.splash_enabled,
         )
     except (BacktestError, CardDatabaseError, DraftPoolError) as error:
         print(f"backtest failed: {error}", file=sys.stderr)

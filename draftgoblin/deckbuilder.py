@@ -14,13 +14,20 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.config import COLOR_PAIRS, DECK_BUILDER, DeckBuilderConfig
+from draftgoblin.config import COLOR_PAIRS, DECK_BUILDER, SPLASH, DeckBuilderConfig
 from draftgoblin.pickengine import PickEngine, ScoredCard
 from draftgoblin.pool import DraftState, list_draft_states
 from draftgoblin.seventeen import (
     SEVENTEEN_LANDS_ATTRIBUTION,
     SeventeenLandsData,
     StructuralTargets,
+)
+from draftgoblin.splash import (
+    SplashState,
+    card_is_castable_in_pair,
+    grade_at_least,
+    infer_splash_state,
+    splash_requirement,
 )
 from draftgoblin.setinfo import format_set_label
 
@@ -162,7 +169,9 @@ class SpellSelection:
     counts: SpellCounts
     applied_relaxations: tuple[str, ...]
     allow_splash_requested: bool
+    splash_color: str | None = None
     splash_fixing_sources: int = 0
+    splash_planned_basic_sources: int = 0
     structure_targets: StructuralTargets | None = None
 
 
@@ -383,7 +392,7 @@ def select_deck_spells(
     card_database: CardDatabase,
     pair: str,
     ratings_data: SeventeenLandsData | None = None,
-    allow_splash: bool = False,
+    allow_splash: bool = SPLASH.enabled_by_default,
     config: DeckBuilderConfig = DECK_BUILDER,
 ) -> SpellSelection:
     """Select deck spells for a chosen pair under structural constraints.
@@ -409,12 +418,23 @@ def select_deck_spells(
         structure_targets=structure_targets,
     )
     _validate_deck_builder_config(config=effective_config)
-    splash_fixing_counts = _splash_fixing_counts_by_color(
+    splash_state = infer_splash_state(
         pool_grp_ids=pool_grp_ids,
         card_database=card_database,
-        pair=resolved_pair,
+        ratings_data=ratings_data,
+        base_pair=resolved_pair,
+        enabled=allow_splash,
     )
-    splash_fixing_sources = max(splash_fixing_counts.values(), default=0)
+    splash_color = splash_state.active_color
+    splash_fixing_sources = (
+        0
+        if splash_color is None
+        else splash_state.fixing_for(color=splash_color)
+    )
+    splash_limit = _supported_splash_card_limit(
+        state=splash_state,
+        config=effective_config,
+    )
     scored_pool = PickEngine(ratings_data=ratings_data).score_pack(
         offered_grp_ids=pool_grp_ids,
         card_database=card_database,
@@ -433,7 +453,8 @@ def select_deck_spells(
                 card=card,
                 pair=resolved_pair,
                 allow_splash=allow_splash,
-                splash_fixing_counts=splash_fixing_counts,
+                splash_color=splash_color,
+                splash_limit=splash_limit,
                 config=effective_config,
             )
         ),
@@ -451,7 +472,7 @@ def select_deck_spells(
         constraints = _constraints_for_plan(
             candidates=candidates,
             pair=resolved_pair,
-            allow_splash=allow_splash,
+            splash_limit=splash_limit,
             plan=plan,
             config=effective_config,
         )
@@ -488,7 +509,13 @@ def select_deck_spells(
                 config=effective_config,
             ),
             allow_splash_requested=allow_splash,
+            splash_color=splash_color,
             splash_fixing_sources=splash_fixing_sources,
+            splash_planned_basic_sources=(
+                SPLASH.planned_basic_sources
+                if splash_color is not None and splash_limit > 0
+                else 0
+            ),
             structure_targets=structure_targets,
         )
 
@@ -502,7 +529,7 @@ def select_build_sheet(
     card_database: CardDatabase,
     pair: str,
     ratings_data: SeventeenLandsData | None = None,
-    allow_splash: bool = False,
+    allow_splash: bool = SPLASH.enabled_by_default,
     config: DeckBuilderConfig = DECK_BUILDER,
 ) -> BuildSheet:
     """Select spells and lands for an exactly sized Limited deck.
@@ -581,7 +608,7 @@ def build_deck_from_pool(
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData | None = None,
     forced_pair: str | None = None,
-    allow_splash: bool = False,
+    allow_splash: bool = SPLASH.enabled_by_default,
     config: DeckBuilderConfig = DECK_BUILDER,
 ) -> tuple[PairSelection, BuildSheet]:
     """Run pair selection, spell selection, and mana-base selection.
@@ -644,16 +671,32 @@ def select_mana_base(
             pair=resolved_pair,
         ),
     )
-    basic_slots = max(0, resolved_land_count - len(nonbasic_lands))
-    pip_counts, double_pip_counts = _spell_pip_counts(
+    splash_colors = _selected_splash_colors(
         cards=spell_selection.spells,
         pair=resolved_pair,
     )
-    source_counts = _source_counts(
+    mana_colors = resolved_pair + "".join(splash_colors)
+    splash_basics = _splash_basic_land_counts(
+        splash_colors=splash_colors,
+        selected_spells=spell_selection.spells,
         pair=resolved_pair,
         nonbasic_lands=nonbasic_lands,
     )
-    basic_counts = _basic_land_counts(
+    basic_slots = max(
+        0,
+        resolved_land_count - len(nonbasic_lands) - sum(
+            basic.count for basic in splash_basics
+        ),
+    )
+    pip_counts, double_pip_counts = _spell_pip_counts(
+        cards=spell_selection.spells,
+        pair=mana_colors,
+    )
+    source_counts = _source_counts(
+        pair=mana_colors,
+        nonbasic_lands=nonbasic_lands,
+    )
+    base_basic_counts = _basic_land_counts(
         pair=resolved_pair,
         slots=basic_slots,
         pip_counts=pip_counts,
@@ -661,8 +704,9 @@ def select_mana_base(
         source_counts=source_counts,
         config=config,
     )
+    basic_counts = base_basic_counts + splash_basics
     final_source_counts = _source_counts_with_basics(
-        pair=resolved_pair,
+        pair=mana_colors,
         nonbasic_lands=nonbasic_lands,
         basic_lands=basic_counts,
     )
@@ -673,9 +717,9 @@ def select_mana_base(
         deck_size=config.deck_size,
         nonbasic_lands=nonbasic_lands,
         basic_lands=basic_counts,
-        pip_counts=_ordered_color_items(values=pip_counts, pair=resolved_pair),
-        double_pip_counts=_ordered_color_items(values=double_pip_counts, pair=resolved_pair),
-        source_counts=_ordered_color_items(values=final_source_counts, pair=resolved_pair),
+        pip_counts=_ordered_color_items(values=pip_counts, pair=mana_colors),
+        double_pip_counts=_ordered_color_items(values=double_pip_counts, pair=mana_colors),
+        source_counts=_ordered_color_items(values=final_source_counts, pair=mana_colors),
         average_mana_value=_average_mana_value(cards=spell_selection.spells),
         reason=effective_reason,
         caveats=_mana_base_caveats(
@@ -1116,13 +1160,14 @@ def _is_eligible_spell_for_pair(
     card: ScoredCard,
     pair: str,
     allow_splash: bool,
-    splash_fixing_counts: dict[str, int],
+    splash_color: str | None,
+    splash_limit: int,
     config: DeckBuilderConfig,
 ) -> bool:
     if _is_base_eligible_spell_for_pair(card=card, pair=pair):
         return True
 
-    if not allow_splash:
+    if not allow_splash or splash_limit <= 0 or splash_color is None:
         return False
 
     if not _is_spell_card(card=card.card):
@@ -1131,13 +1176,19 @@ def _is_eligible_spell_for_pair(
     if card.raw_score < config.splash_elite_score_minimum:
         return False
 
-    splash_colors = _card_splash_colors(card=card.card, pair=pair)
-    if not splash_colors:
+    candidate_color, off_color_pips = splash_requirement(
+        card=card.card,
+        base_pair=pair,
+    )
+    if candidate_color != splash_color:
         return False
 
-    return all(
-        splash_fixing_counts.get(color, 0) >= config.splash_minimum_fixing_sources
-        for color in splash_colors
+    if off_color_pips > SPLASH.maximum_off_color_pips:
+        return False
+
+    return grade_at_least(
+        grade=card.rating.letter_grade,
+        minimum=SPLASH.supported_minimum_grade,
     )
 
 
@@ -1148,10 +1199,7 @@ def _is_playable_in_pair(*, card: ScoredCard, pair: str) -> bool:
 
 
 def _card_is_playable_in_pair(*, card: CardInfo, pair: str) -> bool:
-    if not card.colors:
-        return True
-
-    return all(color in pair for color in card.colors)
+    return card_is_castable_in_pair(card=card, base_pair=pair)
 
 
 
@@ -1282,41 +1330,40 @@ def _selected_splash_colors(
     return tuple(color for color in BASIC_LANDS_BY_COLOR if color in splash_colors)
 
 
-
-def _splash_fixing_counts_by_color(
+def _supported_splash_card_limit(
     *,
-    pool_grp_ids: tuple[int, ...],
-    card_database: CardDatabase,
-    pair: str,
-) -> dict[str, int]:
-    counts = {color: 0 for color in BASIC_LANDS_BY_COLOR if color not in pair}
-    for grp_id in pool_grp_ids:
-        card = card_database.lookup(grp_id=grp_id)
-        if not _card_is_playable_in_pair(card=card, pair=pair):
-            continue
+    state: SplashState,
+    config: DeckBuilderConfig,
+) -> int:
+    color = state.active_color
+    if not state.enabled or color is None:
+        return 0
 
-        produced_colors = _land_source_colors(card=card)
-        for color in counts:
-            if color in produced_colors:
-                counts[color] += 1
+    available_sources = (
+        state.fixing_for(color=color) + SPLASH.planned_basic_sources
+    )
+    if available_sources >= SPLASH.multiple_card_sources:
+        return min(config.splash_max_cards, SPLASH.maximum_cards)
 
-    return counts
+    if available_sources >= SPLASH.single_card_sources:
+        return min(config.splash_max_cards, 1)
 
+    return 0
 
 
 def _constraints_for_plan(
     *,
     candidates: tuple[ScoredCard, ...],
     pair: str,
-    allow_splash: bool,
+    splash_limit: int,
     plan: _ConstraintPlan,
     config: DeckBuilderConfig,
 ) -> SpellConstraints:
     requested_target = min(config.target_spell_count, len(candidates))
     pool_counts = _spell_counts(cards=candidates, pair=pair, config=config)
-    splash_limit = min(config.splash_max_cards, requested_target) if allow_splash else 0
+    resolved_splash_limit = min(splash_limit, requested_target)
     non_splash_count = pool_counts.total - pool_counts.splashes
-    target = min(requested_target, non_splash_count + splash_limit)
+    target = min(requested_target, non_splash_count + resolved_splash_limit)
 
     creature_floor = (
         min(config.creature_floor, pool_counts.creatures, target)
@@ -1351,7 +1398,7 @@ def _constraints_for_plan(
         creature_ceiling=creature_ceiling,
         minimum_two_drops=minimum_two_drops,
         maximum_expensive_spells=maximum_expensive_spells,
-        maximum_splash_spells=min(splash_limit, target),
+        maximum_splash_spells=min(resolved_splash_limit, target),
     )
 
 
@@ -1883,6 +1930,45 @@ def _land_source_colors(*, card: CardInfo) -> tuple[str, ...]:
     return tuple(color for color in BASIC_LANDS_BY_COLOR if color in source_set)
 
 
+def _splash_basic_land_counts(
+    *,
+    splash_colors: tuple[str, ...],
+    selected_spells: tuple[ScoredCard, ...],
+    pair: str,
+    nonbasic_lands: tuple[LandCard, ...],
+) -> tuple[BasicLandCount, ...]:
+    if not splash_colors or SPLASH.planned_basic_sources <= 0:
+        return ()
+
+    splash_color = splash_colors[0]
+    splash_card_count = sum(
+        _is_splash_card(card=scored_card.card, pair=pair)
+        for scored_card in selected_spells
+    )
+    required_sources = (
+        SPLASH.single_card_sources
+        if splash_card_count <= 1
+        else SPLASH.multiple_card_sources
+    )
+    drafted_sources = sum(
+        splash_color in land.source_colors for land in nonbasic_lands
+    )
+    basic_count = min(
+        SPLASH.planned_basic_sources,
+        max(0, required_sources - drafted_sources),
+    )
+    if basic_count <= 0:
+        return ()
+
+    return (
+        BasicLandCount(
+            color=splash_color,
+            name=BASIC_LANDS_BY_COLOR[splash_color],
+            count=basic_count,
+        ),
+    )
+
+
 def _spell_pip_counts(
     *,
     cards: tuple[ScoredCard, ...],
@@ -2234,7 +2320,7 @@ def _format_structure_checks(
         f"(minimum {constraints.minimum_two_drops})",
         f"Expensive spells MV >= {config.expensive_spell_mana_value:g}: "
         f"{counts.expensive} (soft cap {constraints.maximum_expensive_spells})",
-        _format_splash_note(selection=selection, config=config),
+        _format_splash_note(selection=selection),
         f"Relaxation order: {' -> '.join(config.relaxation_order)}",
         f"Applied relaxations: {_format_relaxations(selection.applied_relaxations)}",
     ]
@@ -2259,7 +2345,7 @@ def _format_spell_selection(
         f"(minimum {constraints.minimum_two_drops})",
         f"Expensive spells MV >= {config.expensive_spell_mana_value:g}: "
         f"{counts.expensive} (soft cap {constraints.maximum_expensive_spells})",
-        _format_splash_note(selection=selection, config=config),
+        _format_splash_note(selection=selection),
         f"Relaxation order: {' -> '.join(config.relaxation_order)}",
         f"Applied relaxations: {_format_relaxations(selection.applied_relaxations)}",
         "Creatures:",
@@ -2297,23 +2383,40 @@ def _format_bench_section(
 
 
 
-def _format_splash_note(*, selection: SpellSelection, config: DeckBuilderConfig) -> str:
+def _format_splash_note(*, selection: SpellSelection) -> str:
     if not selection.allow_splash_requested:
-        return "Splash: disabled (--allow-splash not set; off-pair cards excluded)"
+        return "Splash: disabled (--no-splash; off-pair cards excluded)"
 
-    if selection.splash_fixing_sources < config.splash_minimum_fixing_sources:
+    if selection.splash_color is None:
         return (
-            "Splash: enabled but unavailable "
-            f"({selection.splash_fixing_sources}/"
-            f"{config.splash_minimum_fixing_sources} fixing sources; "
+            "Splash: enabled; no eligible A- or better single-pip "
+            "third-color card in the pool"
+        )
+
+    available_sources = (
+        selection.splash_fixing_sources + SPLASH.planned_basic_sources
+    )
+    required_sources = (
+        SPLASH.single_card_sources
+        if selection.constraints.maximum_splash_spells <= 1
+        else SPLASH.multiple_card_sources
+    )
+    if selection.constraints.maximum_splash_spells <= 0:
+        return (
+            f"Splash: {selection.splash_color} unsupported "
+            f"({selection.splash_fixing_sources} drafted fixing + "
+            f"{SPLASH.planned_basic_sources} planned basic = "
+            f"{available_sources}/{SPLASH.single_card_sources} sources; "
             "off-pair cards excluded)"
         )
 
     return (
-        "Splash: enabled "
-        f"({selection.splash_fixing_sources} fixing sources; "
+        f"Splash: {selection.splash_color} enabled "
+        f"({selection.splash_fixing_sources} drafted fixing + "
+        f"{selection.splash_planned_basic_sources} planned basic = "
+        f"{available_sources}/{required_sources} sources; "
         f"selected {selection.counts.splashes}/"
-        f"{selection.constraints.maximum_splash_spells} elite off-pair cards)"
+        f"{selection.constraints.maximum_splash_spells} A- or better single-pip cards)"
     )
 
 
@@ -2482,9 +2585,6 @@ def _validate_deck_builder_config(*, config: DeckBuilderConfig) -> None:
 
     if config.splash_max_cards < 0:
         raise DeckBuilderError("Deck-builder splash maximum must be non-negative.")
-
-    if config.splash_minimum_fixing_sources < 0:
-        raise DeckBuilderError("Deck-builder splash fixing minimum must be non-negative.")
 
     if config.splash_elite_score_minimum < 0:
         raise DeckBuilderError("Deck-builder splash score threshold must be non-negative.")

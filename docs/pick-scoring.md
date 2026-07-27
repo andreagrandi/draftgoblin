@@ -4,7 +4,7 @@ Draftgoblin keeps the raw 17Lands GIH win rate visible for every card with a str
 
 The base rating for `DG` is 17Lands GIH WR when the card has enough games-in-hand samples. If QuickDraft data is missing or thin, the resolver falls back to PremierDraft. If neither format has a strong GIH sample, the card uses a neutral prior, adjusted by ALSA when ALSA is available: earlier ALSA raises the prior, later ALSA lowers it.
 
-Scores are normalized against the set rating distribution and centered so the neutral prior displays as 50 before color logic. Color commitment then multiplies the normalized score: on-color cards rise gradually, off-color cards are penalized gradually, and colorless cards stay neutral.
+Scores are normalized against the set rating distribution and centered so the neutral prior displays as 50 before color logic. Color commitment then multiplies the normalized score: on-color cards rise gradually, ordinary off-color cards are penalized gradually, supported splash cards receive a smaller penalty, and colorless cards stay neutral.
 
 Pool color weights come from picked cards. Each colored picked card contributes a quality-weighted amount to each of its colors, so a strong card pulls harder than filler. The highest-weighted two-color pair is the inferred pair once at least two colors have material weight.
 
@@ -21,6 +21,22 @@ Commitment is controlled by documented defaults in `config.py`:
 - open-pick pair-win-rate tiebreaker: within `3.0` DG points and `0.25` pair-weight points
 
 Rows show a `Fit` marker: `On` for cards inside the inferred pair, `Off!` for off-color cards, `Any` for colorless cards, and `Open` before the ramp starts or before a pair is available. Once locked, pair-filtered 17Lands ratings are used when present with adequate samples; otherwise all-decks ratings remain the fallback.
+
+## Splash recommendations
+
+Splash recommendations are enabled by default. Open the TUI configuration with `c` to disable them persistently, or start a session with `watch --no-splash`. Replay and backtest also accept `--no-splash`.
+
+The splash policy is deliberately narrower than general three-color drafting:
+
+- Keep exactly one inferred two-color primary pair and consider at most one additional color.
+- Take at most two splash cards.
+- Require each splash card to have only one mana pip of the splash color and no other color outside the primary pair.
+- Require at least an `A-` 17Lands grade and a base DG Score advantage of `5.0` over the best offered on-color card.
+- Require three sources for one splash card and four sources for two. At most one source may be a planned basic; the rest must be deterministic drafted fixing lands that are castable in the primary pair.
+- Before color lock, an unsupported `A` or `A+` card may be marked `Splash?` as a speculative pick. Speculative splashes are disabled after lock and in aggressive pools.
+- Aggressive pools require a supported `A` or better splash.
+
+The `Fit` column uses `Splash X` for a supported splash, `Splash? X` for a speculative one, and `Fix X` when a fixing land directly supports the active splash color. Focused card details show the source count and the exact acceptance or rejection reason. Once a splash color has been established, cards of any other third color remain ordinary off-color cards.
 
 The TUI pack table shows `17L WR` and `17L Grade` as primary columns. `17L WR` is the raw Games-in-Hand win rate from the resolved 17Lands source. `17L Grade` follows the methodology published on the 17Lands Card Data page for the Grades view: grades are centered at `C` on the selected win-rate metric distribution, and each grade step is a deterministic `0.33` standard-deviation band. Draftgoblin computes those grades from the cached 17Lands GIH distribution for the same source and format/filter context the row uses (QuickDraft for Quick Drafts, PremierDraft when the row is a Premier fallback, or pair-filtered data when used); cards without a strong GIH sample show `—`.
 

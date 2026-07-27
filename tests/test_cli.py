@@ -69,6 +69,23 @@ def test_subcommands_are_registered_with_help_text(
     assert expected_help in captured.out
 
 
+def test_splash_is_default_on_and_each_user_flow_can_disable_it() -> None:
+    parser = build_parser()
+
+    assert parser.parse_args(args=["watch"]).splash_enabled is None
+    assert parser.parse_args(args=["watch", "--splash"]).splash_enabled is True
+    assert parser.parse_args(args=["watch", "--no-splash"]).splash_enabled is False
+    assert parser.parse_args(args=["replay", "draft.log"]).splash_enabled is True
+    assert (
+        parser.parse_args(args=["replay", "draft.log", "--no-splash"]).splash_enabled
+        is False
+    )
+    assert parser.parse_args(args=["build"]).allow_splash is True
+    assert parser.parse_args(args=["build", "--no-splash"]).allow_splash is False
+    assert parser.parse_args(args=["backtest"]).splash_enabled is True
+    assert parser.parse_args(args=["backtest", "--no-splash"]).splash_enabled is False
+
+
 def test_watch_plain_once_honors_log_path_override(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -250,7 +267,7 @@ def test_build_pool_file_selects_pair_offline(
 
 
 
-def test_build_allow_splash_requires_fixing_before_off_pair_cards(
+def test_build_defaults_to_splash_but_requires_an_eligible_card(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -266,7 +283,6 @@ def test_build_allow_splash_requires_fixing_before_off_pair_cards(
             "build",
             "--pool",
             str(pool_file),
-            "--allow-splash",
             "--bulk-file",
             str(bulk_file),
             "--app-dir",
@@ -277,7 +293,7 @@ def test_build_allow_splash_requires_fixing_before_off_pair_cards(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Splash: enabled but unavailable" in captured.out
+    assert "Splash: enabled; no eligible A- or better" in captured.out
     assert "Eligible spells for WU: 4" in captured.out
     assert captured.err == ""
 
@@ -412,7 +428,6 @@ def test_config_exposes_documented_tunables() -> None:
     assert config.DECK_BUILDER.expensive_spell_mana_value == 6.0
     assert config.DECK_BUILDER.near_tie_creature_preference_points == 2.0
     assert config.DECK_BUILDER.splash_max_cards == 2
-    assert config.DECK_BUILDER.splash_minimum_fixing_sources == 2
     assert config.DECK_BUILDER.splash_elite_score_minimum == 70.0
     assert config.DECK_BUILDER.maximum_unresolved_metadata_ratio == 0.25
     assert config.DECK_BUILDER.main_color_source_floor == 7

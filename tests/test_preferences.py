@@ -52,9 +52,10 @@ def test_tui_preferences_round_trip_atomically_to_explicit_app_directory(
             "pool_color_distribution": True,
             "pool_mana_curve": True,
             "pool_metadata": True,
-            "secondary_columns": False,
-        },
-    }
+                "secondary_columns": False,
+                "splash_enabled": True,
+            },
+        }
     assert not tuple(path.parent.glob("tmp*"))
 
 
