@@ -8,6 +8,8 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from textual.containers import VerticalScroll
@@ -22,6 +24,7 @@ from draftgoblin.carddb import (
     build_card_database_from_bulk_file,
 )
 from draftgoblin.preferences import TuiVisibilityPreferences, tui_preferences_path
+from draftgoblin.pickengine import ScoredCard
 from draftgoblin.pool import (
     DraftPick,
     DraftPoolStore,
@@ -38,6 +41,7 @@ from draftgoblin.seventeen import (
     SeventeenLandsDownloadProgress,
     SeventeenLandsFormatData,
 )
+from draftgoblin.splash import SplashAssessment
 from draftgoblin.tui import (
     MANA_CARD_TYPE_GLYPHS,
     MANA_ICON_GLYPHS,
@@ -45,6 +49,8 @@ from draftgoblin.tui import (
     MissingRatingsScreen,
     _format_card_colors,
     _format_card_types,
+    _format_pick_card_name,
+    _format_splash_details,
 )
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
@@ -57,6 +63,48 @@ SCRYFALL_BULK_SAMPLE_PATH = (
 
 def test_tui_fixture_stream_updates_pack_panel_and_status_bar(tmp_path: Path) -> None:
     asyncio.run(_assert_fixture_stream_updates_pack_panel(tmp_path=tmp_path))
+
+
+def test_tui_splash_details_use_plain_color_and_mana_language() -> None:
+    splash = SplashAssessment(
+        classification="splash-ready",
+        splash_color="R",
+        off_color_pips=1,
+        picked_card_count=0,
+        fixing_sources=2,
+        planned_basic_sources=1,
+        available_sources=3,
+        required_sources=3,
+        grade="A",
+        score_advantage=12.0,
+        aggressive=False,
+        reasons=("elite single-pip card has sufficient mana support",),
+    )
+    scored_card = cast(
+        ScoredCard,
+        SimpleNamespace(
+            card=CardInfo(
+                grp_id=1,
+                name="Example Bomb",
+                colors=("R",),
+                mana_value=5.0,
+                rarity="rare",
+                types=("Creature",),
+            ),
+            color_fit="splash-ready",
+            splash=splash,
+        ),
+    )
+
+    details = _format_splash_details(scored_card=scored_card)
+
+    assert "Splash recommendation: Red" in details
+    assert "Recommended — mana is supported" in details
+    assert "3 of 3 sources" in details
+    assert "2 fixing lands, 1 planned Mountain" in details
+    assert _format_pick_card_name(scored_card=scored_card) == (
+        "SPLASH RED — Example Bomb"
+    )
 
 
 def test_tui_audit_records_ranking_visible_when_the_pick_is_made(
@@ -914,11 +962,13 @@ async def _assert_config_updates_columns_and_rank_cycle(tmp_path: Path) -> None:
             "mv",
             "source",
         )
+        assert "Splash: On" in _status_text(app=app)
 
         await _save_tui_config(
             app=app,
             pilot=pilot,
             secondary_columns=False,
+            splash_enabled=False,
         )
         assert app.visible_column_keys == (
             "rank",
@@ -928,6 +978,10 @@ async def _assert_config_updates_columns_and_rank_cycle(tmp_path: Path) -> None:
             "card",
             "colors",
         )
+        assert app.visibility_preferences.splash_enabled is False
+        assert app._current_pack is not None
+        assert app._current_pack.splash_state.enabled is False
+        assert "Splash: Off" in _status_text(app=app)
 
         assert app.sort_mode == "score"
         assert "Ranking: DG Score" in _status_text(app=app)
@@ -1833,7 +1887,7 @@ async def _assert_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
 
     def slow_loader(set_code: str) -> SeventeenLandsData:
         started.set()
-        release.wait(timeout=0.5)
+        release.wait(timeout=5.0)
         return _ratings_data(set_code=set_code)
 
     app = _tui_app(tmp_path=tmp_path, ratings_loader=slow_loader)

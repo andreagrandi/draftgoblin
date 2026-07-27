@@ -401,11 +401,11 @@ def test_allow_splash_selects_at_most_two_elite_off_pair_cards_with_fixing() -> 
         maximum_expensive_spells=4,
         bench_card_count=3,
     )
-    pool_ids = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+    pool_ids = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
     no_splash = select_deck_spells(
         pool_grp_ids=pool_ids,
-        card_database=_splash_card_database(fixing_count=2),
+        card_database=_splash_card_database(fixing_count=3),
         pair="WU",
         ratings_data=_splash_ratings_data(),
         allow_splash=False,
@@ -413,7 +413,7 @@ def test_allow_splash_selects_at_most_two_elite_off_pair_cards_with_fixing() -> 
     )
     splash = select_deck_spells(
         pool_grp_ids=pool_ids,
-        card_database=_splash_card_database(fixing_count=2),
+        card_database=_splash_card_database(fixing_count=3),
         pair="WU",
         ratings_data=_splash_ratings_data(),
         allow_splash=True,
@@ -422,7 +422,9 @@ def test_allow_splash_selects_at_most_two_elite_off_pair_cards_with_fixing() -> 
 
     assert no_splash.counts.splashes == 0
     assert no_splash.eligible_count == 4
-    assert splash.splash_fixing_sources == 2
+    assert splash.splash_color == "R"
+    assert splash.splash_fixing_sources == 3
+    assert splash.splash_planned_basic_sources == 1
     assert splash.counts.splashes == 2
     assert [card.card.grp_id for card in splash.spells[:2]] == [5, 6]
     assert 7 not in {card.card.grp_id for card in splash.spells}
@@ -441,8 +443,8 @@ def test_allow_splash_caps_target_when_splash_limit_makes_pool_short() -> None:
     )
 
     selection = select_deck_spells(
-        pool_grp_ids=(1, 2, 3, 4, 5, 6, 7, 8, 9),
-        card_database=_splash_card_database(fixing_count=2),
+        pool_grp_ids=(1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+        card_database=_splash_card_database(fixing_count=3),
         pair="WU",
         ratings_data=_splash_ratings_data(),
         allow_splash=True,
@@ -478,6 +480,41 @@ def test_allow_splash_requires_two_fixing_sources() -> None:
     assert selection.splash_fixing_sources == 1
     assert selection.counts.splashes == 0
     assert selection.eligible_count == 4
+
+
+def test_single_splash_card_uses_two_fixing_lands_and_one_planned_basic() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+        bench_card_count=0,
+    )
+    pool_ids = (1, 2, 3, 4, 5, 8, 9)
+    database = _splash_card_database(fixing_count=2)
+
+    selection = select_deck_spells(
+        pool_grp_ids=pool_ids,
+        card_database=database,
+        pair="WU",
+        ratings_data=_splash_ratings_data(),
+        allow_splash=True,
+        config=config,
+    )
+    mana_base = select_mana_base(
+        pool_grp_ids=pool_ids,
+        card_database=database,
+        pair="WU",
+        spell_selection=selection,
+        config=config,
+    )
+
+    assert selection.counts.splashes == 1
+    assert selection.constraints.maximum_splash_spells == 1
+    assert _basic_count(mana_base=mana_base, name="Mountain") == 1
+    assert dict(mana_base.source_counts)["R"] == 3
 
 
 
@@ -678,7 +715,7 @@ def test_format_build_result_reports_spell_selection_and_attribution(tmp_path: P
     assert "Structure checks:" in output
     assert "Selected spells: 4/23" in output
     assert "Lands:" in output
-    assert "--allow-splash not set" in output
+    assert "Splash: enabled;" in output
     assert "Card data from 17Lands" in output
 
 
@@ -839,9 +876,24 @@ def _splash_card_database(*, fixing_count: int) -> CardDatabase:
         2: _card(grp_id=2, name="Blue Playable", colors=("U",)),
         3: _card(grp_id=3, name="Second White Playable", colors=("W",)),
         4: _card(grp_id=4, name="Second Blue Playable", colors=("U",)),
-        5: _card(grp_id=5, name="Red Bomb One", colors=("R",)),
-        6: _card(grp_id=6, name="Red Bomb Two", colors=("R",)),
-        7: _card(grp_id=7, name="Red Bomb Three", colors=("R",)),
+        5: _card(
+            grp_id=5,
+            name="Red Bomb One",
+            colors=("R",),
+            mana_cost="{4}{R}",
+        ),
+        6: _card(
+            grp_id=6,
+            name="Red Bomb Two",
+            colors=("R",),
+            mana_cost="{3}{R}",
+        ),
+        7: _card(
+            grp_id=7,
+            name="Double Red Bomb",
+            colors=("R",),
+            mana_cost="{3}{R}{R}",
+        ),
     }
     if fixing_count >= 1:
         cards[8] = _card(
@@ -863,6 +915,16 @@ def _splash_card_database(*, fixing_count: int) -> CardDatabase:
             produced_mana=("R",),
         )
 
+    if fixing_count >= 3:
+        cards[10] = _card(
+            grp_id=10,
+            name="Red Fixing Land Three",
+            colors=(),
+            mana_value=0.0,
+            types=("Land",),
+            produced_mana=("R",),
+        )
+
     return CardDatabase(cards=cards)
 
 
@@ -877,6 +939,15 @@ def _splash_ratings_data() -> SeventeenLandsData:
             (5, "Red Bomb One", "R", 0.70),
             (6, "Red Bomb Two", "R", 0.69),
             (7, "Red Bomb Three", "R", 0.68),
+            *tuple(
+                (
+                    grp_id,
+                    f"Distribution Card {grp_id}",
+                    "B",
+                    0.50 + ((grp_id - 100) * 0.002),
+                )
+                for grp_id in range(100, 120)
+            ),
         )
     )
 

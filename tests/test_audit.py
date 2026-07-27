@@ -104,6 +104,7 @@ def test_audit_records_complete_decision_and_choice_without_duplicates(
     assert decision["algorithm"]["config"]["locked_pick_index"] == (
         PICK_ENGINE.locked_pick_index
     )
+    assert decision["algorithm"]["features"]["splash_enabled"] is True
     assert decision["ratings_snapshot"] is None
     assert decision["commitment"] == {
         "color_weights": {"B": 0.0, "G": 0.0, "R": 0.0, "U": 0.0, "W": 0.0},
@@ -114,9 +115,27 @@ def test_audit_records_complete_decision_and_choice_without_duplicates(
         "pick_index": 1,
         "pool_size": 0,
     }
+    assert decision["splash_state"] == {
+        "active_color": None,
+        "aggressive": False,
+        "base_pair": None,
+        "enabled": True,
+        "fixing_sources": [
+            ["W", 0],
+            ["U", 0],
+            ["B", 0],
+            ["R", 0],
+            ["G", 0],
+        ],
+        "picked_card_count": 0,
+    }
     assert len(decision["candidates"]) == 2
     assert decision["candidates"][0]["scoring"]["source_label"] == "Prior*"
     assert decision["candidates"][0]["rating"]["sample_counts"]["games_in_hand"] == 0
+    assert decision["candidates"][0]["splash"]["classification"] == "open"
+    assert decision["candidates"][0]["splash"]["reasons"] == [
+        "primary colors are still open"
+    ]
 
     choice = records[2]
     assert choice["evaluation_id"] == decision["evaluation_id"]

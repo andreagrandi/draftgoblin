@@ -34,11 +34,13 @@ after corrupted evidence.
 
 - Zero-based pack and pick coordinates plus the absolute pick index.
 - Complete offered pack and pool before the pick.
-- Pick-engine configuration and application version.
+- Pick-engine configuration, optional-feature state, and application version.
 - Ratings dataset formats, fetch timestamps, and aggregate pair records.
 - Score-normalization bounds and inferred color commitment.
 - Every candidate's card metadata, resolved rating, sample counts, fallback
   source, base score, color adjustment, pair tiebreaker, final score, and rank.
+- The active splash color, picked splash-card count, fixing sources, mana-source
+  target, grade and score gates, classification, and exact decision reasons.
 - Exact card order for DG Score, 17Lands win rate, ALSA, and mana-value views.
 
 A pending pick may have more than one evaluation when ratings finish loading or

@@ -55,6 +55,7 @@ class PlainLogWatcher:
         poll_interval: float = POLL_INTERVAL_SECONDS,
         previous_log_path: PathInput | None = None,
         ratings_loader: RatingsLoader | None = None,
+        splash_enabled: bool = True,
     ) -> None:
         self.log_path = Path(log_path).expanduser().resolve(strict=False)
         self.card_database = card_database
@@ -69,6 +70,7 @@ class PlainLogWatcher:
         self.store = DraftPoolStore(app_dir=app_dir)
         self.audit_store = DraftAuditStore(app_dir=self.store.root.parent)
         self.ratings_loader = ratings_loader
+        self.splash_enabled = splash_enabled
         self._pick_engines_by_set: dict[str, PickEngine] = {}
         self._ratings_data_by_set: dict[str, SeventeenLandsData | None] = {}
         self._account_labels: dict[str, str] = {}
@@ -284,6 +286,7 @@ class PlainLogWatcher:
             pool=pool,
             card_database=self.card_database,
             ratings_data=self._ratings_data_for_set(set_code=state.set_code),
+            allow_splash=self.splash_enabled,
         )
         return format_build_result(
             pool=pool,
@@ -297,7 +300,10 @@ class PlainLogWatcher:
         if engine is not None:
             return engine
 
-        engine = PickEngine(ratings_data=self._ratings_data_for_set(set_code=set_code))
+        engine = PickEngine(
+            ratings_data=self._ratings_data_for_set(set_code=set_code),
+            splash_enabled=self.splash_enabled,
+        )
         self._pick_engines_by_set[set_code] = engine
         return engine
 
@@ -327,6 +333,7 @@ def run_plain_watch(
     startup_scan: bool = False,
     stop_after_empty_polls: int | None = None,
     ratings_loader: RatingsLoader | None = None,
+    splash_enabled: bool = True,
 ) -> int:
     """Run watch --plain until interrupted or a test stop condition fires.
     The process returns zero unless a caller catches and maps an exception.
@@ -341,6 +348,7 @@ def run_plain_watch(
         app_dir=app_dir,
         poll_interval=poll_interval,
         ratings_loader=ratings_loader,
+        splash_enabled=splash_enabled,
     )
     output.write("Draftgoblin watch\n")
     output.write(f"Watching: {watcher.log_path}\n")

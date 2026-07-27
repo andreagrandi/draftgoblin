@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from functools import cmp_to_key
 
 from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.config import COLOR_PAIRS, PICK_ENGINE, PickEngineConfig
+from draftgoblin.config import COLOR_PAIRS, PICK_ENGINE, SPLASH, PickEngineConfig
 from draftgoblin.seventeen import (
     FORMAT_RATING_SOURCE,
     NEUTRAL_PRIOR_SOURCE,
@@ -19,6 +19,13 @@ from draftgoblin.seventeen import (
     RatingSourceMetadata,
     ResolvedCardRating,
     SeventeenLandsData,
+)
+from draftgoblin.splash import (
+    SplashAssessment,
+    SplashState,
+    assess_splash_card,
+    card_is_castable_in_pair,
+    infer_splash_state,
 )
 
 
@@ -89,6 +96,7 @@ class ScoredCard:
     pair_tiebreaker_win_rate: float | None
     pair_tiebreaker_weight: float | None
     score_sort_index: int
+    splash: SplashAssessment
 
     @property
     def no_data(self) -> bool:
@@ -117,6 +125,7 @@ class ScoredPack:
     normalization: ScoreNormalization
     source_summary: str
     commitment: ColorCommitment
+    splash_state: SplashState
 
 
 class PickEngine:
@@ -129,9 +138,11 @@ class PickEngine:
         *,
         ratings_data: SeventeenLandsData | None = None,
         config: PickEngineConfig = PICK_ENGINE,
+        splash_enabled: bool = SPLASH.enabled_by_default,
     ) -> None:
         self.ratings_data = ratings_data
         self.config = config
+        self.splash_enabled = splash_enabled
         self.normalization = _normalization_from_data(
             ratings_data=ratings_data,
             config=config,
@@ -156,6 +167,22 @@ class PickEngine:
             ratings_data=self.ratings_data,
             config=self.config,
         )
+        splash_state = infer_splash_state(
+            pool_grp_ids=pool_grp_ids,
+            card_database=card_database,
+            ratings_data=self.ratings_data,
+            base_pair=(
+                commitment.inferred_pair
+                if commitment.level > 0.0
+                else None
+            ),
+            enabled=self.splash_enabled,
+        )
+        best_on_color_score = self._best_on_color_score(
+            offered_grp_ids=offered_grp_ids,
+            card_database=card_database,
+            commitment=commitment,
+        )
         scored_cards = tuple(
             self._score_card(
                 grp_id=grp_id,
@@ -163,6 +190,8 @@ class PickEngine:
                 card_database=card_database,
                 ratings_data=self.ratings_data,
                 commitment=commitment,
+                splash_state=splash_state,
+                best_on_color_score=best_on_color_score,
             )
             for index, grp_id in enumerate(offered_grp_ids)
         )
@@ -178,7 +207,42 @@ class PickEngine:
             normalization=self.normalization,
             source_summary=_source_summary(cards=sorted_cards),
             commitment=commitment,
+            splash_state=splash_state,
         )
+
+    def _best_on_color_score(
+        self,
+        *,
+        offered_grp_ids: tuple[int, ...],
+        card_database: CardDatabase,
+        commitment: ColorCommitment,
+    ) -> float | None:
+        pair = commitment.inferred_pair
+        if pair is None:
+            return None
+
+        scores: list[float] = []
+        for grp_id in offered_grp_ids:
+            card = card_database.lookup(grp_id=grp_id)
+            if card.unknown:
+                continue
+            if not card_is_castable_in_pair(card=card, base_pair=pair):
+                continue
+
+            rating = _rating_for(
+                ratings_data=self.ratings_data,
+                grp_id=grp_id,
+                config=self.config,
+                commitment=commitment,
+            )
+            scores.append(
+                _normalized_score(
+                    adjusted_rating=_base_rating(rating=rating, config=self.config),
+                    normalization=self.normalization,
+                )
+            )
+
+        return max(scores, default=None)
 
     def _score_card(
         self,
@@ -188,6 +252,8 @@ class PickEngine:
         card_database: CardDatabase,
         ratings_data: SeventeenLandsData | None,
         commitment: ColorCommitment,
+        splash_state: SplashState,
+        best_on_color_score: float | None,
     ) -> ScoredCard:
         card = card_database.lookup(grp_id=grp_id)
         rating = _rating_for(
@@ -197,15 +263,28 @@ class PickEngine:
             commitment=commitment,
         )
         base_rating = _base_rating(rating=rating, config=self.config)
-        color_fit = _color_fit(card=card, commitment=commitment)
+        base_score = _normalized_score(
+            adjusted_rating=base_rating,
+            normalization=self.normalization,
+        )
+        global_rating = _rating_for(
+            ratings_data=self.ratings_data,
+            grp_id=grp_id,
+            config=self.config,
+        )
+        splash = assess_splash_card(
+            card=card,
+            grade=global_rating.letter_grade,
+            base_score=base_score,
+            best_on_color_score=best_on_color_score,
+            locked=commitment.locked,
+            state=splash_state,
+        )
+        color_fit = splash.classification
         color_factor = _color_factor(
             color_fit=color_fit,
             commitment=commitment,
             config=self.config,
-        )
-        base_score = _normalized_score(
-            adjusted_rating=base_rating,
-            normalization=self.normalization,
         )
         raw_score = _clamp(
             value=base_score * color_factor,
@@ -239,6 +318,7 @@ class PickEngine:
             pair_tiebreaker_win_rate=pair_tiebreaker_win_rate,
             pair_tiebreaker_weight=pair_tiebreaker_weight,
             score_sort_index=original_index,
+            splash=splash,
         )
 
 
@@ -250,12 +330,17 @@ def score_pack(
     config: PickEngineConfig = PICK_ENGINE,
     pool_grp_ids: tuple[int, ...] = (),
     pick_index: int | None = None,
+    splash_enabled: bool = SPLASH.enabled_by_default,
 ) -> ScoredPack:
     """Convenience wrapper for callers that do not keep an engine instance.
     The reusable PickEngine class avoids rebuilding normalization per pack.
     """
 
-    return PickEngine(ratings_data=ratings_data, config=config).score_pack(
+    return PickEngine(
+        ratings_data=ratings_data,
+        config=config,
+        splash_enabled=splash_enabled,
+    ).score_pack(
         offered_grp_ids=offered_grp_ids,
         card_database=card_database,
         pool_grp_ids=pool_grp_ids,
@@ -386,22 +471,6 @@ def _commitment_level(*, pick_index: int, config: PickEngineConfig) -> float:
     )
 
 
-def _color_fit(*, card: CardInfo, commitment: ColorCommitment) -> str:
-    if card.unknown:
-        return "unknown"
-
-    if not card.colors:
-        return "colorless"
-
-    if commitment.level <= 0.0 or commitment.inferred_pair is None:
-        return "open"
-
-    if all(color in commitment.inferred_pair for color in card.colors):
-        return "on-color"
-
-    return "off-color"
-
-
 def _color_factor(
     *,
     color_fit: str,
@@ -418,6 +487,21 @@ def _color_factor(
     if color_fit == "off-color":
         penalty = 1.0 - config.off_color_penalty_multiplier
         factor = 1.0 - (commitment.level * penalty)
+        return max(0.0, factor)
+
+    if color_fit == "splash-ready":
+        penalty = 1.0 - SPLASH.ready_score_multiplier
+        factor = 1.0 - (commitment.level * penalty)
+        return max(0.0, factor)
+
+    if color_fit == "splash-speculative":
+        penalty = 1.0 - SPLASH.speculative_score_multiplier
+        factor = 1.0 - (commitment.level * penalty)
+        return max(0.0, factor)
+
+    if color_fit == "splash-fixer":
+        bonus = SPLASH.fixer_score_multiplier - 1.0
+        factor = 1.0 + (commitment.level * bonus)
         return max(0.0, factor)
 
     return 1.0

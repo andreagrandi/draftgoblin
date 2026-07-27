@@ -52,7 +52,7 @@ Selected spells: 23/23
 Creature count: 17 (target 14-17)
 Two-drops MV 2: 5 (minimum 5)
 Expensive spells MV >= 6: 3 (soft cap 3)
-Splash: disabled (--allow-splash not set; off-pair cards excluded)
+Splash: enabled; no eligible A- or better single-pip third-color card in the pool
 Relaxation order: expensive-spell cap -> minimum two-drop quota -> creature ceiling -> creature floor -> eligible-card shortage
 Applied relaxations: none
 Bench:

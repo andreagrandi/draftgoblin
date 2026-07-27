@@ -419,6 +419,9 @@ def _decision_payload(
             "name": "draftgoblin.pickengine.PickEngine",
             "app_version": app_version,
             "config": asdict(config),
+            "features": {
+                "splash_enabled": scored_pack.splash_state.enabled,
+            },
         },
         "ratings_snapshot": _ratings_snapshot(ratings_data=ratings_data),
         "normalization": {
@@ -435,6 +438,7 @@ def _decision_payload(
             "phase": scored_pack.commitment.phase,
             "locked": scored_pack.commitment.locked,
         },
+        "splash_state": asdict(scored_pack.splash_state),
         "rankings": rankings,
         "recommended_grp_id": rankings["score"][0] if rankings["score"] else None,
         "candidates": [
@@ -490,6 +494,7 @@ def _candidate_payload(*, scored_card: ScoredCard, rank: int) -> AuditRecord:
             "pair_tiebreaker_weight": scored_card.pair_tiebreaker_weight,
             "score_sort_index": scored_card.score_sort_index,
         },
+        "splash": asdict(scored_card.splash),
     }
 
 

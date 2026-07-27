@@ -8,6 +8,30 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class SplashConfig:
+    """Conservative Limited splash defaults shared by picks and builds.
+    Keep thresholds explicit so replay data can calibrate them safely.
+    """
+
+    enabled_by_default: bool = True
+    maximum_colors: int = 1
+    maximum_cards: int = 2
+    maximum_off_color_pips: int = 1
+    single_card_sources: int = 3
+    multiple_card_sources: int = 4
+    planned_basic_sources: int = 1
+    supported_minimum_grade: str = "A-"
+    speculative_minimum_grade: str = "A"
+    minimum_score_advantage: float = 5.0
+    ready_score_multiplier: float = 0.95
+    speculative_score_multiplier: float = 0.85
+    fixer_score_multiplier: float = 1.05
+    aggressive_minimum_spells: int = 8
+    aggressive_average_mana_value_max: float = 2.7
+    aggressive_minimum_two_drop_ratio: float = 0.3
+
+
+@dataclass(frozen=True)
 class DeckBuilderConfig:
     """Deck-builder structural defaults.
     Keep values aligned with Limited consensus until data-backed tuning exists.
@@ -32,7 +56,6 @@ class DeckBuilderConfig:
     expensive_spell_mana_value: float = 6.0
     near_tie_creature_preference_points: float = 2.0
     splash_max_cards: int = 2
-    splash_minimum_fixing_sources: int = 2
     splash_elite_score_minimum: float = 70.0
     bench_card_count: int = 5
     land_count_iteration_limit: int = 4
@@ -91,6 +114,7 @@ class PickEngineConfig:
 
 DECK_BUILDER = DeckBuilderConfig()
 PICK_ENGINE = PickEngineConfig()
+SPLASH = SplashConfig()
 
 POLL_INTERVAL_SECONDS = 1.0
 RATINGS_CACHE_TTL_HOURS = 24

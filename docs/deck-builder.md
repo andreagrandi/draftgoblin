@@ -10,13 +10,13 @@ The `build` subcommand runs the v1 deck-builder stages that are available in pla
 
 ## Eligible spells
 
-By default, the spell selector considers only cards that are castable in the chosen pair:
+The spell selector always considers cards that are castable in the chosen pair:
 
 - cards whose colors are all in the chosen pair;
 - colorless nonland spells, including colorless artifacts;
 - in-pair artifacts and other in-pair spells.
 
-`--allow-splash` is off by default. When enabled, the selector may add at most two elite off-pair cards, and only when the pool contains at least two fixing sources for the splash color. Fixing is counted from drafted cards that are already playable in the base pair and produce the off-pair color.
+Conservative splashing is on by default and can be disabled with `--no-splash` or through the TUI configuration opened with `c`. The builder uses the same shared policy as live picks: one third color, at most two `A-` or better cards, and at most one off-color mana pip per card. One card requires three sources and two cards require four. The builder may plan one basic land of the splash color, so the remaining sources must be deterministic drafted fixing lands usable by the primary pair.
 
 ## Structural defaults
 
@@ -34,8 +34,11 @@ All tunables live in `draftgoblin/config.py` under `DeckBuilderConfig`:
 - `near_tie_creature_preference_points = 2.0`
 - `maximum_unresolved_metadata_ratio = 0.25`
 - `splash_max_cards = 2`
-- `splash_minimum_fixing_sources = 2`
 - `splash_elite_score_minimum = 70.0`
+- shared splash grade floor: `A-`
+- shared splash-color limit: `1`
+- shared source targets: `3` for one card, `4` for two cards
+- planned splash basics: at most `1`
 - `main_color_source_floor = 7`
 - `structure_maindeck_rate_threshold = 0.5`
 
@@ -51,9 +54,9 @@ Before pair selection, the builder validates that enough picked cards have card 
 
 ## Mana base
 
-Drafted in-pair nonbasic lands are slotted first, up to the land-count target. A nonbasic land is in-pair when its produced mana is known and all produced colors are in the chosen pair. If splash cards are selected, nonbasic lands that produce the splash color may also be included.
+Drafted in-pair nonbasic lands are slotted first, up to the land-count target. A nonbasic land is in-pair when its produced mana is known and all produced colors are in the chosen pair. If splash cards are selected, nonbasic lands that produce the one splash color are included and the builder adds at most one basic of that color to meet the shared source target.
 
-Remaining slots are basics. Basics are split proportionally to colored pips in the final spell list, with a 7-source floor for each main color when the available land slots can satisfy it. Ties and leftover basics round toward the color with heavier double-pip requirements.
+Remaining slots are basics. After reserving any required splash basic, the other basics are split proportionally to colored pips in the final spell list, with a 7-source floor for each main color when the available land slots can satisfy it. Ties and leftover basics round toward the color with heavier double-pip requirements.
 
 For 16-land aggressive builds, the output prints the caveat that basics can be preferable to slow taplands when curve pressure matters.
 
@@ -79,4 +82,3 @@ When the pool cannot satisfy every default and still produce the target spell co
 5. eligible-card shortage.
 
 The build sheet prints both the relaxation order and the relaxations that were actually applied.
-
