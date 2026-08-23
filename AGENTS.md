@@ -15,7 +15,7 @@ Before claiming any implementation is done, perform end-to-end verification of t
 
 ## Epic Completion Workflow
 
-When finishing the last remaining open ticket belonging to an epic, audit the full epic against the implementation and its acceptance criteria. Do not assume that the epic is complete merely because all of its planned child tickets have been completed.
+When working on the last remaining open ticket belonging to an epic, do not close either the ticket or the epic until the ticket's implementation has been merged. Once the implementation is merged and the final ticket is closed, audit the full epic against the merged implementation and its acceptance criteria. Do not assume that the epic is complete merely because all of its planned child tickets have been completed.
 
 - If any work required by the epic remains, create an additional child ticket covering the missing work and leave the epic open.
-- If the whole epic has been implemented and verified, close the final child ticket and the epic together.
+- If the whole epic has been implemented and verified, close the epic only after the final child ticket has been closed.
