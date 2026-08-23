@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn
 
 from draftgoblin.audit import load_draft_audit_records
 from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
 from draftgoblin.pool import draft_state_path, load_draft_state
-from draftgoblin.seventeen import SeventeenLandsError
+from draftgoblin.seventeen import (
+    QUICK_DRAFT_FORMAT,
+    RatingSampleCounts,
+    SeventeenCardStats,
+    SeventeenLandsData,
+    SeventeenLandsError,
+    SeventeenLandsFormatData,
+)
 from draftgoblin.watch import PlainLogWatcher
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
@@ -35,6 +43,12 @@ def test_plain_watch_processes_appended_lines_incrementally(tmp_path: Path) -> N
     _append_lines(path=log_path, lines=fixture_lines[:7])
     pack_output = watcher.poll_once()
 
+    assert pack_output.startswith(
+        "Active account: FixturePlayer (FIXTURECLIENTID1234567890)\n"
+        "Status: active account FixturePlayer (FIXTURECLIENTID1234567890)\n\n"
+        "Draft started: QuickDraft_MSH_20260702 "
+        "(set MSH, draft 00000000-0000-4000-8000-000000000004)\n"
+    )
     assert "Active account: FixturePlayer (FIXTURECLIENTID1234567890)" in pack_output
     assert "Draft started: QuickDraft_MSH_20260702" in pack_output
     assert "Status: active account FixturePlayer" in pack_output
@@ -42,6 +56,11 @@ def test_plain_watch_processes_appended_lines_incrementally(tmp_path: Path) -> N
     assert "Pack 1 Pick 1" in pack_output
     assert "Fixture Spider (grpId 105097)" in pack_output
     assert "Chosen card:" not in pack_output
+    assert pack_output.index("Status: active account FixturePlayer") < (
+        pack_output.index("Pack 1 Pick 1")
+    )
+    assert pack_output.index("Pack 1 Pick 1") < pack_output.index("Data source: ")
+    assert pack_output.index("Data source: ") < pack_output.index("Offered cards:")
 
     _append_lines(path=log_path, lines=fixture_lines[7:8])
     pick_output = watcher.poll_once()
@@ -71,6 +90,33 @@ def test_plain_watch_renders_accountless_draft_event_without_crashing(
 
     assert "Draft started: QuickDraft_MSH_20260703" in output
     assert "Status: active account unknown, draft new-draft" in output
+
+
+def test_plain_watch_scores_accountless_pack_through_shared_session(
+    tmp_path: Path,
+) -> None:
+    watcher = PlainLogWatcher(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        poll_interval=0.01,
+    )
+
+    output = watcher.process_lines(
+        lines=[
+            _pack_line(
+                event_name="QuickDraft_MSH_20260703",
+                pack_number=0,
+                pick_number=0,
+                draft_pack=(105097, 104894),
+                picked_cards=(),
+            )
+        ]
+    )
+
+    assert "Status: active account unknown, pick P1P1" in output
+    assert "Pack 1 Pick 1" in output
+    assert "Fixture Spider (grpId 105097)" in output
 
 
 def test_plain_watch_does_not_assign_post_login_draft_events_to_prior_account(
@@ -122,6 +168,39 @@ def test_plain_watch_degrades_to_neutral_when_ratings_loader_fails(
     assert "data neutral prior" in output
     assert "Fixture Spider (grpId 105097)" in output
     assert "Prior*" in output
+
+
+def test_plain_watch_loads_locked_pair_ratings_through_shared_session(
+    tmp_path: Path,
+) -> None:
+    pair_loads: list[str] = []
+    ratings_data = _lazy_pair_ratings_data(pair_loads=pair_loads)
+    watcher = PlainLogWatcher(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_pair_ratings_card_database(),
+        poll_interval=0.01,
+        ratings_loader=lambda set_code: ratings_data,
+    )
+
+    output = watcher.process_lines(
+        lines=[
+            _pack_line(
+                event_name="QuickDraft_TST_20260703",
+                pack_number=1,
+                pick_number=1,
+                draft_pack=(3, 4),
+                picked_cards=(1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1),
+            )
+        ]
+    )
+
+    assert pair_loads == ["WU"]
+    assert "commitment 100% (locked)" in output
+    assert "80.0%" in output
+    assert output.index("Pair Upgrade (grpId 3)") < output.index(
+        "All-Decks Leader (grpId 4)"
+    )
 
 
 def test_plain_watch_recovers_rotation_tail_without_loss_or_duplication(
@@ -189,6 +268,14 @@ def test_plain_watch_account_switch_announces_and_separates_state(
     assert "Account switched: First (ACCOUNT-A) -> Second (ACCOUNT-B)" in output
     assert "Status: active account Second (ACCOUNT-B), pick P1P1" in output
     assert "inferred pair open, commitment 0% (open), pool 0" in output
+    assert output.count("Pool: watch ACCOUNT-A/draft-a") == 1
+    assert output.count("Pool: watch ACCOUNT-B/draft-b") == 1
+    assert output.index("Pool: watch ACCOUNT-A/draft-a") < output.index(
+        "Account switched: First (ACCOUNT-A) -> Second (ACCOUNT-B)"
+    )
+    assert output.index("Account switched: First (ACCOUNT-A) -> Second (ACCOUNT-B)") < (
+        output.index("Pool: watch ACCOUNT-B/draft-b")
+    )
 
     first_state = load_draft_state(
         account_id="ACCOUNT-A",
@@ -250,6 +337,104 @@ def _small_card_database() -> CardDatabase:
                 types=("Sorcery",),
             ),
         }
+    )
+
+
+def _pair_ratings_card_database() -> CardDatabase:
+    return CardDatabase(
+        cards={
+            1: CardInfo(
+                grp_id=1,
+                name="White Pool Card",
+                colors=("W",),
+                mana_value=2.0,
+                rarity="common",
+                types=("Creature",),
+            ),
+            2: CardInfo(
+                grp_id=2,
+                name="Blue Pool Card",
+                colors=("U",),
+                mana_value=2.0,
+                rarity="common",
+                types=("Creature",),
+            ),
+            3: CardInfo(
+                grp_id=3,
+                name="Pair Upgrade",
+                colors=("W",),
+                mana_value=3.0,
+                rarity="common",
+                types=("Creature",),
+            ),
+            4: CardInfo(
+                grp_id=4,
+                name="All-Decks Leader",
+                colors=("U",),
+                mana_value=3.0,
+                rarity="common",
+                types=("Creature",),
+            ),
+        }
+    )
+
+
+def _lazy_pair_ratings_data(*, pair_loads: list[str]) -> SeventeenLandsData:
+    fetched_at = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+    pair_data = SeventeenLandsFormatData(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        fetched_at=fetched_at,
+        card_ratings={
+            3: _ratings_stats(grp_id=3, name="Pair Upgrade", win_rate=0.80),
+            4: _ratings_stats(grp_id=4, name="All-Decks Leader", win_rate=0.60),
+        },
+        pair_win_rates={},
+    )
+
+    def load_pair(pair: str) -> SeventeenLandsFormatData:
+        pair_loads.append(pair)
+        return pair_data
+
+    return SeventeenLandsData(
+        set_code="TST",
+        requested_format=QUICK_DRAFT_FORMAT,
+        primary=SeventeenLandsFormatData(
+            set_code="TST",
+            event_format=QUICK_DRAFT_FORMAT,
+            fetched_at=fetched_at,
+            card_ratings={
+                3: _ratings_stats(grp_id=3, name="Pair Upgrade", win_rate=0.50),
+                4: _ratings_stats(
+                    grp_id=4,
+                    name="All-Decks Leader",
+                    win_rate=0.65,
+                ),
+            },
+            pair_win_rates={},
+        ),
+        fallback=None,
+        pair_card_ratings_loader=load_pair,
+    )
+
+
+def _ratings_stats(*, grp_id: int, name: str, win_rate: float) -> SeventeenCardStats:
+    return SeventeenCardStats(
+        grp_id=grp_id,
+        name=name,
+        color="",
+        rarity="common",
+        average_last_seen_at=3.0,
+        gih_win_rate=win_rate,
+        opening_hand_win_rate=win_rate,
+        drawn_improvement_win_rate=0.0,
+        sample_counts=RatingSampleCounts(
+            seen=2_000,
+            picked=1_500,
+            games_played=1_200,
+            opening_hand=800,
+            games_in_hand=1_000,
+        ),
     )
 
 

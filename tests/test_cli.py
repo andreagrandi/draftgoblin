@@ -4,20 +4,30 @@ import json
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
 from draftgoblin import __version__
 from draftgoblin import config
 from draftgoblin import cli
+from draftgoblin.audit import load_draft_audit_records
 from draftgoblin.carddb import CardDatabase
 from draftgoblin.cli import build_parser, main
-from draftgoblin.pool import DraftState, save_draft_state
-from draftgoblin.seventeen import seventeen_lands_structure_targets_cache_path
+from draftgoblin.pool import DraftState, load_draft_state, save_draft_state
+from draftgoblin.seventeen import (
+    SeventeenLandsError,
+    seventeen_lands_structure_targets_cache_path,
+)
 
 SCRYFALL_BULK_SAMPLE_PATH = (
     Path(__file__).parent / "fixtures" / "scryfall-default-cards-sample.jsonl"
 )
+QUICK_DRAFT_FIXTURE_PATH = (
+    Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
+)
+FIXTURE_ACCOUNT_ID = "FIXTURECLIENTID1234567890"
+FIXTURE_DRAFT_ID = "00000000-0000-4000-8000-000000000004"
 
 
 def test_package_version_matches_installed_distribution_metadata() -> None:
@@ -157,6 +167,75 @@ def test_watch_plain_once_ignores_quick_draft_course_snapshot_outside_botdraft(
     assert exit_code == 0
     assert "Mode: plain-text" in captured.out
     assert captured.err == ""
+
+
+def test_watch_plain_actual_entrypoint_processes_complete_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail_ratings_load(
+        *,
+        set_code: str,
+        app_dir: Path | None = None,
+        progress_callback: object | None = None,
+    ) -> NoReturn:
+        raise SeventeenLandsError(f"ratings unavailable for {set_code}")
+
+    monkeypatch.setattr(
+        cli,
+        "load_or_refresh_17lands_data",
+        fail_ratings_load,
+    )
+    log_path = tmp_path / "Player.log"
+    log_path.write_text(
+        QUICK_DRAFT_FIXTURE_PATH.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    app_dir = tmp_path / "app"
+
+    exit_code = main(
+        argv=[
+            "watch",
+            "--log-path",
+            str(log_path),
+            "--plain",
+            "--bulk-file",
+            str(SCRYFALL_BULK_SAMPLE_PATH),
+            "--app-dir",
+            str(app_dir),
+            "--once",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out.count("Pack ") == 42
+    assert captured.out.count("Chosen card:") == 42
+    assert "Draft complete: 42 cards (explicit completion)" in captured.out
+    assert "Suggested deck" in captured.out
+    assert (
+        "Pool: watch FIXTURECLIENTID1234567890/"
+        "00000000-0000-4000-8000-000000000004"
+    ) in captured.out
+    assert captured.err == ""
+
+    state = load_draft_state(
+        account_id=FIXTURE_ACCOUNT_ID,
+        draft_id=FIXTURE_DRAFT_ID,
+        app_dir=app_dir,
+    )
+    assert state.completed is True
+    assert state.chosen_pick_count == 42
+    assert len(state.pool_grp_ids) == 42
+    audit_records = load_draft_audit_records(
+        account_id=FIXTURE_ACCOUNT_ID,
+        draft_id=FIXTURE_DRAFT_ID,
+        app_dir=app_dir,
+    )
+    assert len(audit_records) == 86
+    assert audit_records[-1]["record_type"] == "draft_completed"
 
 
 def test_watch_tui_once_is_default_mode(
