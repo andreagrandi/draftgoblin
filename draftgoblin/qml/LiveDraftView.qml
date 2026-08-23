@@ -8,6 +8,7 @@ Item {
     id: root
 
     required property var sessionState
+    required property var recommendationModel
     readonly property bool hasDraft: sessionState.draft !== null
         && sessionState.draft !== undefined
     required property bool narrow
@@ -78,7 +79,7 @@ Item {
                     return 0
                 }
                 Accessible.name: "Recommendation ranking"
-                onActivated: mockProvider.changeRanking(model[currentIndex].key)
+                onActivated: sessionProvider.changeRanking(model[currentIndex].key)
             }
         }
 
@@ -194,7 +195,7 @@ Item {
                         Layout.fillHeight: true
                         spacing: 5
                         clip: true
-                        model: root.sessionState.recommendations.cards
+                        model: root.recommendationModel
                         Accessible.name: "Ranked recommendations"
 
                         delegate: RecommendationRow {
@@ -204,7 +205,7 @@ Item {
                             recommendation: modelData
                             selected: root.sessionState.recommendations.selected_grp_id === modelData.card.grp_id
                             wide: true
-                            onChosen: grpId => mockProvider.chooseRecommendation(grpId)
+                            onChosen: grpId => sessionProvider.chooseRecommendation(grpId)
                         }
                     }
                 }
@@ -236,7 +237,7 @@ Item {
                 Layout.minimumHeight: 260
                 spacing: 6
                 clip: true
-                model: root.sessionState.recommendations.cards
+                model: root.recommendationModel
                 Accessible.name: "Ranked recommendations"
 
                 delegate: RecommendationRow {
@@ -246,7 +247,7 @@ Item {
                     recommendation: modelData
                     selected: root.sessionState.recommendations.selected_grp_id === modelData.card.grp_id
                     wide: false
-                    onChosen: grpId => mockProvider.chooseRecommendation(grpId)
+                    onChosen: grpId => sessionProvider.chooseRecommendation(grpId)
                 }
             }
 

@@ -70,9 +70,13 @@ The app loads card metadata when needed, watches Arena's standard log location, 
 
 Live recommendations currently support Quick Draft. Windows support is best-effort.
 
-## Desktop GUI mockup development
+## Desktop GUI
 
-The deterministic PySide6/QML desktop mockup is available for visual review before production GUI integration. See the [desktop GUI mockup guide](docs/gui-mockup.md) for the launch command, selectable states, and responsive review targets.
+Install the optional `gui` dependencies and run `draftgoblin-gui` for the live
+PySide6/QML application. The deterministic mock provider remains available for
+visual development with `draftgoblin-gui --provider mock`. See the
+[desktop GUI guide](docs/gui-mockup.md) for live and mock launch options,
+selectable states, and responsive review targets.
 
 ## Local draft audit data
 

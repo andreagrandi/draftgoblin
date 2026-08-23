@@ -6,6 +6,8 @@ Rectangle {
     id: root
 
     required property var sessionState
+    required property var provider
+
     signal settingsRequested()
 
     color: Theme.surfaceLow
@@ -72,11 +74,12 @@ Rectangle {
 
         ComboBox {
             id: scenarioSelector
+            visible: root.provider.mockMode
             Layout.preferredWidth: 126
-            model: mockProvider.scenarios
-            currentIndex: Math.max(0, mockProvider.scenarios.indexOf(mockProvider.scenario))
+            model: root.provider.scenarios
+            currentIndex: Math.max(0, root.provider.scenarios.indexOf(root.provider.scenario))
             Accessible.name: "Representative state"
-            onActivated: mockProvider.selectScenario(currentText)
+            onActivated: root.provider.selectScenario(currentText)
 
             background: Rectangle {
                 color: Theme.surfaceHigh

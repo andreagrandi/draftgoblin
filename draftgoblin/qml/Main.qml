@@ -10,15 +10,16 @@ ApplicationWindow {
     minimumWidth: 680
     minimumHeight: 640
     visible: true
-    title: "Draftgoblin · QML Mockup"
+    title: applicationTitle
     color: Theme.background
 
     property string currentSurface: initialSurface
     readonly property bool narrow: width < Theme.narrowBreakpoint
-    readonly property var sessionState: mockProvider.state
+    readonly property var sessionState: sessionProvider.state
 
     header: AppBar {
         sessionState: window.sessionState
+        provider: sessionProvider
         onSettingsRequested: window.currentSurface = "settings"
     }
 
@@ -50,6 +51,7 @@ ApplicationWindow {
 
             LiveDraftView {
                 sessionState: window.sessionState
+                recommendationModel: sessionProvider.recommendationsModel
                 narrow: window.narrow
             }
 

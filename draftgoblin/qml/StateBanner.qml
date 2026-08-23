@@ -36,7 +36,7 @@ Rectangle {
             Label {
                 Layout.fillWidth: true
                 text: root.hasError
-                    ? "Recoverable error"
+                    ? root.activeError.recoverable ? "Recoverable error" : "Application error"
                     : root.hasWarning
                         ? "Ratings unavailable"
                         : root.hasProgress ? root.sessionState.progress.message : ""
@@ -72,19 +72,19 @@ Rectangle {
         Button {
             visible: root.hasWarning
             text: "Download ratings"
-            onClicked: mockProvider.requestRatings()
+            onClicked: sessionProvider.requestRatings()
         }
 
         Button {
             visible: root.hasError && root.activeError.recoverable
             text: "Retry"
-            onClicked: mockProvider.retryError(root.activeError.error_id)
+            onClicked: sessionProvider.retryError(root.activeError.error_id)
         }
 
         Button {
             visible: root.hasError
             text: "Dismiss"
-            onClicked: mockProvider.dismissError(root.activeError.error_id)
+            onClicked: sessionProvider.dismissError(root.activeError.error_id)
         }
     }
 }

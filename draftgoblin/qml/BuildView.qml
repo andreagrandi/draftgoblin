@@ -52,7 +52,7 @@ Item {
                 onClicked: {
                     const option = pairSelector.currentIndex >= 0
                         ? root.build.pair_options[pairSelector.currentIndex] : null
-                    mockProvider.requestBuild(option ? option.pair : "")
+                    sessionProvider.requestBuild(option ? option.pair : "")
                 }
             }
         }

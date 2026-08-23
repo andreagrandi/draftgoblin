@@ -82,10 +82,13 @@ FocusScope {
             Label {
                 visible: !root.wide
                 Layout.fillWidth: true
-                text: (recommendation.card.colors.length > 0
-                    ? recommendation.card.colors.join(" · ") : "Colorless")
-                    + "   ·   " + recommendation.color_fit
-                    + "   ·   ALSA " + recommendation.average_last_seen_at.toFixed(2)
+                text: (root.recommendation.card.colors.length > 0
+                    ? root.recommendation.card.colors.join(" · ") : "Colorless")
+                    + "   ·   " + root.recommendation.color_fit
+                    + "   ·   ALSA "
+                    + (root.recommendation.average_last_seen_at !== null
+                        && root.recommendation.average_last_seen_at !== undefined
+                        ? root.recommendation.average_last_seen_at.toFixed(2) : "—")
                 color: Theme.textMuted
                 font.pixelSize: 11
                 elide: Text.ElideRight
