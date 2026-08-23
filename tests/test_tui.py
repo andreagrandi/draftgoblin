@@ -262,11 +262,16 @@ async def _assert_cached_thin_ratings_are_explained(tmp_path: Path) -> None:
 
     async with app.run_test(size=(140, 30)) as pilot:
         app.process_lines(lines=_first_pack_lines())
-        for _ in range(10):
+        for _ in range(40):
             await pilot.pause(0.05)
-            if "MSH" not in app.loading_rating_sets:
+            if (
+                app.session.snapshot.ratings.phase == DataLoadPhase.READY
+                and app.session.snapshot.ratings.total_cards == 14
+            ):
                 break
 
+        assert app.session.snapshot.ratings.phase == DataLoadPhase.READY
+        assert app.session.snapshot.ratings.total_cards == 14
         assert (
             "Data: neutral prior (17Lands cached; samples unavailable or thin)"
             in _status_text(app=app)
@@ -947,11 +952,16 @@ async def _assert_pack_rows_show_17lands_stats(tmp_path: Path) -> None:
 
     async with app.run_test(size=(140, 24)) as pilot:
         app.process_lines(lines=_first_pack_lines())
-        for _ in range(20):
+        for _ in range(40):
             await pilot.pause(0.05)
-            if "MSH" not in app.loading_rating_sets:
+            if (
+                app.session.snapshot.ratings.phase == DataLoadPhase.READY
+                and app.session.snapshot.ratings.total_cards == 14
+            ):
                 break
 
+        assert app.session.snapshot.ratings.phase == DataLoadPhase.READY
+        assert app.session.snapshot.ratings.total_cards == 14
         table = app.query_one("#pack-table", DataTable)
         rows = [table.get_row_at(index) for index in range(table.row_count)]
         card_index = app.visible_column_keys.index("card")
@@ -976,11 +986,16 @@ async def _assert_status_shows_close_pick_confidence(tmp_path: Path) -> None:
 
     async with app.run_test(size=(150, 24)) as pilot:
         app.process_lines(lines=_first_pack_lines())
-        for _ in range(20):
+        for _ in range(40):
             await pilot.pause(0.05)
-            if "MSH" not in app.loading_rating_sets:
+            if (
+                app.session.snapshot.ratings.phase == DataLoadPhase.READY
+                and app.session.snapshot.ratings.total_cards == 14
+            ):
                 break
 
+        assert app.session.snapshot.ratings.phase == DataLoadPhase.READY
+        assert app.session.snapshot.ratings.total_cards == 14
         status = _status_text(app=app)
 
         assert "Ranking: DG Score" in status
@@ -2025,11 +2040,16 @@ async def _assert_missing_ratings_download_rescores_pack(tmp_path: Path) -> None
             )
 
             release.set()
-            for _ in range(20):
+            for _ in range(40):
                 await pilot.pause(0.05)
-                if "MSH" not in app.loading_rating_sets:
+                if (
+                    app.session.snapshot.ratings.phase == DataLoadPhase.READY
+                    and app.session.snapshot.ratings.total_cards == 14
+                ):
                     break
 
+            assert app.session.snapshot.ratings.phase == DataLoadPhase.READY
+            assert app.session.snapshot.ratings.total_cards == 14
             assert "MSH" not in app.loading_rating_sets
             assert not progress_bar.display
             ready_notice = str(

@@ -1444,15 +1444,14 @@ class LiveSession:
             if self._active_set_code_value != set_code:
                 return
 
-            self._publish(
-                snapshot=replace(
-                    self.snapshot,
-                    ratings=state,
-                    progress=None,
-                    errors=self._with_error(error=session_error),
-                )
+            failed_snapshot = replace(
+                self.snapshot,
+                ratings=state,
+                progress=None,
+                errors=self._with_error(error=session_error),
             )
-            self._score_current_pack()
+            if not self._score_current_pack_locked(snapshot=failed_snapshot):
+                self._publish(snapshot=failed_snapshot)
             return
 
         self._ratings_data_by_set[set_code] = ratings_data
@@ -1467,17 +1466,16 @@ class LiveSession:
         if self._active_set_code_value != set_code:
             return
 
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                ratings=state,
-                progress=None,
-                errors=self._without_error_id(
-                    error_id=self._ratings_error_id(set_code=set_code),
-                ),
-            )
+        ready_snapshot = replace(
+            self.snapshot,
+            ratings=state,
+            progress=None,
+            errors=self._without_error_id(
+                error_id=self._ratings_error_id(set_code=set_code),
+            ),
         )
-        self._score_current_pack()
+        if not self._score_current_pack_locked(snapshot=ready_snapshot):
+            self._publish(snapshot=ready_snapshot)
 
     def _publish_active_ratings_state(self, *, state: RatingsState) -> None:
         with self._state_lock:
@@ -1518,7 +1516,11 @@ class LiveSession:
         with self._state_lock:
             self._score_current_pack_locked()
 
-    def _score_current_pack_locked(self) -> None:
+    def _score_current_pack_locked(
+        self,
+        *,
+        snapshot: LiveSessionSnapshot | None = None,
+    ) -> bool:
         event = self._current_pack_event
         database = self._card_database
         if (
@@ -1526,7 +1528,7 @@ class LiveSession:
             or database is None
             or event.set_code.upper() != self._active_set_code_value
         ):
-            return
+            return False
 
         ratings_data = self._ratings_data_for_scoring(set_code=event.set_code)
         engine = PickEngine(
@@ -1556,7 +1558,7 @@ class LiveSession:
             )
         self._publish(
             snapshot=replace(
-                self.snapshot,
+                self.snapshot if snapshot is None else snapshot,
                 ratings=ratings,
                 recommendations=recommendations,
                 pool=self._pool_state(
@@ -1565,6 +1567,7 @@ class LiveSession:
                 ),
             )
         )
+        return True
 
     def _recommendation_state(self, *, scored_pack: ScoredPack) -> RecommendationState:
         ranked_cards = rank_scored_cards(
