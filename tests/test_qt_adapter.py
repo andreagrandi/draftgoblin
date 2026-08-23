@@ -3,24 +3,33 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
 from typing import cast
 
 import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QCoreApplication, QObject, Slot
+from PySide6.QtCore import QCoreApplication, QObject, QUrl, Slot
 
 from draftgoblin.mock_session import MockLiveSession
-from draftgoblin.qt_adapter import LiveSessionAdapter
+from draftgoblin.qt_adapter import LiveSessionAdapter, SessionAdapter
 from draftgoblin.session import (
     ChangeRanking,
     ChangeSplashPreference,
+    ChooseAccount,
     ChooseRecommendation,
+    CardImageRequest,
+    CardImageState,
+    CardView,
+    DataLoadPhase,
     DismissError,
     LiveSession,
     LiveSessionCommand,
     LiveSessionSnapshot,
+    Recommendation,
+    RecommendationState,
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
@@ -70,6 +79,61 @@ class _FakeSession:
         return self.snapshot
 
 
+class _ImageFakeSession(_FakeSession):
+    def __init__(self, *, publish: SnapshotPublisher) -> None:
+        super().__init__(publish=publish)
+        self.request = CardImageRequest(
+            generation=1,
+            grp_id=1,
+            image_uri="https://images.example/fixture.jpg",
+        )
+        self.fetch_thread_ids: list[int] = []
+        self.result_thread_ids: list[int] = []
+        self.completions: list[Path] = []
+        self._request_pending = True
+        self.stopped = False
+
+    def selected_card_image_request(self) -> CardImageRequest | None:
+        return self.request if self._request_pending and not self.stopped else None
+
+    def fetch_card_image(self, *, request: CardImageRequest) -> Path:
+        assert request == self.request
+        self.fetch_thread_ids.append(threading.get_ident())
+        return Path("/tmp/fixture card.jpg")
+
+    def complete_card_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        image_path: Path,
+    ) -> None:
+        assert request == self.request
+        self.result_thread_ids.append(threading.get_ident())
+        self.completions.append(image_path)
+        self._request_pending = False
+        self.snapshot = replace(
+            self.snapshot,
+            card_image=CardImageState(
+                grp_id=request.grp_id,
+                phase=DataLoadPhase.READY,
+                message="Card image ready.",
+            ),
+        )
+        self._publish(self.snapshot)
+
+    def fail_card_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        error_message: str,
+    ) -> None:
+        raise AssertionError(f"Unexpected image failure: {request} {error_message}")
+
+    def stop(self) -> LiveSessionSnapshot:
+        self.stopped = True
+        return self.snapshot
+
+
 class _StateObserver(QObject):
     def __init__(self, *, adapter: LiveSessionAdapter) -> None:
         super().__init__()
@@ -87,6 +151,43 @@ class _StateObserver(QObject):
 def qcore_application() -> QCoreApplication:
     return cast(QCoreApplication, QCoreApplication.instance() or QCoreApplication([]))
 
+
+def test_session_adapter_converts_local_image_path_to_file_url(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "card images" / "Fixture Card.jpg"
+    snapshot = LiveSessionSnapshot(
+        recommendations=RecommendationState(
+            cards=(
+                Recommendation(
+                    rank=1,
+                    card=CardView(
+                        grp_id=1,
+                        name="Fixture Card",
+                        colors=(),
+                        rarity="common",
+                        types=("Creature",),
+                        mana_cost=None,
+                        mana_value=1.0,
+                        image_path=str(image_path),
+                    ),
+                    score=1,
+                    win_rate=None,
+                    average_last_seen_at=None,
+                    source_label="Fixture",
+                    color_fit="on_color",
+                    no_data=False,
+                ),
+            ),
+            selected_grp_id=1,
+        )
+    )
+
+    adapter = SessionAdapter(snapshot=snapshot)
+
+    assert adapter.state["recommendations"]["cards"][0]["card"]["image_path"] == (
+        QUrl.fromLocalFile(str(image_path)).toString()
+    )
 
 def _process_until(
     *,
@@ -185,6 +286,10 @@ def test_live_adapter_queues_explicit_commands_and_shutdown_is_safe(
             description="the live session initial state",
         )
         session = sessions[0]
+
+        account_id = adapter.state["accounts"][0]["account_id"]
+
+        adapter.chooseAccount(account_id)
         selected_grp_id = adapter.state["recommendations"]["cards"][1]["card"]["grp_id"]
 
         adapter.chooseRecommendation(selected_grp_id)
@@ -204,11 +309,12 @@ def test_live_adapter_queues_explicit_commands_and_shutdown_is_safe(
         adapter.retryError("missing-error")
         _process_until(
             application=qcore_application,
-            predicate=lambda: len(session.commands) == 8,
+            predicate=lambda: len(session.commands) == 9,
             description="all queued live session commands",
         )
 
         assert [type(command) for command in session.commands] == [
+            ChooseAccount,
             ChooseRecommendation,
             ChangeRanking,
             ChangeSplashPreference,
@@ -223,6 +329,48 @@ def test_live_adapter_queues_explicit_commands_and_shutdown_is_safe(
     finally:
         adapter.shutdown()
 
+    assert adapter.thread is not None
+    assert not adapter.thread.isRunning()
+
+
+def test_live_adapter_fetches_card_images_on_worker_and_publishes_on_gui_thread(
+    qcore_application: QCoreApplication,
+) -> None:
+    gui_thread_id = threading.get_ident()
+    sessions: list[_ImageFakeSession] = []
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _ImageFakeSession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=60_000,
+    )
+    observer = _StateObserver(adapter=adapter)
+    adapter.stateChanged.connect(observer.observe)
+    adapter.start()
+    try:
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(sessions)
+            and bool(sessions[0].completions)
+            and adapter.state["card_image"]["phase"] == "ready",
+            description="the worker-fetched card image snapshot",
+        )
+        session = sessions[0]
+        assert session.fetch_thread_ids
+        assert session.result_thread_ids
+        assert set(session.fetch_thread_ids) == set(session.result_thread_ids)
+        assert all(thread_id != gui_thread_id for thread_id in session.fetch_thread_ids)
+        assert observer.thread_ids
+        assert set(observer.thread_ids) == {gui_thread_id}
+        assert observer.states[-1]["card_image"]["phase"] == "ready"
+    finally:
+        adapter.shutdown()
+
+    assert sessions[0].stopped is True
     assert adapter.thread is not None
     assert not adapter.thread.isRunning()
 

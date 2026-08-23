@@ -9,19 +9,40 @@ Item {
 
     required property var sessionState
     required property var recommendationModel
-    readonly property bool hasDraft: sessionState.draft !== null
-        && sessionState.draft !== undefined
     required property bool narrow
+    readonly property bool hasRecommendations: sessionState.recommendations
+        && sessionState.recommendations.cards
+        && sessionState.recommendations.cards.length > 0
+    readonly property string draftHeading: {
+        const draft = sessionState.draft
+        if (!draft)
+            return sessionState.status.message
+        if (draft.completed)
+            return "Draft complete"
+        if (draft.pack_number === null)
+            return draft.event_name
+        return "Pack " + (draft.pack_number + 1)
+            + " · Pick " + (draft.pick_number + 1)
+    }
+    readonly property string emptyHeading: {
+        if (sessionState.draft && sessionState.draft.completed)
+            return "Draft complete"
+        if (sessionState.status.phase === "starting")
+            return "Loading live draft data"
+        return "Ready for your next Quick Draft"
+    }
 
     readonly property var selectedRecommendation: {
-        if (!sessionState.recommendations || !sessionState.recommendations.cards) return null
-        for (let index = 0; index < sessionState.recommendations.cards.length; index++) {
-            const recommendation = sessionState.recommendations.cards[index]
-            if (recommendation.card.grp_id === sessionState.recommendations.selected_grp_id)
+        const recommendations = sessionState.recommendations
+        if (!recommendations || !recommendations.cards)
+            return null
+        const cards = recommendations.cards
+        for (let index = 0; index < cards.length; index++) {
+            const recommendation = cards[index]
+            if (recommendation.card.grp_id === recommendations.selected_grp_id)
                 return recommendation
         }
-        return sessionState.recommendations.cards.length > 0
-            ? sessionState.recommendations.cards[0] : null
+        return cards.length > 0 ? cards[0] : null
     }
 
     ColumnLayout {
@@ -37,19 +58,17 @@ Item {
                 spacing: 2
 
                 Label {
-                    text: root.sessionState.draft
-                        ? "Pack " + root.sessionState.draft.pack_number
-                            + " · Pick " + root.sessionState.draft.pick_number
-                        : "Live draft readiness"
+                    text: root.draftHeading
                     color: Theme.text
                     font.pixelSize: 22
                     font.bold: true
                 }
 
                 Label {
-                    text: root.sessionState.recommendations.cards.length > 0
-                        ? root.sessionState.recommendations.cards.length + " cards available · Close pick"
-                        : "Start Draftgoblin before entering a Quick Draft"
+                    text: root.hasRecommendations
+                        ? root.sessionState.recommendations.cards.length
+                            + " cards available · Choose a recommendation"
+                        : root.sessionState.status.message
                     color: Theme.textMuted
                 }
             }
@@ -89,7 +108,7 @@ Item {
         }
 
         Rectangle {
-            visible: !root.hasDraft
+            visible: !root.hasRecommendations
             Layout.fillWidth: true
             Layout.fillHeight: true
             color: Theme.surfaceLow
@@ -104,7 +123,7 @@ Item {
 
                 Label {
                     Layout.fillWidth: true
-                    text: "Ready for your next Quick Draft"
+                    text: root.emptyHeading
                     color: Theme.text
                     font.pixelSize: 22
                     font.bold: true
@@ -122,10 +141,14 @@ Item {
                 Repeater {
                     model: [
                         ["Card metadata", root.sessionState.card_data.message],
-                        ["Arena log", "Watching Player.log"],
+                        ["Arena log", root.sessionState.status.message],
                         ["Arena account", root.sessionState.active_account
-                            ? root.sessionState.active_account.screen_name : "Not detected"],
-                        ["Draft", root.sessionState.status.message],
+                            ? root.sessionState.active_account.screen_name
+                                || root.sessionState.active_account.account_id
+                            : "Not detected"],
+                        ["Draft", root.sessionState.draft
+                            ? root.sessionState.draft.event_name
+                            : "No Quick Draft detected"],
                         ["Ratings", root.sessionState.ratings.message]
                     ]
 
@@ -161,7 +184,7 @@ Item {
         }
 
         RowLayout {
-            visible: !root.narrow && root.hasDraft
+            visible: !root.narrow && root.hasRecommendations
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: Theme.gutter
@@ -216,6 +239,7 @@ Item {
                 Layout.fillHeight: true
                 recommendation: root.selectedRecommendation
                 loading: root.sessionState.card_data.phase === "loading"
+                imageState: root.sessionState.card_image
             }
 
             PoolSummaryPanel {
@@ -226,7 +250,7 @@ Item {
         }
 
         ColumnLayout {
-            visible: root.narrow && root.hasDraft
+            visible: root.narrow && root.hasRecommendations
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 8
@@ -267,6 +291,7 @@ Item {
                 CardPreview {
                     recommendation: root.selectedRecommendation
                     loading: root.sessionState.card_data.phase === "loading"
+                    imageState: root.sessionState.card_image
                 }
 
                 PoolSummaryPanel {

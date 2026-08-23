@@ -207,14 +207,56 @@ Item {
                     Label { text: "Ratings · " + root.sessionState.ratings.message; color: Theme.textMuted }
                     Label { text: "Statistics attribution · 17Lands"; color: Theme.textMuted }
                     Button {
+                        objectName: "settingsRatingsDownloadButton"
+                        enabled: root.sessionState.ratings.set_code !== null
+                            && root.sessionState.ratings.set_code !== undefined
+                            && root.sessionState.ratings.phase !== "loading"
                         text: "Download or refresh ratings"
-                        onClicked: sessionProvider.requestRatings()
+                        Accessible.name: "Download or refresh ratings"
+                        onClicked: ratingsDownloadDialog.open()
                     }
                 }
             }
 
             Item {
                 Layout.preferredHeight: 12
+            }
+        }
+    }
+
+    Dialog {
+        id: ratingsDownloadDialog
+        objectName: "settingsRatingsDownloadDialog"
+        implicitWidth: 400
+        modal: true
+        parent: Overlay.overlay
+        title: "Download ratings?"
+
+        Label {
+            width: 360
+            text: "Download 17Lands ratings for "
+                + root.sessionState.ratings.set_code
+                + "? Neutral-prior recommendations remain available while it loads."
+            color: Theme.text
+            wrapMode: Text.WordWrap
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                objectName: "settingsRatingsDownloadCancelButton"
+                text: "Not now"
+                Accessible.name: "Cancel ratings download"
+                onClicked: ratingsDownloadDialog.close()
+            }
+
+            Button {
+                objectName: "settingsRatingsDownloadConfirmButton"
+                text: "Download ratings"
+                Accessible.name: "Confirm ratings download"
+                onClicked: {
+                    sessionProvider.requestRatings()
+                    ratingsDownloadDialog.close()
+                }
             }
         }
     }

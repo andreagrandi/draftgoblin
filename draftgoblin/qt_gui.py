@@ -8,6 +8,7 @@ import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from time import monotonic
 from typing import Literal, cast
 
 from PySide6.QtCore import QTimer, QUrl
@@ -20,6 +21,7 @@ from draftgoblin.carddb import (
     build_card_database_from_bulk_file,
     load_or_refresh_card_database,
 )
+from draftgoblin.cardimages import CardImageService, card_image_cache_dir
 from draftgoblin.mock_session import MOCK_SCENARIOS, MockLiveSession, MockScenario
 from draftgoblin.paths import resolve_player_log_path
 from draftgoblin.qt_adapter import LiveSessionAdapter, SessionAdapter, SessionFactory
@@ -82,6 +84,11 @@ def _parser(*, forced_provider: ProviderName | None = None) -> argparse.Argument
         help="Render the window and exit automatically.",
     )
     parser.add_argument(
+        "--smoke-test-until-complete",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--screenshot",
         type=Path,
         help="Save the rendered window before exiting.",
@@ -119,6 +126,11 @@ def _live_session_factory(
             poll_interval=poll_interval,
             snapshot_publisher=publish,
             ratings_progress_loader=load_ratings,
+            card_image_service=CardImageService(
+                cache_dir=card_image_cache_dir(app_dir=app_dir),
+                timeout_seconds=2.0,
+                max_attempts=1,
+            ),
             ratings_cache_checker=lambda set_code: has_cached_17lands_data(
                 set_code=set_code,
                 app_dir=app_dir,
@@ -169,6 +181,43 @@ def _finish_smoke_test(
     application.quit()
 
 
+def _finish_smoke_test_when_draft_completes(
+    *,
+    engine: QQmlApplicationEngine,
+    application: QGuiApplication,
+    provider: SessionAdapter,
+    screenshot: Path | None,
+    timeout_seconds: float = 10.0,
+) -> None:
+    deadline = monotonic() + timeout_seconds
+    timer = QTimer(application)
+
+    def stop_waiting() -> None:
+        timer.stop()
+        timer.timeout.disconnect(finish_when_ready)
+        timer.deleteLater()
+
+
+    def finish_when_ready() -> None:
+        status = provider.state.get("status", {})
+        if status.get("phase") == "draft_complete":
+            stop_waiting()
+            QTimer.singleShot(
+                0,
+                lambda: _finish_smoke_test(
+                    engine=engine,
+                    application=application,
+                    screenshot=screenshot,
+                ),
+            )
+        elif monotonic() >= deadline:
+            stop_waiting()
+            QTimer.singleShot(0, lambda: application.exit(1))
+
+    timer.setInterval(20)
+    timer.timeout.connect(finish_when_ready)
+    timer.start()
+
 def run_gui(
     *,
     argv: Sequence[str] | None = None,
@@ -193,6 +242,7 @@ def run_gui(
     context.setContextProperty("initialSurface", args.surface)
     context.setContextProperty("initialWindowWidth", args.width)
     context.setContextProperty("initialWindowHeight", args.height)
+    engine.setInitialProperties({"provider": provider})
 
     engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
     if not engine.rootObjects():
@@ -202,7 +252,14 @@ def run_gui(
         application.aboutToQuit.connect(provider.shutdown)
         provider.start()
 
-    if args.smoke_test or args.screenshot is not None:
+    if args.smoke_test_until_complete:
+        _finish_smoke_test_when_draft_completes(
+            engine=engine,
+            application=application,
+            provider=provider,
+            screenshot=args.screenshot,
+        )
+    elif args.smoke_test or args.screenshot is not None:
         QTimer.singleShot(
             800,
             lambda: _finish_smoke_test(
