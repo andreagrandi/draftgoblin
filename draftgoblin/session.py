@@ -14,8 +14,14 @@ from threading import RLock
 from typing import TypeAlias
 
 from draftgoblin.audit import DraftAuditStore
+from draftgoblin.backtest import (
+    BacktestReport as DomainBacktestReport,
+    generate_backtest_report,
+    load_persisted_backtest_state,
+)
 from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.config import POLL_INTERVAL_SECONDS, SPLASH
+from draftgoblin.deckbuilder import BuildPool, DeckBuilderError, build_deck_from_pool
 from draftgoblin.events import (
     EXPECTED_PICKS_PER_PACK,
     AccountEvent,
@@ -264,6 +270,9 @@ class BuildPairOption:
     score: float
     selected: bool
     automatic: bool
+    playable_count: int | None = None
+    playable_score_sum: float | None = None
+    pair_win_rate: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +283,13 @@ class BuildCard:
 
     card: CardView
     quantity: int
+    score: int | None = None
+    win_rate: float | None = None
+    average_last_seen_at: float | None = None
+    letter_grade: str | None = None
+    source_label: str | None = None
+    color_fit: str | None = None
+    no_data: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,6 +316,7 @@ class BuildResult:
     lands: tuple[BuildLand, ...]
     bench: tuple[BuildCard, ...]
     deck_size: int
+    pair_override: str | None = None
     warnings: tuple[str, ...] = ()
 
 
@@ -316,6 +333,10 @@ class BacktestPickResult:
     match: bool | None
     skipped_reason: str | None
     data_source: str | None
+    pool_size: int | None = None
+    offered_count: int | None = None
+    recommended_score: int | None = None
+    recommended_win_rate: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,6 +351,13 @@ class BacktestResult:
     compared_count: int
     skipped_count: int
     data_sources: tuple[str, ...]
+    account_id: str | None = None
+    account_screen_name: str | None = None
+    draft_id: str | None = None
+    set_code: str | None = None
+    event_name: str | None = None
+    completed: bool | None = None
+    chosen_pick_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -516,6 +544,10 @@ class LiveSession:
         self._active_set_code_value: str | None = None
         self._current_pack_event: PackOfferedEvent | None = None
         self._current_scored_pack: ScoredPack | None = None
+        self._last_build_request: RequestBuild | None = None
+        self._last_backtest_request: RequestBacktest | None = None
+        self._build_request_generation = 0
+        self._backtest_request_generation = 0
         self._login_generation = self.parser.login_generation
         self._log_account_id: str | None = None
         self._states_by_key: dict[tuple[str, str], DraftState] = {}
@@ -624,6 +656,14 @@ class LiveSession:
             self._request_ratings_download(set_code=command.set_code)
             return self.snapshot
 
+        if isinstance(command, RequestBuild):
+            self._request_build(command=command)
+            return self.snapshot
+
+        if isinstance(command, RequestBacktest):
+            self._request_backtest(command=command)
+            return self.snapshot
+
         if isinstance(command, DismissError):
             self._dismiss_error(error_id=command.error_id)
             return self.snapshot
@@ -633,6 +673,325 @@ class LiveSession:
             return self.snapshot
 
         raise ValueError(f"Live session command is not implemented yet: {command!r}.")
+
+    def _request_build(self, *, command: RequestBuild) -> None:
+        with self._state_lock:
+            self._last_build_request = command
+            self._build_request_generation += 1
+            generation = self._build_request_generation
+            account = self.snapshot.active_account
+            draft = self.snapshot.draft
+            pool = self.snapshot.pool
+            ratings = self.snapshot.ratings
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    progress=ProgressState(
+                        operation=OperationKind.BUILD,
+                        message="Building deck",
+                    ),
+                    errors=self._without_operation_error(
+                        operation=OperationKind.BUILD,
+                    ),
+                )
+            )
+        try:
+            build = self._build_result(command=command)
+        except Exception as error:
+            session_error = SessionError(
+                error_id="build",
+                code="build_failed",
+                message=f"Deck build failed: {error}",
+                recoverable=True,
+                operation=OperationKind.BUILD,
+            )
+            with self._state_lock:
+                if not self._build_request_is_current(
+                    generation=generation,
+                    account=account,
+                    draft=draft,
+                    pool=pool,
+                    ratings=ratings,
+                ):
+                    return
+                self._publish(
+                    snapshot=replace(
+                        self.snapshot,
+                        progress=self._progress_after_operation(
+                            operation=OperationKind.BUILD,
+                        ),
+                        errors=self._with_error(error=session_error),
+                        build=None,
+                    )
+                )
+            return
+
+        with self._state_lock:
+            if not self._build_request_is_current(
+                generation=generation,
+                account=account,
+                draft=draft,
+                pool=pool,
+                ratings=ratings,
+            ):
+                return
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    progress=self._progress_after_operation(
+                        operation=OperationKind.BUILD,
+                    ),
+                    errors=self._without_operation_error(
+                        operation=OperationKind.BUILD,
+                    ),
+                    build=build,
+                )
+            )
+
+    def _build_request_is_current(
+        self,
+        *,
+        generation: int,
+        account: AccountIdentity | None,
+        draft: DraftIdentity | None,
+        pool: PoolState,
+        ratings: RatingsState,
+    ) -> bool:
+        return (
+            generation == self._build_request_generation
+            and account == self.snapshot.active_account
+            and draft == self.snapshot.draft
+            and pool == self.snapshot.pool
+            and ratings == self.snapshot.ratings
+        )
+
+    def _build_result(self, *, command: RequestBuild) -> BuildResult:
+        state = self._active_draft_state()
+        if state is None:
+            raise DeckBuilderError("Deck build unavailable: no active draft.")
+        if self._card_database is None:
+            raise DeckBuilderError("Deck build unavailable: card metadata is not ready.")
+
+        selection, build_sheet = build_deck_from_pool(
+            pool=BuildPool(
+                set_code=state.set_code,
+                pool_grp_ids=state.pool_grp_ids,
+                source_label="live draft",
+                account_id=state.account_id,
+                draft_id=state.draft_id,
+            ),
+            card_database=self._card_database,
+            ratings_data=self._ratings_data_for_scoring(set_code=state.set_code),
+            forced_pair=command.pair_override,
+            allow_splash=command.allow_splash,
+        )
+        spell_selection = build_sheet.spell_selection
+        mana_base = build_sheet.mana_base
+        return BuildResult(
+            selected_pair=selection.chosen.pair,
+            pair_options=tuple(
+                BuildPairOption(
+                    pair=score.pair,
+                    score=score.blended_score,
+                    selected=score.pair == selection.chosen.pair,
+                    automatic=score.pair == selection.automatic.pair,
+                    playable_count=score.playable_count,
+                    playable_score_sum=score.playable_score_sum,
+                    pair_win_rate=score.pair_win_rate,
+                )
+                for score in selection.ranked_scores
+            ),
+            spells=_build_cards(
+                cards=tuple(
+                    sorted(
+                        spell_selection.spells,
+                        key=_build_spell_curve_sort_key,
+                    )
+                ),
+            ),
+            lands=(
+                tuple(
+                    BuildLand(
+                        name=land.card.name,
+                        quantity=1,
+                        source_colors=land.source_colors,
+                        card=_card_view(card=land.card),
+                    )
+                    for land in mana_base.nonbasic_lands
+                )
+                + tuple(
+                    BuildLand(
+                        name=land.name,
+                        quantity=land.count,
+                        source_colors=(land.color,),
+                    )
+                    for land in mana_base.basic_lands
+                )
+            ),
+            bench=_build_cards(cards=spell_selection.bench),
+            deck_size=mana_base.total_cards,
+            pair_override=selection.forced_pair,
+            warnings=(
+                tuple(
+                    f"Applied spell-selection relaxation: {relaxation}"
+                    for relaxation in spell_selection.applied_relaxations
+                )
+                + mana_base.caveats
+            ),
+        )
+
+    def _request_backtest(self, *, command: RequestBacktest) -> None:
+        with self._state_lock:
+            self._last_backtest_request = command
+            self._backtest_request_generation += 1
+            generation = self._backtest_request_generation
+            account = self.snapshot.active_account
+            draft = self.snapshot.draft
+            ranking_mode = self._ranking_mode
+            splash_enabled = self._splash_enabled
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    progress=ProgressState(
+                        operation=OperationKind.BACKTEST,
+                        message="Running backtest",
+                    ),
+                    errors=self._without_operation_error(
+                        operation=OperationKind.BACKTEST,
+                    ),
+                )
+            )
+        try:
+            backtest = self._backtest_result(command=command)
+        except Exception as error:
+            session_error = SessionError(
+                error_id="backtest",
+                code="backtest_failed",
+                message=f"Backtest failed: {error}",
+                recoverable=True,
+                operation=OperationKind.BACKTEST,
+            )
+            with self._state_lock:
+                if not self._backtest_request_is_current(
+                    generation=generation,
+                    account=account,
+                    draft=draft,
+                    ranking_mode=ranking_mode,
+                    splash_enabled=splash_enabled,
+                ):
+                    return
+                self._publish(
+                    snapshot=replace(
+                        self.snapshot,
+                        progress=self._progress_after_operation(
+                            operation=OperationKind.BACKTEST,
+                        ),
+                        errors=self._with_error(error=session_error),
+                        backtest=None,
+                    )
+                )
+            return
+
+        with self._state_lock:
+            if not self._backtest_request_is_current(
+                generation=generation,
+                account=account,
+                draft=draft,
+                ranking_mode=ranking_mode,
+                splash_enabled=splash_enabled,
+            ):
+                return
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    progress=self._progress_after_operation(
+                        operation=OperationKind.BACKTEST,
+                    ),
+                    errors=self._without_operation_error(
+                        operation=OperationKind.BACKTEST,
+                    ),
+                    backtest=backtest,
+                )
+            )
+
+    def _backtest_request_is_current(
+        self,
+        *,
+        generation: int,
+        account: AccountIdentity | None,
+        draft: DraftIdentity | None,
+        ranking_mode: RankingMode,
+        splash_enabled: bool,
+    ) -> bool:
+        return (
+            generation == self._backtest_request_generation
+            and account == self.snapshot.active_account
+            and draft == self.snapshot.draft
+            and ranking_mode == self._ranking_mode
+            and splash_enabled == self._splash_enabled
+        )
+
+    def _progress_after_operation(
+        self,
+        *,
+        operation: OperationKind,
+    ) -> ProgressState | None:
+        progress = self.snapshot.progress
+        if progress is not None and progress.operation != operation:
+            return progress
+
+        return None
+
+    def _retire_derived_operations(self) -> tuple[SessionError, ...]:
+        self._build_request_generation += 1
+        self._backtest_request_generation += 1
+        self._last_build_request = None
+        self._last_backtest_request = None
+        return tuple(
+            error
+            for error in self.snapshot.errors
+            if error.operation not in {OperationKind.BUILD, OperationKind.BACKTEST}
+        )
+
+    def _backtest_result(self, *, command: RequestBacktest) -> BacktestResult:
+        if self._card_database is None:
+            raise ValueError("Card metadata is not ready.")
+
+        account_id, draft_id = self._backtest_identity(command=command)
+        state = load_persisted_backtest_state(
+            app_dir=self.store.app_dir,
+            account_id=account_id,
+            draft_id=draft_id,
+        )
+        report = generate_backtest_report(
+            state=state,
+            card_database=self._card_database,
+            ratings_data=self._ratings_data_for_scoring(set_code=state.set_code),
+            ranking_mode=self._ranking_mode,
+            splash_enabled=self._splash_enabled,
+        )
+        return _backtest_result(report=report)
+
+    def _backtest_identity(
+        self,
+        *,
+        command: RequestBacktest,
+    ) -> tuple[str | None, str | None]:
+        active_draft = self.snapshot.draft
+        active_account = self.snapshot.active_account
+        account_id = command.account_id
+        if account_id is None and active_account is not None:
+            account_id = active_account.account_id
+
+        draft_id = command.draft_id
+        if (
+            draft_id is None
+            and active_draft is not None
+            and active_draft.account_id == account_id
+        ):
+            draft_id = active_draft.draft_id
+
+        return account_id, draft_id
 
     def load_card_data(self) -> LiveSessionSnapshot:
         """Load configured card metadata and publish readiness or failure state.
@@ -1185,22 +1544,32 @@ class LiveSession:
         return replace(ratings_data, pair_card_ratings_loader=None)
 
     def _change_ranking(self, *, ranking_mode: str) -> None:
-        self._ranking_mode = validate_ranking_mode(ranking_mode=ranking_mode)
-        if self._current_scored_pack is None:
-            recommendations = replace(
-                self.snapshot.recommendations,
-                ranking_mode=self._ranking_mode,
+        with self._state_lock:
+            self._ranking_mode = validate_ranking_mode(ranking_mode=ranking_mode)
+            self._backtest_request_generation += 1
+            self._last_backtest_request = None
+            if self._current_scored_pack is None:
+                recommendations = replace(
+                    self.snapshot.recommendations,
+                    ranking_mode=self._ranking_mode,
+                )
+            else:
+                recommendations = self._recommendation_state(
+                    scored_pack=self._current_scored_pack,
+                )
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    recommendations=recommendations,
+                    progress=self._progress_after_operation(
+                        operation=OperationKind.BACKTEST,
+                    ),
+                    errors=self._without_operation_error(
+                        operation=OperationKind.BACKTEST,
+                    ),
+                    backtest=None,
+                )
             )
-        else:
-            recommendations = self._recommendation_state(
-                scored_pack=self._current_scored_pack,
-            )
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                recommendations=recommendations,
-            )
-        )
 
     def _choose_recommendation(self, *, grp_id: int) -> None:
         available_grp_ids = {
@@ -1221,23 +1590,53 @@ class LiveSession:
         )
 
     def _change_splash_preference(self, *, enabled: bool) -> None:
-        if enabled == self._splash_enabled:
-            return
+        with self._state_lock:
+            if enabled == self._splash_enabled:
+                return
 
-        self._splash_enabled = enabled
-        if self._current_pack_event is None:
+            self._splash_enabled = enabled
+            self._build_request_generation += 1
+            self._backtest_request_generation += 1
+            self._last_build_request = None
+            self._last_backtest_request = None
+            errors = tuple(
+                error
+                for error in self.snapshot.errors
+                if error.operation
+                not in {OperationKind.BUILD, OperationKind.BACKTEST}
+            )
+            progress = self.snapshot.progress
+            if progress is not None and progress.operation in {
+                OperationKind.BUILD,
+                OperationKind.BACKTEST,
+            }:
+                progress = None
+            if self._current_pack_event is None:
+                self._publish(
+                    snapshot=replace(
+                        self.snapshot,
+                        recommendations=replace(
+                            self.snapshot.recommendations,
+                            splash_enabled=enabled,
+                        ),
+                        progress=progress,
+                        errors=errors,
+                        build=None,
+                        backtest=None,
+                    )
+                )
+                return
+
             self._publish(
                 snapshot=replace(
                     self.snapshot,
-                    recommendations=replace(
-                        self.snapshot.recommendations,
-                        splash_enabled=enabled,
-                    ),
+                    progress=progress,
+                    errors=errors,
+                    build=None,
+                    backtest=None,
                 )
             )
-            return
-
-        self._score_current_pack()
+            self._score_current_pack_locked()
 
     def _dismiss_error(self, *, error_id: str) -> None:
         if not any(error.error_id == error_id for error in self.snapshot.errors):
@@ -1272,6 +1671,16 @@ class LiveSession:
             if not error_id.startswith(prefix):
                 raise ValueError(f"Ratings error {error_id!r} has no set code.")
             self._request_ratings_download(set_code=error_id.removeprefix(prefix))
+            return
+        if error.operation == OperationKind.BUILD:
+            if self._last_build_request is None:
+                raise ValueError(f"Build error {error_id!r} has no saved request.")
+            self._request_build(command=self._last_build_request)
+            return
+        if error.operation == OperationKind.BACKTEST:
+            if self._last_backtest_request is None:
+                raise ValueError(f"Backtest error {error_id!r} has no saved request.")
+            self._request_backtest(command=self._last_backtest_request)
             return
 
         raise ValueError(f"Session error {error_id!r} has no retry operation.")
@@ -1508,26 +1917,29 @@ class LiveSession:
         self._set_active_set_code(set_code=event.set_code)
         account_id = event.account_id or self._log_account_id
         active_account = self._identity_for(account_id=account_id)
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                status=ApplicationStatus(
-                    phase=ApplicationPhase.WAITING_FOR_DRAFT,
-                    message=f"Preparing Quick Draft data for {event.set_code}.",
-                ),
-                accounts=self._known_accounts(),
-                active_account=active_account,
-                draft=None,
-                recommendations=RecommendationState(
-                    ranking_mode=self._ranking_mode,
-                    splash_enabled=self._splash_enabled,
-                ),
-                pool=PoolState(),
-                progress=None,
-                build=None,
-                backtest=None,
+        with self._state_lock:
+            errors = self._retire_derived_operations()
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    status=ApplicationStatus(
+                        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+                        message=f"Preparing Quick Draft data for {event.set_code}.",
+                    ),
+                    accounts=self._known_accounts(),
+                    active_account=active_account,
+                    draft=None,
+                    recommendations=RecommendationState(
+                        ranking_mode=self._ranking_mode,
+                        splash_enabled=self._splash_enabled,
+                    ),
+                    pool=PoolState(),
+                    progress=None,
+                    errors=errors,
+                    build=None,
+                    backtest=None,
+                )
             )
-        )
         self._ensure_ratings_loaded(set_code=event.set_code)
 
     def _choose_account(self, *, account_id: str) -> None:
@@ -1557,27 +1969,30 @@ class LiveSession:
         self._current_pack_event = None
         self._current_scored_pack = None
         self._set_active_set_code(set_code=None)
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                status=ApplicationStatus(
-                    phase=ApplicationPhase.WAITING_FOR_DRAFT,
-                    message="Waiting for a Quick Draft.",
-                ),
-                accounts=self._known_accounts(),
-                active_account=identity,
-                draft=None,
-                ratings=self._initial_ratings_state(),
-                recommendations=RecommendationState(
-                    ranking_mode=self._ranking_mode,
-                    splash_enabled=self._splash_enabled,
-                ),
-                pool=PoolState(),
-                progress=None,
-                build=None,
-                backtest=None,
+        with self._state_lock:
+            errors = self._retire_derived_operations()
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    status=ApplicationStatus(
+                        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+                        message="Waiting for a Quick Draft.",
+                    ),
+                    accounts=self._known_accounts(),
+                    active_account=identity,
+                    draft=None,
+                    ratings=self._initial_ratings_state(),
+                    recommendations=RecommendationState(
+                        ranking_mode=self._ranking_mode,
+                        splash_enabled=self._splash_enabled,
+                    ),
+                    pool=PoolState(),
+                    progress=None,
+                    errors=errors,
+                    build=None,
+                    backtest=None,
+                )
             )
-        )
 
     def _select_state(
         self,
@@ -1606,61 +2021,70 @@ class LiveSession:
             if state.completed
             else ApplicationPhase.DRAFTING
         )
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                status=ApplicationStatus(phase=phase, message=message),
-                accounts=self._known_accounts(),
-                active_account=AccountIdentity(
-                    account_id=state.account_id,
-                    screen_name=self._screen_name_for_state(state=state),
-                ),
-                draft=DraftIdentity(
-                    account_id=state.account_id,
-                    draft_id=state.draft_id,
-                    event_name=state.event_name,
-                    set_code=state.set_code,
-                    course_id=state.course_id,
-                    pack_number=pack_number,
-                    pick_number=pick_number,
-                    completed=state.completed,
-                ),
-                recommendations=(
-                    self.snapshot.recommendations
-                    if isinstance(event, PickMadeEvent)
-                    else RecommendationState(
-                        ranking_mode=self._ranking_mode,
-                        splash_enabled=self._splash_enabled,
-                    )
-                ),
-                pool=self._pool_state(
-                    pool_grp_ids=state.pool_grp_ids,
-                ),
+        with self._state_lock:
+            errors = self._retire_derived_operations()
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    status=ApplicationStatus(phase=phase, message=message),
+                    accounts=self._known_accounts(),
+                    active_account=AccountIdentity(
+                        account_id=state.account_id,
+                        screen_name=self._screen_name_for_state(state=state),
+                    ),
+                    draft=DraftIdentity(
+                        account_id=state.account_id,
+                        draft_id=state.draft_id,
+                        event_name=state.event_name,
+                        set_code=state.set_code,
+                        course_id=state.course_id,
+                        pack_number=pack_number,
+                        pick_number=pick_number,
+                        completed=state.completed,
+                    ),
+                    recommendations=(
+                        self.snapshot.recommendations
+                        if isinstance(event, PickMadeEvent)
+                        else RecommendationState(
+                            ranking_mode=self._ranking_mode,
+                            splash_enabled=self._splash_enabled,
+                        )
+                    ),
+                    pool=self._pool_state(
+                        pool_grp_ids=state.pool_grp_ids,
+                    ),
+                    progress=None,
+                    errors=errors,
+                    build=None,
+                    backtest=None,
+                )
             )
-        )
 
     def _publish_missing_account_status(self) -> None:
         self._set_active_set_code(set_code=None)
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                status=ApplicationStatus(
-                    phase=ApplicationPhase.WAITING_FOR_DRAFT,
-                    message="Draft detected; waiting for an Arena account ID.",
-                ),
-                accounts=self._known_accounts(),
-                active_account=None,
-                draft=None,
-                recommendations=RecommendationState(
-                    ranking_mode=self._ranking_mode,
-                    splash_enabled=self._splash_enabled,
-                ),
-                pool=PoolState(),
-                progress=None,
-                build=None,
-                backtest=None,
+        with self._state_lock:
+            errors = self._retire_derived_operations()
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    status=ApplicationStatus(
+                        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+                        message="Draft detected; waiting for an Arena account ID.",
+                    ),
+                    accounts=self._known_accounts(),
+                    active_account=None,
+                    draft=None,
+                    recommendations=RecommendationState(
+                        ranking_mode=self._ranking_mode,
+                        splash_enabled=self._splash_enabled,
+                    ),
+                    pool=PoolState(),
+                    progress=None,
+                    errors=errors,
+                    build=None,
+                    backtest=None,
+                )
             )
-        )
 
     def _remember_state(self, *, state: DraftState) -> None:
         self._states_by_key[(state.account_id, state.draft_id)] = state
@@ -1875,6 +2299,86 @@ def _card_view(*, card: CardInfo) -> CardView:
         mana_cost=card.mana_cost,
         mana_value=card.mana_value,
         image_path=None,
+    )
+
+
+def _build_cards(*, cards: tuple[ScoredCard, ...]) -> tuple[BuildCard, ...]:
+    grouped: dict[tuple[str, str], BuildCard] = {}
+    for scored_card in cards:
+        card = scored_card.card
+        key = (
+            ("unknown", str(card.grp_id))
+            if card.unknown
+            else ("name", " ".join(card.name.casefold().split()))
+        )
+        existing = grouped.get(key)
+        if existing is None:
+            grouped[key] = BuildCard(
+                card=_card_view(card=card),
+                quantity=1,
+                score=scored_card.score,
+                win_rate=scored_card.rating.gih_win_rate,
+                average_last_seen_at=scored_card.rating.average_last_seen_at,
+                letter_grade=scored_card.rating.letter_grade,
+                source_label=scored_card.source_label,
+                color_fit=scored_card.color_fit,
+                no_data=scored_card.no_data,
+            )
+            continue
+
+        grouped[key] = replace(existing, quantity=existing.quantity + 1)
+
+    return tuple(grouped.values())
+
+
+def _build_spell_curve_sort_key(card: ScoredCard) -> tuple[float, int, str, int]:
+    mana_value = 99.0 if card.card.mana_value is None else card.card.mana_value
+    return (mana_value, -card.score, card.card.name, card.original_index)
+
+
+def _backtest_result(*, report: DomainBacktestReport) -> BacktestResult:
+    state = report.state
+    return BacktestResult(
+        ranking_mode=report.ranking_mode,
+        rows=tuple(
+            BacktestPickResult(
+                pack_number=row.pack_number,
+                pick_number=row.pick_number,
+                recommended=(
+                    None
+                    if row.recommended is None
+                    else _card_view(card=row.recommended.card)
+                ),
+                actual=(
+                    None if row.actual is None else _card_view(card=row.actual)
+                ),
+                match=row.match,
+                skipped_reason=row.skipped_reason,
+                data_source=row.data_source,
+                pool_size=row.pool_size,
+                offered_count=row.offered_count,
+                recommended_score=(
+                    None if row.recommended is None else row.recommended.score
+                ),
+                recommended_win_rate=(
+                    None
+                    if row.recommended is None
+                    else row.recommended.rating.gih_win_rate
+                ),
+            )
+            for row in report.rows
+        ),
+        match_count=report.match_count,
+        compared_count=len(report.compared_rows),
+        skipped_count=len(report.skipped_rows),
+        data_sources=report.data_sources,
+        account_id=state.account_id,
+        account_screen_name=state.account_screen_name,
+        draft_id=state.draft_id,
+        set_code=state.set_code,
+        event_name=state.event_name,
+        completed=state.completed,
+        chosen_pick_count=state.chosen_pick_count,
     )
 
 
