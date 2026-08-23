@@ -70,6 +70,10 @@ The app loads card metadata when needed, watches Arena's standard log location, 
 
 Live recommendations currently support Quick Draft. Windows support is best-effort.
 
+## Desktop GUI mockup development
+
+The deterministic PySide6/QML desktop mockup is available for visual review before production GUI integration. See the [desktop GUI mockup guide](docs/gui-mockup.md) for the launch command, selectable states, and responsive review targets.
+
 ## Local draft audit data
 
 Live TUI and `watch --plain` sessions keep an independent, append-only JSONL

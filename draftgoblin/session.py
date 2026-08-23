@@ -182,6 +182,8 @@ class Recommendation:
     source_label: str
     color_fit: str
     no_data: bool
+    letter_grade: str | None = None
+    explanation: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,6 +328,8 @@ class BuildResult:
     deck_size: int
     pair_override: str | None = None
     warnings: tuple[str, ...] = ()
+    spell_count: int | None = None
+    land_count: int | None = None
     domain_pool: BuildPool | None = None
     domain_selection: PairSelection | None = None
     domain_spell_selection: SpellSelection | None = None
@@ -926,6 +930,8 @@ class LiveSession:
             bench=_build_cards(cards=spell_selection.bench),
             deck_size=mana_base.total_cards,
             pair_override=selection.forced_pair,
+            spell_count=len(spell_selection.spells),
+            land_count=mana_base.total_cards - len(spell_selection.spells),
             warnings=(
                 tuple(
                     f"Applied spell-selection relaxation: {relaxation}"
@@ -1616,6 +1622,7 @@ class LiveSession:
             source_label=scored_card.source_label,
             color_fit=scored_card.color_fit,
             no_data=scored_card.no_data,
+            letter_grade=scored_card.rating.letter_grade,
         )
 
     def _ratings_state_after_scoring(

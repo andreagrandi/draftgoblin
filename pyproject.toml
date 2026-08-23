@@ -29,6 +29,11 @@ dependencies = [
     "textual-image>=0.13.2",
 ]
 
+[project.optional-dependencies]
+gui = [
+    "pyside6>=6.9,<7",
+]
+
 [project.urls]
 Homepage = "https://github.com/andreagrandi/draftgoblin"
 Repository = "https://github.com/andreagrandi/draftgoblin"
@@ -36,6 +41,7 @@ Issues = "https://github.com/andreagrandi/draftgoblin/issues"
 
 [project.scripts]
 draftgoblin = "draftgoblin.cli:main"
+draftgoblin-gui-mockup = "draftgoblin.qt_mock:main"
 
 [dependency-groups]
 dev = [
@@ -49,6 +55,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["draftgoblin*"]
+[tool.setuptools.package-data]
+draftgoblin = ["qml/*.qml", "qml/qmldir"]
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

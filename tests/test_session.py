@@ -122,6 +122,8 @@ def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> Non
         source_label="Quick Draft",
         color_fit="on color",
         no_data=False,
+        letter_grade="A-",
+        explanation="Best pool-aware score.",
     )
     pool_card = PoolCard(card=card, quantity=2)
     build_card = BuildCard(card=card, quantity=2)
@@ -146,6 +148,8 @@ def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> Non
         bench=(),
         deck_size=40,
         warnings=("Fixture warning",),
+        spell_count=23,
+        land_count=17,
     )
     backtest = BacktestResult(
         ranking_mode="score",
@@ -1045,6 +1049,12 @@ def test_live_session_build_request_publishes_structured_ordered_result(
     assert sum(land.quantity for land in snapshot.build.lands) + sum(
         card.quantity for card in snapshot.build.spells
     ) == snapshot.build.deck_size
+    assert snapshot.build.spell_count == sum(
+        card.quantity for card in snapshot.build.spells
+    )
+    assert snapshot.build.land_count == sum(
+        land.quantity for land in snapshot.build.lands
+    )
     assert any(
         option.pair == "WU" and option.selected and option.automatic
         for option in snapshot.build.pair_options
