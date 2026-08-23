@@ -21,7 +21,14 @@ from draftgoblin.backtest import (
 )
 from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.config import POLL_INTERVAL_SECONDS, SPLASH
-from draftgoblin.deckbuilder import BuildPool, DeckBuilderError, build_deck_from_pool
+from draftgoblin.deckbuilder import (
+    BuildPool,
+    DeckBuilderError,
+    ManaBase,
+    PairSelection,
+    SpellSelection,
+    build_deck_from_pool,
+)
 from draftgoblin.events import (
     EXPECTED_PICKS_PER_PACK,
     AccountEvent,
@@ -58,6 +65,7 @@ from draftgoblin.seventeen import (
 
 PathInput: TypeAlias = str | PathLike[str]
 SnapshotPublisher: TypeAlias = Callable[["LiveSessionSnapshot"], None]
+EventPublisher: TypeAlias = Callable[["LiveSessionEvent"], None]
 CardDatabaseLoader: TypeAlias = Callable[[], CardDatabase]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
 RatingsLoaderFactory: TypeAlias = Callable[[CardDatabase], RatingsLoader]
@@ -318,6 +326,10 @@ class BuildResult:
     deck_size: int
     pair_override: str | None = None
     warnings: tuple[str, ...] = ()
+    domain_pool: BuildPool | None = None
+    domain_selection: PairSelection | None = None
+    domain_spell_selection: SpellSelection | None = None
+    domain_mana_base: ManaBase | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,6 +390,17 @@ class LiveSessionSnapshot:
     errors: tuple[SessionError, ...] = ()
     build: BuildResult | None = None
     backtest: BacktestResult | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LiveSessionEvent:
+    """Publish one consumed domain event with its resulting session state.
+    Event adapters can preserve ordering without duplicating session orchestration.
+    """
+
+    event: DraftEvent
+    snapshot: LiveSessionSnapshot
+    scored_pack: ScoredPack | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,12 +514,14 @@ class LiveSession:
         poll_interval: float = POLL_INTERVAL_SECONDS,
         previous_log_path: PathInput | None = None,
         snapshot_publisher: SnapshotPublisher | None = None,
+        event_publisher: EventPublisher | None = None,
         ranking_mode: RankingMode = DEFAULT_RANKING_MODE,
         ratings_loader: RatingsLoader | None = None,
         ratings_loader_factory: RatingsLoaderFactory | None = None,
         ratings_progress_loader: RatingsProgressLoader | None = None,
         ratings_progress_loader_factory: RatingsProgressLoaderFactory | None = None,
         ratings_cache_checker: RatingsCacheChecker | None = None,
+        lazy_pair_card_ratings: bool = False,
         splash_enabled: bool = SPLASH.enabled_by_default,
     ) -> None:
         if card_database is not None and card_database_loader is not None:
@@ -527,6 +552,7 @@ class LiveSession:
         self.audit_store = DraftAuditStore(app_dir=self.store.root.parent)
         self._state_lock = RLock()
         self._snapshot_publisher = snapshot_publisher
+        self._event_publisher = event_publisher
         self._ranking_mode = validate_ranking_mode(ranking_mode=ranking_mode)
         self._splash_enabled = splash_enabled
         self._card_database = card_database
@@ -536,6 +562,7 @@ class LiveSession:
         self._ratings_progress_loader = ratings_progress_loader
         self._ratings_progress_loader_factory = ratings_progress_loader_factory
         self._ratings_cache_checker = ratings_cache_checker
+        self._lazy_pair_card_ratings = lazy_pair_card_ratings
         self._ratings_data_by_set: dict[str, SeventeenLandsData | None] = {}
         self._ratings_state_by_set: dict[str, RatingsState] = {}
         self._ratings_progress_by_set: dict[str, ProgressState] = {}
@@ -627,6 +654,7 @@ class LiveSession:
                     if _event_is_missing_account(event=event):
                         event = replace(event, account_id=state.account_id)
                 self._consume_event(event=event, state=state)
+                self._publish_event(event=event)
             self._persist_pending_login_name_for_observed_course()
 
         return self.snapshot
@@ -772,14 +800,15 @@ class LiveSession:
         if self._card_database is None:
             raise DeckBuilderError("Deck build unavailable: card metadata is not ready.")
 
+        pool = BuildPool(
+            set_code=state.set_code,
+            pool_grp_ids=state.pool_grp_ids,
+            source_label="live draft",
+            account_id=state.account_id,
+            draft_id=state.draft_id,
+        )
         selection, build_sheet = build_deck_from_pool(
-            pool=BuildPool(
-                set_code=state.set_code,
-                pool_grp_ids=state.pool_grp_ids,
-                source_label="live draft",
-                account_id=state.account_id,
-                draft_id=state.draft_id,
-            ),
+            pool=pool,
             card_database=self._card_database,
             ratings_data=self._ratings_data_for_scoring(set_code=state.set_code),
             forced_pair=command.pair_override,
@@ -838,6 +867,10 @@ class LiveSession:
                 )
                 + mana_base.caveats
             ),
+            domain_pool=pool,
+            domain_selection=selection,
+            domain_spell_selection=spell_selection,
+            domain_mana_base=mana_base,
         )
 
     def _request_backtest(self, *, command: RequestBacktest) -> None:
@@ -1540,6 +1573,8 @@ class LiveSession:
         ratings_data = self._ratings_data_by_set.get(set_code.upper())
         if ratings_data is None:
             return None
+        if self._lazy_pair_card_ratings:
+            return ratings_data
 
         return replace(ratings_data, pair_card_ratings_loader=None)
 
@@ -1825,6 +1860,14 @@ class LiveSession:
 
         if isinstance(event, QuickDraftDetectedEvent):
             self._consume_detected_event(event=event)
+            return
+
+        if state is None and isinstance(event, PackOfferedEvent):
+            self._current_pack_event = event
+            self._current_scored_pack = None
+            self._set_active_set_code(set_code=event.set_code)
+            self._ensure_ratings_loaded(set_code=event.set_code)
+            self._score_current_pack()
             return
 
         if state is None:
@@ -2235,6 +2278,23 @@ class LiveSession:
             self._snapshot = snapshot
             if self._snapshot_publisher is not None:
                 self._snapshot_publisher(snapshot)
+
+    def _publish_event(self, *, event: DraftEvent) -> None:
+        if self._event_publisher is None:
+            return
+
+        scored_pack = (
+            self._current_scored_pack
+            if isinstance(event, PackOfferedEvent)
+            else None
+        )
+        self._event_publisher(
+            LiveSessionEvent(
+                event=event,
+                snapshot=self.snapshot,
+                scored_pack=scored_pack,
+            )
+        )
 
 
 def _draft_coordinates(

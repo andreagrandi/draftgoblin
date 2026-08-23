@@ -12,6 +12,12 @@ import pytest
 import draftgoblin.session as session_module
 from draftgoblin.audit import load_draft_audit_records
 from draftgoblin.carddb import CardDatabase, CardInfo
+from draftgoblin.events import (
+    AccountEvent,
+    DraftStartedEvent,
+    PackOfferedEvent,
+    QuickDraftDetectedEvent,
+)
 from draftgoblin.pool import (
     DraftPick,
     DraftPoolStore,
@@ -41,6 +47,7 @@ from draftgoblin.session import (
     DraftIdentity,
     LiveSession,
     LiveSessionCommand,
+    LiveSessionEvent,
     LiveSessionSnapshot,
     OperationKind,
     PoolCard,
@@ -321,6 +328,31 @@ def test_live_session_polling_and_rotation_publish_complete_persisted_lifecycle(
     assert audit_records[0]["record_type"] == "draft_started"
     assert sum(record["record_type"] == "choice_made" for record in audit_records) == 42
     assert audit_records[-1]["record_type"] == "draft_completed"
+
+
+def test_live_session_publishes_consumed_events_with_resulting_state(
+    tmp_path: Path,
+) -> None:
+    published: list[LiveSessionEvent] = []
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        event_publisher=published.append,
+    )
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+
+    session.process_lines(lines=fixture_lines[:7])
+
+    assert [type(item.event) for item in published] == [
+        AccountEvent,
+        QuickDraftDetectedEvent,
+        DraftStartedEvent,
+        PackOfferedEvent,
+    ]
+    assert published[-1].snapshot is session.snapshot
+    assert published[-1].scored_pack is not None
+    assert published[-1].snapshot.recommendations.cards
 
 
 def test_live_session_startup_scan_processes_previous_then_current_once(
