@@ -55,6 +55,15 @@ Rectangle {
                 wrapMode: Text.WordWrap
             }
 
+            Label {
+                Layout.fillWidth: true
+                visible: root.hasError
+                    && root.sessionState.ratings.phase === "failed"
+                text: root.sessionState.ratings.message
+                color: Theme.textMuted
+                wrapMode: Text.WordWrap
+            }
+
             ProgressBar {
                 Layout.fillWidth: true
                 visible: root.hasProgress
@@ -71,8 +80,12 @@ Rectangle {
 
         Button {
             visible: root.hasWarning
+                && root.sessionState.ratings.set_code !== null
+                && root.sessionState.ratings.set_code !== undefined
             text: "Download ratings"
-            onClicked: sessionProvider.requestRatings()
+            Accessible.name: "Download ratings"
+            objectName: "ratingsDownloadButton"
+            onClicked: ratingsDownloadDialog.open()
         }
 
         Button {
@@ -85,6 +98,43 @@ Rectangle {
             visible: root.hasError
             text: "Dismiss"
             onClicked: sessionProvider.dismissError(root.activeError.error_id)
+        }
+    }
+
+    Dialog {
+        id: ratingsDownloadDialog
+        objectName: "ratingsDownloadDialog"
+        implicitWidth: 400
+        modal: true
+        parent: Overlay.overlay
+        title: "Download ratings?"
+
+        Label {
+            width: 360
+            text: "Download 17Lands ratings for "
+                + root.sessionState.ratings.set_code
+                + "? Neutral-prior recommendations remain available while it loads."
+            color: Theme.text
+            wrapMode: Text.WordWrap
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                objectName: "ratingsDownloadCancelButton"
+                text: "Not now"
+                Accessible.name: "Cancel ratings download"
+                onClicked: ratingsDownloadDialog.close()
+            }
+
+            Button {
+                objectName: "ratingsDownloadConfirmButton"
+                text: "Download ratings"
+                Accessible.name: "Confirm ratings download"
+                onClicked: {
+                    sessionProvider.requestRatings()
+                    ratingsDownloadDialog.close()
+                }
+            }
         }
     }
 }

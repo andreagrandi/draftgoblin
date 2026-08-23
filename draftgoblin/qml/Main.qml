@@ -4,6 +4,7 @@ import QtQuick.Layouts 1.15
 
 ApplicationWindow {
     id: window
+    required property var provider
 
     width: initialWindowWidth
     height: initialWindowHeight
@@ -15,11 +16,11 @@ ApplicationWindow {
 
     property string currentSurface: initialSurface
     readonly property bool narrow: width < Theme.narrowBreakpoint
-    readonly property var sessionState: sessionProvider.state
+    readonly property var sessionState: provider.state
 
     header: AppBar {
         sessionState: window.sessionState
-        provider: sessionProvider
+        provider: window.provider
         onSettingsRequested: window.currentSurface = "settings"
     }
 
@@ -51,7 +52,7 @@ ApplicationWindow {
 
             LiveDraftView {
                 sessionState: window.sessionState
-                recommendationModel: sessionProvider.recommendationsModel
+                recommendationModel: window.provider.recommendationsModel
                 narrow: window.narrow
             }
 

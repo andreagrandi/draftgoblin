@@ -20,6 +20,7 @@ from draftgoblin.backtest import (
     load_persisted_backtest_state,
 )
 from draftgoblin.carddb import CardDatabase, CardInfo
+from draftgoblin.cardimages import CardImageService
 from draftgoblin.config import POLL_INTERVAL_SECONDS, SPLASH
 from draftgoblin.deckbuilder import (
     BuildPool,
@@ -224,6 +225,27 @@ class RatingsState:
 
 
 @dataclass(frozen=True, slots=True)
+class CardImageState:
+    """Describe selected-card image availability for presentation adapters.
+    Fetching stays in Python while frontends render paths and readiness only.
+    """
+
+    grp_id: int | None = None
+    phase: DataLoadPhase = DataLoadPhase.UNAVAILABLE
+    message: str = "No selected card image is available."
+
+
+@dataclass(frozen=True, slots=True)
+class CardImageRequest:
+    """Identify one selected-card image fetch for the adapter worker.
+    The session validates completion before it publishes a result.
+    """
+
+    generation: int
+    grp_id: int
+    image_uri: str
+
+@dataclass(frozen=True, slots=True)
 class PoolCard:
     """Describe one distinct card and quantity in the drafted pool.
     Stable ordering allows frontends to render deterministic summaries.
@@ -390,6 +412,7 @@ class LiveSessionSnapshot:
     ratings: RatingsState = field(default_factory=RatingsState)
     recommendations: RecommendationState = field(default_factory=RecommendationState)
     pool: PoolState = field(default_factory=PoolState)
+    card_image: CardImageState = field(default_factory=CardImageState)
     current_pack_event: PackOfferedEvent | None = None
     current_scored_pack: ScoredPack | None = None
     progress: ProgressState | None = None
@@ -528,6 +551,7 @@ class LiveSession:
         ratings_progress_loader_factory: RatingsProgressLoaderFactory | None = None,
         ratings_cache_checker: RatingsCacheChecker | None = None,
         lazy_pair_card_ratings: bool = False,
+        card_image_service: CardImageService | None = None,
         splash_enabled: bool = SPLASH.enabled_by_default,
     ) -> None:
         if card_database is not None and card_database_loader is not None:
@@ -579,6 +603,7 @@ class LiveSession:
         self._current_scored_pack: ScoredPack | None = None
         self._transient_pool_grp_ids: tuple[int, ...] = ()
         self._last_build_request: RequestBuild | None = None
+        self._card_image_request: CardImageRequest | None = None
         self._last_backtest_request: RequestBacktest | None = None
         self._build_request_generation = 0
         self._backtest_request_generation = 0
@@ -586,6 +611,9 @@ class LiveSession:
         self._log_account_id: str | None = None
         self._states_by_key: dict[tuple[str, str], DraftState] = {}
         self._screen_names_by_account_id: dict[str, str] = {}
+        self._card_image_service = card_image_service
+        self._card_image_paths_by_uri: dict[str, Path] = {}
+        self._card_image_generation = 0
         self._configure_ratings_loader_for_card_database()
         if card_database is not None:
             card_data = CardDataState(
@@ -645,6 +673,73 @@ class LiveSession:
         """
 
         return self.snapshot.current_scored_pack
+
+    def selected_card_image_request(self) -> CardImageRequest | None:
+        """Return the current selected-image fetch for an active frontend.
+        Calling this method has no network or publication side effects.
+        """
+
+        return self._card_image_request
+
+    def fetch_card_image(self, *, request: CardImageRequest) -> Path:
+        """Fetch one adapter-scheduled image through the configured service.
+        The caller owns execution; this method only performs the synchronous fetch.
+        """
+
+        card_image_service = self._card_image_service
+        if card_image_service is None:
+            raise ValueError("Card images are not configured.")
+        return card_image_service.fetch(image_uri=request.image_uri)
+
+    def complete_card_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        image_path: Path,
+    ) -> None:
+        """Publish a successful adapter-owned image fetch when it is still current."""
+
+        with self._state_lock:
+            if request != self._card_image_request:
+                return
+            self._card_image_request = None
+            self._card_image_paths_by_uri[request.image_uri] = image_path
+            self._publish_selected_card_image(
+                grp_id=request.grp_id,
+                image_path=image_path,
+            )
+
+    def fail_card_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        error_message: str,
+    ) -> None:
+        """Publish an adapter-owned image failure when it is still current."""
+
+        with self._state_lock:
+            if request != self._card_image_request:
+                return
+            self._card_image_request = None
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    card_image=CardImageState(
+                        grp_id=request.grp_id,
+                        phase=DataLoadPhase.FAILED,
+                        message=f"Card image unavailable: {error_message}",
+                    ),
+                )
+            )
+
+    def _retire_card_image(self) -> CardImageState:
+        """Invalidate the active fetch and return the neutral image state.
+        Callers publish the returned state while holding the session state lock.
+        """
+
+        self._card_image_generation += 1
+        self._card_image_request = None
+        return CardImageState()
 
     def ratings_data(self, *, set_code: str) -> SeventeenLandsData | None:
         """Return loaded ratings for presentation-adjacent legacy services.
@@ -714,6 +809,7 @@ class LiveSession:
                 self._consume_event(event=event, state=state)
                 self._publish_event(event=event)
             self._persist_pending_login_name_for_observed_course()
+        self._start_selected_card_image_load()
 
         return self.snapshot
 
@@ -1138,15 +1234,27 @@ class LiveSession:
         Frontends remain responsible for timers, workers, and event-loop teardown.
         """
 
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                status=ApplicationStatus(
-                    phase=ApplicationPhase.STOPPED,
-                    message="Draftgoblin stopped.",
-                ),
+        with self._state_lock:
+            self._card_image_generation += 1
+            self._card_image_request = None
+            card_image = self.snapshot.card_image
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    status=ApplicationStatus(
+                        phase=ApplicationPhase.STOPPED,
+                        message="Draftgoblin stopped.",
+                    ),
+                    card_image=(
+                        CardImageState(
+                            grp_id=card_image.grp_id,
+                            message="Card image loading stopped.",
+                        )
+                        if card_image.phase == DataLoadPhase.LOADING
+                        else card_image
+                    ),
+                )
             )
-        )
         return self.snapshot
 
     def _initial_ratings_state(self) -> RatingsState:
@@ -1585,6 +1693,7 @@ class LiveSession:
                 ),
             )
         )
+        self._start_selected_card_image_load()
         return True
 
     def _recommendation_state(self, *, scored_pack: ScoredPack) -> RecommendationState:
@@ -1595,7 +1704,7 @@ class LiveSession:
         selected_grp_id = self.snapshot.recommendations.selected_grp_id
         available_grp_ids = {card.card.grp_id for card in ranked_cards}
         if selected_grp_id not in available_grp_ids:
-            selected_grp_id = None
+            selected_grp_id = ranked_cards[0].card.grp_id if ranked_cards else None
         return RecommendationState(
             ranking_mode=self._ranking_mode,
             splash_enabled=self._splash_enabled,
@@ -1615,7 +1724,7 @@ class LiveSession:
     ) -> Recommendation:
         return Recommendation(
             rank=rank,
-            card=_card_view(card=scored_card.card),
+            card=self._card_view(card=scored_card.card),
             score=scored_card.score,
             win_rate=scored_card.rating.gih_win_rate,
             average_last_seen_at=scored_card.rating.average_last_seen_at,
@@ -1623,6 +1732,140 @@ class LiveSession:
             color_fit=scored_card.color_fit,
             no_data=scored_card.no_data,
             letter_grade=scored_card.rating.letter_grade,
+        )
+
+    def _card_view(self, *, card: CardInfo) -> CardView:
+        """Project a card with any image path already resolved by this session.
+        Cache lookups do not perform filesystem or network work.
+        """
+
+        card_image_service = self._card_image_service
+        database = self._card_database
+        image_uri = (
+            None
+            if card_image_service is None or database is None
+            else card_image_service.resolve_image_uri(
+                card=card,
+                card_database=database,
+            )
+        )
+        image_path = (
+            None
+            if image_uri is None
+            else self._card_image_paths_by_uri.get(image_uri)
+        )
+        return _card_view(
+            card=card,
+            image_path=None if image_path is None else str(image_path),
+        )
+
+    def _start_selected_card_image_load(self) -> None:
+        """Publish one selected-image request for the adapter worker.
+        The worker performs its bounded fetch and returns an explicit result.
+        """
+
+        if self.snapshot.status.phase == ApplicationPhase.STOPPED:
+            return
+
+        card_image_service = self._card_image_service
+        recommendations = self.snapshot.recommendations
+        selected_grp_id = recommendations.selected_grp_id
+        if card_image_service is None or selected_grp_id is None or self._card_database is None:
+            self._card_image_request = None
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    card_image=CardImageState(
+                        grp_id=selected_grp_id,
+                        message="No selected card image is available.",
+                    ),
+                )
+            )
+            return
+
+        card = self._card_database.lookup(grp_id=selected_grp_id)
+        image_uri = card_image_service.resolve_image_uri(
+            card=card,
+            card_database=self._card_database,
+        )
+        if image_uri is None:
+            self._card_image_request = None
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    card_image=CardImageState(
+                        grp_id=selected_grp_id,
+                        message=f"No card image is available for {card.name}.",
+                    ),
+                )
+            )
+            return
+
+        card_image = self.snapshot.card_image
+        if (
+            card_image.grp_id == selected_grp_id
+            and card_image.phase in {
+                DataLoadPhase.LOADING,
+                DataLoadPhase.READY,
+                DataLoadPhase.FAILED,
+            }
+        ):
+            return
+
+        cached_path = self._card_image_paths_by_uri.get(image_uri)
+        if cached_path is not None and cached_path.is_file():
+            self._card_image_request = None
+            self._publish_selected_card_image(
+                grp_id=selected_grp_id,
+                image_path=cached_path,
+            )
+            return
+
+        self._card_image_generation += 1
+        request = CardImageRequest(
+            generation=self._card_image_generation,
+            grp_id=selected_grp_id,
+            image_uri=image_uri,
+        )
+        self._card_image_request = request
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                card_image=CardImageState(
+                    grp_id=selected_grp_id,
+                    phase=DataLoadPhase.LOADING,
+                    message=f"Loading image for {card.name}.",
+                ),
+            )
+        )
+
+    def _publish_selected_card_image(self, *, grp_id: int, image_path: Path) -> None:
+        """Publish the resolved selected-card path as a plain snapshot value.
+        Recommendation ordering and scoring remain unchanged.
+        """
+
+        recommendations = replace(
+            self.snapshot.recommendations,
+            cards=tuple(
+                replace(
+                    recommendation,
+                    card=replace(recommendation.card, image_path=str(image_path)),
+                )
+                if recommendation.card.grp_id == grp_id
+                else recommendation
+                for recommendation in self.snapshot.recommendations.cards
+            ),
+        )
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                recommendations=recommendations,
+                card_image=CardImageState(
+                    grp_id=grp_id,
+                    phase=DataLoadPhase.READY,
+                    message="Card image ready.",
+                ),
+            )
         )
 
     def _ratings_state_after_scoring(
@@ -1699,6 +1942,7 @@ class LiveSession:
                 ),
             )
         )
+        self._start_selected_card_image_load()
 
     def _change_splash_preference(self, *, enabled: bool) -> None:
         with self._state_lock:
@@ -1853,7 +2097,7 @@ class LiveSession:
         counts = Counter(pool_grp_ids)
         cards = tuple(
             PoolCard(
-                card=_card_view(card=database.lookup(grp_id=grp_id)),
+                card=self._card_view(card=database.lookup(grp_id=grp_id)),
                 quantity=counts[grp_id],
             )
             for grp_id in dict.fromkeys(pool_grp_ids)
@@ -2072,6 +2316,11 @@ class LiveSession:
         )
         with self._state_lock:
             errors = self._retire_derived_operations()
+            card_image = (
+                self.snapshot.card_image
+                if keep_recommendations
+                else self._retire_card_image()
+            )
             self._publish(
                 snapshot=replace(
                     self.snapshot,
@@ -2088,6 +2337,7 @@ class LiveSession:
                             splash_enabled=self._splash_enabled,
                         )
                     ),
+                    card_image=card_image,
                     pool=self._pool_state(
                         pool_grp_ids=self._transient_pool_grp_ids,
                     ),
@@ -2130,6 +2380,7 @@ class LiveSession:
         active_account = self._identity_for(account_id=account_id)
         with self._state_lock:
             errors = self._retire_derived_operations()
+            card_image = self._retire_card_image()
             self._publish(
                 snapshot=replace(
                     self.snapshot,
@@ -2144,6 +2395,7 @@ class LiveSession:
                         ranking_mode=self._ranking_mode,
                         splash_enabled=self._splash_enabled,
                     ),
+                    card_image=card_image,
                     pool=PoolState(),
                     progress=None,
                     errors=errors,
@@ -2182,6 +2434,7 @@ class LiveSession:
         self._set_active_set_code(set_code=None)
         with self._state_lock:
             errors = self._retire_derived_operations()
+            card_image = self._retire_card_image()
             self._publish(
                 snapshot=replace(
                     self.snapshot,
@@ -2197,6 +2450,7 @@ class LiveSession:
                         ranking_mode=self._ranking_mode,
                         splash_enabled=self._splash_enabled,
                     ),
+                    card_image=card_image,
                     pool=PoolState(),
                     progress=None,
                     errors=errors,
@@ -2235,6 +2489,19 @@ class LiveSession:
         )
         with self._state_lock:
             errors = self._retire_derived_operations()
+            previous_draft = self.snapshot.draft
+            switches_context = (
+                self.snapshot.active_account is None
+                or self.snapshot.active_account.account_id != state.account_id
+                or previous_draft is None
+                or previous_draft.account_id != state.account_id
+                or previous_draft.draft_id != state.draft_id
+            )
+            card_image = (
+                self._retire_card_image()
+                if switches_context or not isinstance(event, PickMadeEvent)
+                else self.snapshot.card_image
+            )
             self._publish(
                 snapshot=replace(
                     self.snapshot,
@@ -2262,6 +2529,7 @@ class LiveSession:
                             splash_enabled=self._splash_enabled,
                         )
                     ),
+                    card_image=card_image,
                     pool=self._pool_state(
                         pool_grp_ids=state.pool_grp_ids,
                     ),
@@ -2497,7 +2765,7 @@ def _draft_pick_index(*, event: PackOfferedEvent) -> int:
     return (event.pack_number * EXPECTED_PICKS_PER_PACK) + event.pick_number + 1
 
 
-def _card_view(*, card: CardInfo) -> CardView:
+def _card_view(*, card: CardInfo, image_path: str | None = None) -> CardView:
     return CardView(
         grp_id=card.grp_id,
         name=card.name,
@@ -2506,7 +2774,7 @@ def _card_view(*, card: CardInfo) -> CardView:
         types=card.types,
         mana_cost=card.mana_cost,
         mana_value=card.mana_value,
-        image_path=None,
+        image_path=image_path,
     )
 
 

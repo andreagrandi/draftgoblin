@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
@@ -64,20 +66,48 @@ Rectangle {
             }
         }
 
-        Label {
-            text: root.sessionState.active_account
+        ComboBox {
+            id: accountSelector
+            objectName: "accountSelector"
+            Layout.preferredWidth: 180
+            visible: root.sessionState.accounts
+                && root.sessionState.accounts.length > 0
+            model: root.sessionState.accounts || []
+            valueRole: "account_id"
+            currentIndex: {
+                const activeAccount = root.sessionState.active_account
+                if (!activeAccount)
+                    return -1
+                for (let index = 0; index < model.length; index++) {
+                    if (model[index].account_id === activeAccount.account_id)
+                        return index
+                }
+                return -1
+            }
+            displayText: root.sessionState.active_account
                 ? root.sessionState.active_account.screen_name
-                : "No Arena account"
-            color: Theme.textMuted
-            font.pixelSize: 12
+                    || root.sessionState.active_account.account_id
+                : "Choose Arena account"
+            Accessible.name: "Arena account"
+            onActivated: root.provider.chooseAccount(currentValue)
+
+            delegate: ItemDelegate {
+                required property var modelData
+                required property int index
+                width: accountSelector.width
+                text: modelData.screen_name || modelData.account_id
+                highlighted: accountSelector.highlightedIndex === index
+            }
         }
 
         ComboBox {
             id: scenarioSelector
-            visible: root.provider.mockMode
+            visible: root.provider && root.provider.mockMode
             Layout.preferredWidth: 126
-            model: root.provider.scenarios
-            currentIndex: Math.max(0, root.provider.scenarios.indexOf(root.provider.scenario))
+            model: root.provider ? root.provider.scenarios : []
+            currentIndex: root.provider
+                ? Math.max(0, root.provider.scenarios.indexOf(root.provider.scenario))
+                : -1
             Accessible.name: "Representative state"
             onActivated: root.provider.selectScenario(currentText)
 
@@ -90,6 +120,7 @@ Rectangle {
         }
 
         Button {
+            objectName: "settingsButton"
             text: "Settings"
             Accessible.name: "Open settings"
             onClicked: root.settingsRequested()

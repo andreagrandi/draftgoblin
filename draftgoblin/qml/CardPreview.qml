@@ -7,6 +7,16 @@ Rectangle {
 
     property var recommendation: null
     property bool loading: false
+    property var imageState: null
+    readonly property bool imageLoading: Boolean(
+        loading || imageState && imageState.phase === "loading"
+    )
+    readonly property bool imageAvailable: Boolean(
+        recommendation
+            && recommendation.card.image_path
+            && imageState
+            && imageState.phase === "ready"
+    )
 
     color: Theme.surfaceLow
     border.color: Theme.outline
@@ -33,14 +43,25 @@ Rectangle {
             Layout.preferredWidth: Math.min(240, root.width - 32)
             Layout.preferredHeight: Layout.preferredWidth * 1.4
             color: "#171817"
-            border.color: root.loading ? Theme.warning : Theme.outline
+            border.color: root.imageLoading ? Theme.warning : Theme.outline
             border.width: 2
             radius: 10
+            clip: true
+
+            Image {
+                id: cardImage
+                anchors.fill: parent
+                source: root.imageAvailable ? root.recommendation.card.image_path : ""
+                fillMode: Image.PreserveAspectFit
+                asynchronous: true
+                visible: status === Image.Ready
+            }
 
             ColumnLayout {
                 anchors.centerIn: parent
                 width: parent.width - 32
                 spacing: 10
+                visible: !cardImage.visible
 
                 Rectangle {
                     Layout.alignment: Qt.AlignHCenter
@@ -54,9 +75,13 @@ Rectangle {
 
                 Label {
                     Layout.fillWidth: true
-                    text: root.loading
-                        ? "Loading card image"
-                        : root.recommendation ? root.recommendation.card.name : "No card selected"
+                    text: {
+                        if (root.imageLoading)
+                            return "Loading card image"
+                        if (root.recommendation)
+                            return root.recommendation.card.name
+                        return "No card selected"
+                    }
                     color: Theme.text
                     font.pixelSize: 16
                     font.bold: true
@@ -66,9 +91,13 @@ Rectangle {
 
                 Label {
                     Layout.fillWidth: true
-                    text: root.loading
-                        ? "The recommendation list remains available."
-                        : "Card image unavailable in deterministic mock data"
+                    text: {
+                        if (cardImage.status === Image.Error)
+                            return "Card image could not be displayed."
+                        if (root.imageState)
+                            return root.imageState.message
+                        return "Card image unavailable"
+                    }
                     color: Theme.textMuted
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter

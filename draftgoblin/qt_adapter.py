@@ -1,5 +1,5 @@
 """Translate shared live-session state and commands for Qt frontends.
-Keep blocking session work on one worker thread and QML values presentation-only.
+Keep blocking session work in adapter-owned workers and QML values presentation-only.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from PySide6.QtCore import (
     Property,
     QThread,
     QTimer,
+    QUrl,
     Qt,
     Signal,
     Slot,
@@ -27,6 +28,7 @@ from draftgoblin.ranking import RankingMode
 from draftgoblin.session import (
     ChangeRanking,
     ChangeSplashPreference,
+    ChooseAccount,
     ChooseRecommendation,
     DismissError,
     LiveSession,
@@ -54,12 +56,16 @@ def _to_qml_value(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
     if is_dataclass(value) and not isinstance(value, type):
-        return {
+        converted = {
             field.name: _to_qml_value(getattr(value, field.name))
             for field in fields(value)
             if not field.name.startswith("domain_")
             and field.name not in _OMITTED_SNAPSHOT_FIELDS
         }
+        image_path = converted.get("image_path")
+        if image_path is not None:
+            converted["image_path"] = QUrl.fromLocalFile(image_path).toString()
+        return converted
     if isinstance(value, tuple):
         return [_to_qml_value(item) for item in value]
     if isinstance(value, dict):
@@ -148,6 +154,10 @@ class SessionAdapter(QObject):
     def selectScenario(self, scenario: str) -> None:
         del scenario
 
+    @Slot(str)
+    def chooseAccount(self, account_id: str) -> None:
+        self._dispatch(command=ChooseAccount(account_id=account_id))
+
     @Slot(int)
     def chooseRecommendation(self, grp_id: int) -> None:
         self._dispatch(command=ChooseRecommendation(grp_id=grp_id))
@@ -167,7 +177,9 @@ class SessionAdapter(QObject):
     @Slot()
     def requestRatings(self) -> None:
         ratings = self._state.get("ratings", {})
-        set_code = ratings.get("set_code") or "OTJ"
+        set_code = ratings.get("set_code")
+        if not set_code:
+            return
         self._dispatch(command=RequestRatingsDownload(set_code=set_code))
 
     @Slot(str)
@@ -284,6 +296,7 @@ class _LiveSessionWorker(QObject):
             return
         try:
             self._session.dispatch(command=command)
+            self._request_selected_card_image()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.failed.emit(str(error))
 
@@ -293,8 +306,31 @@ class _LiveSessionWorker(QObject):
             return
         try:
             self._session.poll_once()
+            self._request_selected_card_image()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.failed.emit(str(error))
+
+    def _request_selected_card_image(self) -> None:
+        if self._session is None or not hasattr(
+            self._session,
+            "selected_card_image_request",
+        ):
+            return
+        request = self._session.selected_card_image_request()
+        if request is None:
+            return
+        try:
+            image_path = self._session.fetch_card_image(request=request)
+        except Exception as error:  # pragma: no cover - defensive network boundary.
+            self._session.fail_card_image_request(
+                request=request,
+                error_message=str(error),
+            )
+        else:
+            self._session.complete_card_image_request(
+                request=request,
+                image_path=image_path,
+            )
 
     @Slot()
     def stop(self) -> None:
@@ -309,8 +345,8 @@ class _LiveSessionWorker(QObject):
 
 
 class LiveSessionAdapter(SessionAdapter):
-    """Run the production live session behind one queued Qt worker.
-    Immutable snapshots return to the GUI thread through queued signals.
+    """Run the production live session on one adapter-owned QThread.
+    Immutable snapshots return through queued Qt signals.
     """
 
     _commandRequested = Signal(object)
@@ -373,4 +409,3 @@ class LiveSessionAdapter(SessionAdapter):
 
     def _dispatch(self, *, command: LiveSessionCommand) -> None:
         self._commandRequested.emit(command)
-
