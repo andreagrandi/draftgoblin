@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import ast
 import json
+import threading
 from dataclasses import FrozenInstanceError, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from draftgoblin.audit import load_draft_audit_records
+from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.pool import (
     DraftPoolStore,
     DraftState,
@@ -25,11 +28,13 @@ from draftgoblin.session import (
     BuildLand,
     BuildPairOption,
     BuildResult,
+    CardDataState,
     CardView,
     ChangeRanking,
     ChangeSplashPreference,
     ChooseAccount,
     ChooseRecommendation,
+    DataLoadPhase,
     DismissError,
     DraftIdentity,
     LiveSession,
@@ -39,6 +44,8 @@ from draftgoblin.session import (
     PoolCard,
     PoolState,
     ProgressState,
+    RatingsLoader,
+    RatingsState,
     Recommendation,
     RecommendationState,
     RequestBacktest,
@@ -46,6 +53,16 @@ from draftgoblin.session import (
     RequestRatingsDownload,
     RetryError,
     SessionError,
+)
+from draftgoblin.seventeen import (
+    DownloadProgressCallback,
+    PREMIER_DRAFT_FORMAT,
+    QUICK_DRAFT_FORMAT,
+    RatingSampleCounts,
+    SeventeenCardStats,
+    SeventeenLandsData,
+    SeventeenLandsDownloadProgress,
+    SeventeenLandsFormatData,
 )
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -64,6 +81,8 @@ def test_default_live_session_snapshot_has_neutral_initial_state() -> None:
     assert snapshot.accounts == ()
     assert snapshot.active_account is None
     assert snapshot.draft is None
+    assert snapshot.card_data == CardDataState()
+    assert snapshot.ratings == RatingsState()
     assert snapshot.recommendations == RecommendationState()
     assert snapshot.pool == PoolState()
     assert snapshot.progress is None
@@ -519,6 +538,433 @@ def test_live_session_rejects_unknown_account_selection(tmp_path: Path) -> None:
         session.dispatch(command=ChooseAccount(account_id="missing-account"))
 
 
+def test_live_session_loads_cached_ratings_scores_all_ranking_modes_and_audits_choice(
+    tmp_path: Path,
+) -> None:
+    cache_checks: list[str] = []
+    rating_loads: list[str] = []
+
+    def cache_checker(set_code: str) -> bool:
+        cache_checks.append(set_code)
+        return True
+
+    def ratings_loader(set_code: str) -> SeventeenLandsData:
+        rating_loads.append(set_code)
+        return _fixture_ratings_data(set_code=set_code)
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        ratings_loader=ratings_loader,
+        ratings_cache_checker=cache_checker,
+    )
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    pack_line_index = _process_until_recommendations(
+        session=session,
+        lines=fixture_lines,
+    )
+
+    assert cache_checks == ["MSH"]
+    assert rating_loads == ["MSH"]
+    assert session.snapshot.card_data.phase == DataLoadPhase.READY
+    assert session.snapshot.ratings == RatingsState(
+        set_code="MSH",
+        phase=DataLoadPhase.READY,
+        message="17Lands ratings are ready for MSH.",
+        rated_cards=2,
+        total_cards=14,
+    )
+    assert session.snapshot.recommendations.source_summary == (
+        "QuickDraft + Premier fallback + neutral prior"
+    )
+    assert {card.source_label for card in session.snapshot.recommendations.cards} == {
+        "Premier",
+        "Prior*",
+        "Quick",
+    }
+
+    top_cards_by_mode: dict[str, int] = {}
+    supported_modes = session.snapshot.recommendations.supported_ranking_modes
+    for ranking_mode in supported_modes:
+        snapshot = session.dispatch(
+            command=ChangeRanking(ranking_mode=ranking_mode),
+        )
+        top_cards_by_mode[ranking_mode] = snapshot.recommendations.cards[0].card.grp_id
+        assert snapshot.recommendations.ranking_mode == ranking_mode
+        assert tuple(card.rank for card in snapshot.recommendations.cards) == tuple(
+            range(1, 15)
+        )
+
+    assert top_cards_by_mode == {
+        "score": 104894,
+        "win_rate": 104894,
+        "alsa": 104976,
+        "mv": 105080,
+    }
+    expected_recommendation = top_cards_by_mode["mv"]
+    for line in fixture_lines[pack_line_index + 1 :]:
+        session.process_lines(lines=(line,))
+        records = load_draft_audit_records(
+            account_id=FIXTURE_ACCOUNT_ID,
+            draft_id=FIXTURE_DRAFT_ID,
+            app_dir=tmp_path / "app",
+        )
+        if records and records[-1]["record_type"] == "choice_made":
+            break
+
+    assert records[-2]["record_type"] == "decision_evaluated"
+    assert records[-1]["record_type"] == "choice_made"
+    assert records[-1]["ranking_mode"] == "mv"
+    assert records[-1]["recommended_grp_id"] == expected_recommendation
+    assert records[-1]["evaluation_id"] == records[-2]["evaluation_id"]
+
+
+def test_live_session_uses_one_based_later_pick_index_in_scores_and_audit(
+    tmp_path: Path,
+) -> None:
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+    )
+    for line in FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines():
+        snapshot = session.process_lines(lines=(line,))
+        if (
+            snapshot.draft is not None
+            and snapshot.draft.pack_number == 0
+            and snapshot.draft.pick_number == 5
+            and snapshot.recommendations.cards
+        ):
+            break
+
+    records = load_draft_audit_records(
+        account_id=FIXTURE_ACCOUNT_ID,
+        draft_id=FIXTURE_DRAFT_ID,
+        app_dir=tmp_path / "app",
+    )
+    evaluation = records[-1]
+
+    assert evaluation["record_type"] == "decision_evaluated"
+    assert evaluation["pack_number"] == 0
+    assert evaluation["pick_number"] == 5
+    assert evaluation["pick_index"] == 6
+    assert evaluation["commitment"]["pick_index"] == 6
+    assert evaluation["commitment"]["level"] > 0.0
+
+
+def test_live_session_missing_ratings_use_neutral_priors_until_download_completes(
+    tmp_path: Path,
+) -> None:
+    published: list[LiveSessionSnapshot] = []
+    load_calls: list[str] = []
+
+    def ratings_loader(
+        set_code: str,
+        progress_callback: DownloadProgressCallback,
+    ) -> SeventeenLandsData:
+        load_calls.append(set_code)
+        progress_callback(
+            SeventeenLandsDownloadProgress(
+                completed_requests=1,
+                total_requests=4,
+                message="Downloaded Quick Draft ratings",
+            )
+        )
+        progress_callback(
+            SeventeenLandsDownloadProgress(
+                completed_requests=4,
+                total_requests=4,
+                message="Downloaded Premier Draft ratings",
+            )
+        )
+        return _fixture_ratings_data(set_code=set_code)
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        ratings_progress_loader=ratings_loader,
+        ratings_cache_checker=lambda set_code: False,
+        snapshot_publisher=published.append,
+    )
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    _process_until_recommendations(session=session, lines=fixture_lines)
+
+    assert load_calls == []
+    assert session.snapshot.ratings.phase == DataLoadPhase.MISSING
+    assert session.snapshot.recommendations.source_summary == "neutral prior"
+    assert all(card.no_data for card in session.snapshot.recommendations.cards)
+    assert all(card.score == 50 for card in session.snapshot.recommendations.cards)
+
+    published.clear()
+    downloaded = session.dispatch(command=RequestRatingsDownload(set_code="MSH"))
+
+    assert load_calls == ["MSH"]
+    assert downloaded.ratings.phase == DataLoadPhase.READY
+    assert downloaded.progress is None
+    assert downloaded.recommendations.cards[0].card.grp_id == 104894
+    assert any(
+        snapshot.ratings.phase == DataLoadPhase.LOADING
+        and snapshot.progress == ProgressState(
+            operation=OperationKind.RATINGS,
+            message="Downloaded Quick Draft ratings",
+            completed=1,
+            total=4,
+        )
+        for snapshot in published
+    )
+    assert any(
+        snapshot.progress is not None and snapshot.progress.completed == 4
+        for snapshot in published
+    )
+
+
+def test_live_session_failed_ratings_download_is_recoverable_and_retry_rescores(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+
+    def ratings_loader(set_code: str) -> SeventeenLandsData:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary service failure")
+
+        return _fixture_ratings_data(set_code=set_code)
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        ratings_loader=ratings_loader,
+        ratings_cache_checker=lambda set_code: False,
+    )
+    _process_until_recommendations(
+        session=session,
+        lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
+    )
+
+    failed = session.dispatch(command=RequestRatingsDownload(set_code="MSH"))
+
+    assert failed.ratings.phase == DataLoadPhase.FAILED
+    assert failed.progress is None
+    assert failed.errors == (
+        SessionError(
+            error_id="ratings:MSH",
+            code="ratings_unavailable",
+            message="17Lands ratings failed for MSH: temporary service failure.",
+            recoverable=True,
+            operation=OperationKind.RATINGS,
+        ),
+    )
+    assert failed.recommendations.source_summary == "neutral prior"
+
+    recovered = session.dispatch(command=RetryError(error_id="ratings:MSH"))
+
+    assert attempts == 2
+    assert recovered.ratings.phase == DataLoadPhase.READY
+    assert recovered.errors == ()
+    assert recovered.recommendations.cards[0].card.grp_id == 104894
+
+
+def test_live_session_card_data_load_failure_and_retry_publish_complete_states(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+    published: list[LiveSessionSnapshot] = []
+
+    def card_database_loader() -> CardDatabase:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("card cache unavailable")
+
+        return _fixture_card_database()
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database_loader=card_database_loader,
+        snapshot_publisher=published.append,
+    )
+
+    assert session.snapshot.card_data.phase == DataLoadPhase.IDLE
+
+    failed = session.load_card_data()
+
+    assert failed.card_data.phase == DataLoadPhase.FAILED
+    assert failed.progress is None
+    assert failed.errors[0].error_id == "card-data"
+    assert any(
+        snapshot.card_data.phase == DataLoadPhase.LOADING
+        and snapshot.progress is not None
+        and snapshot.progress.operation == OperationKind.CARD_DATA
+        for snapshot in published
+    )
+
+    ready = session.dispatch(command=RetryError(error_id="card-data"))
+
+    assert attempts == 2
+    assert ready.card_data == CardDataState(
+        phase=DataLoadPhase.READY,
+        message="Card metadata is ready.",
+    )
+    assert ready.errors == ()
+
+
+def test_live_session_resumes_deferred_ratings_after_card_data_becomes_ready(
+    tmp_path: Path,
+) -> None:
+    factory_calls: list[CardDatabase] = []
+    cache_checks: list[str] = []
+    rating_loads: list[str] = []
+
+    def ratings_loader_factory(database: CardDatabase) -> RatingsLoader:
+        factory_calls.append(database)
+
+        def ratings_loader(set_code: str) -> SeventeenLandsData:
+            rating_loads.append(set_code)
+            return _fixture_ratings_data(set_code=set_code)
+
+        return ratings_loader
+
+    def cache_checker(set_code: str) -> bool:
+        cache_checks.append(set_code)
+        return True
+
+    database = _fixture_card_database()
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database_loader=lambda: database,
+        ratings_loader_factory=ratings_loader_factory,
+        ratings_cache_checker=cache_checker,
+    )
+    waiting = session.process_lines(
+        lines=(
+            _auth_line(account_id="account-1", screen_name="Player"),
+            _course_line(
+                event_name="QuickDraft_TST_20260823",
+                course_id="draft-tst",
+            ),
+        )
+    )
+
+    assert waiting.card_data.phase == DataLoadPhase.IDLE
+    assert waiting.ratings.phase == DataLoadPhase.IDLE
+    assert waiting.ratings.set_code == "TST"
+    assert factory_calls == []
+    assert cache_checks == []
+    assert rating_loads == []
+
+    ready = session.load_card_data()
+
+    assert factory_calls == [database]
+    assert cache_checks == ["TST"]
+    assert rating_loads == ["TST"]
+    assert ready.card_data.phase == DataLoadPhase.READY
+    assert ready.ratings.phase == DataLoadPhase.READY
+    assert ready.ratings.set_code == "TST"
+
+
+def test_inactive_ratings_worker_caches_result_without_publishing_stale_state(
+    tmp_path: Path,
+) -> None:
+    load_started = threading.Event()
+    release_load = threading.Event()
+    load_calls: list[str] = []
+    worker_errors: list[BaseException] = []
+    published: list[LiveSessionSnapshot] = []
+
+    def ratings_loader(
+        set_code: str,
+        progress_callback: DownloadProgressCallback,
+    ) -> SeventeenLandsData:
+        load_calls.append(set_code)
+        load_started.set()
+        assert release_load.wait(timeout=2.0)
+        progress_callback(
+            SeventeenLandsDownloadProgress(
+                completed_requests=4,
+                total_requests=4,
+                message=f"Downloaded ratings for {set_code}",
+            )
+        )
+        return _fixture_ratings_data(set_code=set_code)
+
+    def request_download() -> None:
+        try:
+            session.dispatch(command=RequestRatingsDownload(set_code="AAA"))
+        except BaseException as error:
+            worker_errors.append(error)
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        ratings_progress_loader=ratings_loader,
+        ratings_cache_checker=lambda set_code: False,
+        snapshot_publisher=published.append,
+    )
+    session.process_lines(
+        lines=(
+            _auth_line(account_id="account-1", screen_name="Player"),
+            _course_line(
+                event_name="QuickDraft_AAA_20260823",
+                course_id="draft-aaa",
+            ),
+        )
+    )
+    worker = threading.Thread(target=request_download, daemon=True)
+    worker.start()
+    assert load_started.wait(timeout=2.0)
+
+    try:
+        session.dispatch(command=RequestRatingsDownload(set_code="AAA"))
+        switched = session.process_lines(
+            lines=(
+                _course_line(
+                    event_name="QuickDraft_BBB_20260823",
+                    course_id="draft-bbb",
+                ),
+            )
+        )
+        assert load_calls == ["AAA"]
+        assert switched.draft is not None
+        assert switched.draft.set_code == "BBB"
+        assert switched.ratings.set_code == "BBB"
+        assert switched.ratings.phase == DataLoadPhase.MISSING
+        published.clear()
+    finally:
+        release_load.set()
+        worker.join(timeout=2.0)
+
+    assert not worker.is_alive()
+    assert worker_errors == []
+    assert published == []
+    assert session.snapshot.draft is not None
+    assert session.snapshot.draft.set_code == "BBB"
+    assert session.snapshot.ratings.set_code == "BBB"
+    assert session.snapshot.ratings.phase == DataLoadPhase.MISSING
+    assert session.snapshot.progress is None
+
+    restored = session.process_lines(
+        lines=(
+            _course_line(
+                event_name="QuickDraft_AAA_20260823",
+                course_id="draft-aaa",
+            ),
+        )
+    )
+
+    assert load_calls == ["AAA"]
+    assert restored.draft is not None
+    assert restored.draft.set_code == "AAA"
+    assert restored.ratings.set_code == "AAA"
+    assert restored.ratings.phase == DataLoadPhase.READY
+
+
 def _card() -> CardView:
     return CardView(
         grp_id=123,
@@ -529,6 +975,115 @@ def _card() -> CardView:
         mana_cost="{1}{W}",
         mana_value=2.0,
         image_path="cache/card.jpg",
+    )
+
+
+def _process_until_recommendations(
+    *,
+    session: LiveSession,
+    lines: list[str],
+) -> int:
+    for line_index, line in enumerate(lines):
+        snapshot = session.process_lines(lines=(line,))
+        if snapshot.recommendations.cards:
+            return line_index
+
+    raise AssertionError("Fixture did not publish pack recommendations.")
+
+
+def _fixture_card_database() -> CardDatabase:
+    offered_grp_ids = (
+        104894,
+        104976,
+        105080,
+        104995,
+        105027,
+        105030,
+        105170,
+        104932,
+        104893,
+        105091,
+        104969,
+        105097,
+        104979,
+        105164,
+    )
+    mana_values = {
+        104894: 4.0,
+        104976: 3.0,
+        105080: 1.0,
+    }
+    return CardDatabase(
+        cards={
+            grp_id: CardInfo(
+                grp_id=grp_id,
+                name=f"Fixture Card {grp_id}",
+                colors=("W", "U"),
+                mana_value=mana_values.get(grp_id, 5.0),
+                rarity="common",
+                types=("Creature",),
+            )
+            for grp_id in offered_grp_ids
+        }
+    )
+
+
+def _fixture_ratings_data(*, set_code: str) -> SeventeenLandsData:
+    fetched_at = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+    return SeventeenLandsData(
+        set_code=set_code,
+        requested_format=QUICK_DRAFT_FORMAT,
+        primary=SeventeenLandsFormatData(
+            set_code=set_code,
+            event_format=QUICK_DRAFT_FORMAT,
+            fetched_at=fetched_at,
+            card_ratings={
+                104894: _fixture_stats(
+                    grp_id=104894,
+                    gih_win_rate=0.65,
+                    average_last_seen_at=3.0,
+                ),
+            },
+            pair_win_rates={},
+        ),
+        fallback=SeventeenLandsFormatData(
+            set_code=set_code,
+            event_format=PREMIER_DRAFT_FORMAT,
+            fetched_at=fetched_at,
+            card_ratings={
+                104976: _fixture_stats(
+                    grp_id=104976,
+                    gih_win_rate=0.60,
+                    average_last_seen_at=1.0,
+                ),
+            },
+            pair_win_rates={},
+        ),
+    )
+
+
+def _fixture_stats(
+    *,
+    grp_id: int,
+    gih_win_rate: float,
+    average_last_seen_at: float,
+) -> SeventeenCardStats:
+    return SeventeenCardStats(
+        grp_id=grp_id,
+        name=f"Fixture Card {grp_id}",
+        color="",
+        rarity="common",
+        average_last_seen_at=average_last_seen_at,
+        gih_win_rate=gih_win_rate,
+        opening_hand_win_rate=gih_win_rate,
+        drawn_improvement_win_rate=0.0,
+        sample_counts=RatingSampleCounts(
+            seen=2_000,
+            picked=1_500,
+            games_played=1_200,
+            opening_hand=800,
+            games_in_hand=1_000,
+        ),
     )
 
 
