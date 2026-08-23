@@ -28,7 +28,7 @@ If the request omits the exact `X.Y.Z` version, ask for it. Never infer a versio
 3. Confirm the worktree is clean. Preserve and report unrelated changes.
 4. Check the requested version is newer than `uv version --short`.
 5. Confirm neither remote tag `vX.Y.Z` nor PyPI version `X.Y.Z` exists.
-6. Confirm the `HOMEBREW_TAP_TOKEN` Actions secret is configured.
+6. Confirm the `HOMEBREW_TAP_DEPLOY_KEY` Actions secret is configured.
 
 PyPI versions are immutable. If the requested version already exists, stop and
 ask for a newer version.

@@ -18,18 +18,10 @@ For an agent-managed release, ask `release X.Y.Z`. The repository's `release-dra
    - Environment name: `pypi`
 2. Create a GitHub environment named `pypi`.
 3. Configure the `pypi` environment to require manual approval before deployment.
-4. Create a fine-grained personal access token for the `andreagrandi/homebrew-tap` repository with read and write access to repository contents.
-5. Add that token to the `andreagrandi/draftgoblin` repository as an Actions secret named `HOMEBREW_TAP_TOKEN`.
-6. After this change is merged, publish the existing PyPI release to the tap once:
+4. Add a write-enabled SSH deploy key to `andreagrandi/homebrew-tap`.
+5. Store its private key in `andreagrandi/draftgoblin` as an Actions secret named `HOMEBREW_TAP_DEPLOY_KEY`.
 
-   ```bash
-   gh workflow run homebrew.yml \
-     --repo andreagrandi/draftgoblin \
-     --ref master \
-     -f version=<existing-version>
-   ```
-
-   Future tagged releases call this workflow automatically.
+Once configured, tagged releases update the Homebrew formula automatically. No manual formula generation or tap update is required.
 
 The pending publisher creates the PyPI project on the first successful release. If PyPI rejects the project name, choose a new distribution name in `pyproject.toml` while retaining the `draftgoblin` console command.
 

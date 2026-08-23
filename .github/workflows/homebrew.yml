@@ -8,8 +8,8 @@ on:
         required: true
         type: string
     secrets:
-      HOMEBREW_TAP_TOKEN:
-        description: Token with contents write access to the Homebrew tap
+      HOMEBREW_TAP_DEPLOY_KEY:
+        description: Write-enabled SSH deploy key for the Homebrew tap
         required: true
   workflow_dispatch:
     inputs:
@@ -29,17 +29,17 @@ jobs:
       - name: Check out Draftgoblin
         uses: actions/checkout@v7
 
-      - name: Require Homebrew tap token
+      - name: Require Homebrew tap deploy key
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: test -n "${HOMEBREW_TAP_TOKEN}"
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: test -n "${HOMEBREW_TAP_DEPLOY_KEY}"
 
       - name: Check out Homebrew tap
         uses: actions/checkout@v7
         with:
           repository: andreagrandi/homebrew-tap
           path: homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
 
       - name: Register checked-out Homebrew tap
         run: |
