@@ -850,21 +850,33 @@ class LiveSession:
     def _build_result(self, *, command: RequestBuild) -> BuildResult:
         state = self._active_draft_state()
         if state is None:
-            raise DeckBuilderError("Deck build unavailable: no active draft.")
+            set_code = self._active_set_code()
+            pool_grp_ids = self._transient_pool_grp_ids
+            account = self.snapshot.active_account
+            account_id = None if account is None else account.account_id
+            draft_id = None
+        else:
+            set_code = state.set_code
+            pool_grp_ids = state.pool_grp_ids
+            account_id = state.account_id
+            draft_id = state.draft_id
+
+        if set_code is None or (state is None and not pool_grp_ids):
+            raise DeckBuilderError("Deck build unavailable: no picked cards yet.")
         if self._card_database is None:
             raise DeckBuilderError("Deck build unavailable: card metadata is not ready.")
 
         pool = BuildPool(
-            set_code=state.set_code,
-            pool_grp_ids=state.pool_grp_ids,
+            set_code=set_code,
+            pool_grp_ids=pool_grp_ids,
             source_label="live draft",
-            account_id=state.account_id,
-            draft_id=state.draft_id,
+            account_id=account_id,
+            draft_id=draft_id,
         )
         selection, build_sheet = build_deck_from_pool(
             pool=pool,
             card_database=self._card_database,
-            ratings_data=self._ratings_data_for_scoring(set_code=state.set_code),
+            ratings_data=self._ratings_data_for_scoring(set_code=set_code),
             forced_pair=command.pair_override,
             allow_splash=command.allow_splash,
         )

@@ -7,6 +7,7 @@ from dataclasses import replace
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -23,6 +24,7 @@ from draftgoblin.carddb import (
     CardInfo,
     build_card_database_from_bulk_file,
 )
+from draftgoblin.cardimages import CardImageService, card_image_cache_dir
 from draftgoblin.preferences import TuiVisibilityPreferences, tui_preferences_path
 from draftgoblin.pickengine import ScoredCard
 from draftgoblin.pool import (
@@ -932,6 +934,7 @@ async def _assert_accountless_live_path_completes(tmp_path: Path) -> None:
         assert snapshot.pool.total_cards == 42
         assert snapshot.current_pack_event is None
         assert snapshot.current_scored_pack is None
+        assert snapshot.build is not None
         assert app._pool_size == 42
         assert app._current_pack_event is None
         assert app.build_view_text.startswith("[bold]Suggested deck[/bold]\n\n")
@@ -1342,6 +1345,7 @@ async def _assert_build_keybinding_opens_build_view(tmp_path: Path) -> None:
 
         title = app.query_one("#pack-title", Static)
         assert str(title.render()).startswith("Build view — pair")
+        assert app.session.snapshot.build is not None
         assert app.build_view_text.startswith("[bold]Suggested deck[/bold]\n\n")
         assert "Set: MSH — Marvel Super Heroes" in app.build_view_text
         assert "Pool size: 1 cards" not in app.build_view_text
@@ -1543,6 +1547,7 @@ async def _assert_backtest_keybinding_opens_report(tmp_path: Path) -> None:
         pool_summary = app.query_one("#pool-summary", Static)
 
         assert str(title.render()).startswith("Backtest view — DG Score recommendations")
+        assert app.session.snapshot.backtest is not None
         assert table.display is False
         assert build_scroll.display is True
         assert pool_summary.display is False
@@ -1562,6 +1567,44 @@ async def _assert_backtest_keybinding_opens_report(tmp_path: Path) -> None:
         )
         assert state_path.read_text(encoding="utf-8") == before
 
+
+
+def test_tui_failed_backtest_refresh_replaces_stale_report(tmp_path: Path) -> None:
+    asyncio.run(_assert_failed_backtest_refresh_replaces_stale_report(tmp_path=tmp_path))
+
+
+async def _assert_failed_backtest_refresh_replaces_stale_report(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.process_lines(lines=_full_fixture_lines())
+        await pilot.pause()
+        state_path = draft_state_path(
+            account_id=FIXTURE_ACCOUNT_ID,
+            draft_id=FIXTURE_DRAFT_ID,
+            app_dir=tmp_path / "app",
+        )
+
+        await pilot.press("t")
+        await pilot.pause()
+        assert app.backtest_view_text.startswith("Draftgoblin backtest\n")
+
+        state_path.unlink()
+        await pilot.press("s")
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if any(
+                error.operation == OperationKind.BACKTEST
+                for error in app.session.snapshot.errors
+            ):
+                break
+
+        assert app.session.snapshot.backtest is None
+        assert app.backtest_view_text.startswith("Backtest view unavailable:")
+        assert "Draftgoblin backtest\n" not in app.backtest_view_text
+        assert "Backtest action: cannot backtest" in _status_text(app=app)
 
 
 def test_tui_backtest_view_reports_missing_history_without_mutating_state(
@@ -1639,11 +1682,8 @@ async def _assert_card_image_preserves_ratio_with_auto_height(
         def __rich_console__(self, *args: object) -> list[str]:
             return ["<image>"]
 
-    def successful_fetcher(image_uri: str, cache_dir: Path) -> Path:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        image_path = cache_dir / "spider.jpg"
-        image_path.write_bytes(b"image")
-        return image_path
+    def successful_opener(*args: object, **kwargs: object) -> BytesIO:
+        return BytesIO(b"image")
 
     monkeypatch.setattr("draftgoblin.tui.TgpImage", FakeTgpImage)
     fixture_database = _fixture_card_database()
@@ -1654,7 +1694,7 @@ async def _assert_card_image_preserves_ratio_with_auto_height(
             image_uris_by_name={"fixture spider": "https://cards.example/spider.jpg"},
         ),
         image_preview_enabled=True,
-        card_image_fetcher=successful_fetcher,
+        card_image_opener=successful_opener,
     )
 
     async with app.run_test(size=(140, 40)) as pilot:
@@ -1682,8 +1722,8 @@ def test_tui_build_focused_card_image_fetch_failure_stays_nonblocking(
 async def _assert_build_image_fetch_failure_stays_nonblocking(tmp_path: Path) -> None:
     started = threading.Event()
 
-    def failing_fetcher(image_uri: str, cache_dir: Path) -> Path:
-        assert image_uri == "https://cards.example/spider.jpg"
+    def failing_opener(request: object, **kwargs: object) -> BytesIO:
+        assert getattr(request, "full_url") == "https://cards.example/spider.jpg"
         started.set()
         raise OSError("network down")
 
@@ -1695,7 +1735,7 @@ async def _assert_build_image_fetch_failure_stays_nonblocking(tmp_path: Path) ->
             image_uris_by_name={"fixture spider": "https://cards.example/spider.jpg"},
         ),
         image_preview_enabled=True,
-        card_image_fetcher=failing_fetcher,
+        card_image_opener=failing_opener,
     )
 
     async with app.run_test(size=(140, 40)) as pilot:
@@ -2318,8 +2358,8 @@ async def _assert_visibility_preferences_filter_elements(tmp_path: Path) -> None
     image_fetches: list[str] = []
     fixture_database = _fixture_card_database()
 
-    def image_fetcher(image_uri: str, cache_dir: Path) -> Path:
-        image_fetches.append(image_uri)
+    def image_opener(request: object, **kwargs: object) -> BytesIO:
+        image_fetches.append(str(getattr(request, "full_url")))
         raise AssertionError("hidden image previews must not fetch images")
 
     preferences = TuiVisibilityPreferences(
@@ -2340,7 +2380,7 @@ async def _assert_visibility_preferences_filter_elements(tmp_path: Path) -> None
             image_uris_by_name={"fixture spider": "https://cards.example/spider.jpg"},
         ),
         image_preview_enabled=True,
-        card_image_fetcher=image_fetcher,
+        card_image_opener=image_opener,
         visibility_preferences=preferences,
     )
 
@@ -2443,7 +2483,7 @@ def _tui_app(
     ratings_cache_checker: Callable[[str], bool] | None = None,
     image_preview_enabled: bool | None = None,
     mana_icons_enabled: bool = False,
-    card_image_fetcher: Callable[[str, Path], Path] | None = None,
+    card_image_opener: Callable[..., object] | None = None,
     poll_enabled: bool = False,
     startup_scan: bool = False,
     poll_interval: float = 1.0,
@@ -2466,7 +2506,14 @@ def _tui_app(
         poll_interval=poll_interval,
         image_preview_enabled=image_preview_enabled,
         mana_icons_enabled=mana_icons_enabled,
-        card_image_fetcher=card_image_fetcher,
+        card_image_service=(
+            None
+            if card_image_opener is None
+            else CardImageService(
+                cache_dir=card_image_cache_dir(app_dir=tmp_path / "app"),
+                opener=card_image_opener,
+            )
+        ),
         visibility_preferences=visibility_preferences,
     )
 
