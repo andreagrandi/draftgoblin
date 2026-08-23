@@ -1,4 +1,4 @@
-name: Publish release to PyPI
+name: Publish release
 
 on:
   push:
@@ -107,3 +107,10 @@ jobs:
 
       - name: Publish to PyPI
         run: uv publish --trusted-publishing always dist/*
+
+  homebrew:
+    needs: publish
+    uses: ./.github/workflows/homebrew.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit

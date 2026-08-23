@@ -2,7 +2,8 @@
 name: release-draftgoblin
 description: >-
   Publish a Draftgoblin version through the complete version bump, pull request,
-  merge, tag, GitHub Actions, and PyPI verification workflow. Use whenever the
+  merge, tag, GitHub Actions, PyPI, and Homebrew verification workflow. Use
+  whenever the
   user says "release X.Y.Z", "publish version X.Y.Z", "cut a Draftgoblin
   release", or otherwise asks to ship a new Draftgoblin version to PyPI.
 ---
@@ -27,6 +28,7 @@ If the request omits the exact `X.Y.Z` version, ask for it. Never infer a versio
 3. Confirm the worktree is clean. Preserve and report unrelated changes.
 4. Check the requested version is newer than `uv version --short`.
 5. Confirm neither remote tag `vX.Y.Z` nor PyPI version `X.Y.Z` exists.
+6. Confirm the `HOMEBREW_TAP_TOKEN` Actions secret is configured.
 
 PyPI versions are immutable. If the requested version already exists, stop and
 ask for a newer version.
@@ -67,9 +69,10 @@ git tag -a vX.Y.Z -m "Draftgoblin X.Y.Z"
 git push origin vX.Y.Z
 ```
 
-Find the exact `Publish release to PyPI` run for tag `vX.Y.Z` with `gh`, then
+Find the exact `Publish release` run for tag `vX.Y.Z` with `gh`, then
 watch it through completion. The workflow must pass build validation plus
-macOS and Windows wheel smoke tests before publishing.
+macOS and Windows wheel smoke tests before publishing, then generate, install,
+test, and publish the matching Homebrew formula.
 
 If an environment approval is required and the current identity cannot approve
 it, ask the user once and continue monitoring after approval.
@@ -86,12 +89,15 @@ delete the tag; prepare a newer patch release instead.
 ## Verify the public release
 
 Use fresh temporary uv cache and tool directories to install
-`draftgoblin==X.Y.Z` from PyPI, then run `draftgoblin --version`. Confirm:
+`draftgoblin==X.Y.Z` from PyPI, then run `draftgoblin --version`. Update the tap,
+install or upgrade the Homebrew formula, and check its version separately. Confirm:
 
 - the release workflow concluded successfully;
 - the public PyPI version page exists;
+- `andreagrandi/homebrew-tap` contains `Formula/draftgoblin.rb` for the release;
 - the installed command reports exactly `X.Y.Z`;
 - local `master` is clean and synchronized.
 
-Report the version, tag, workflow URL, PyPI URL, and install command. Do not
-create a separate GitHub Release unless the user explicitly requests one.
+Report the version, tag, workflow URL, PyPI URL, and PyPI plus Homebrew install
+commands. Do not create a separate GitHub Release unless the user explicitly
+requests one.
