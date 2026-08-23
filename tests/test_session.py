@@ -9,9 +9,11 @@ from pathlib import Path
 
 import pytest
 
+import draftgoblin.session as session_module
 from draftgoblin.audit import load_draft_audit_records
 from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.pool import (
+    DraftPick,
     DraftPoolStore,
     DraftState,
     draft_state_path,
@@ -963,6 +965,633 @@ def test_inactive_ratings_worker_caches_result_without_publishing_stale_state(
     assert restored.draft.set_code == "AAA"
     assert restored.ratings.set_code == "AAA"
     assert restored.ratings.phase == DataLoadPhase.READY
+
+
+def test_live_session_build_request_publishes_structured_ordered_result(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    database = _fixture_card_database()
+    state = _draft_state(
+        account_id="account-1",
+        screen_name="Player",
+        draft_id="draft-1",
+        updated_at="2026-08-23T10:00:00+00:00",
+        pool_grp_ids=tuple(database.cards),
+    )
+    save_draft_state(state=state, app_dir=app_dir)
+    published: list[LiveSessionSnapshot] = []
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=database,
+        snapshot_publisher=published.append,
+    )
+    session.dispatch(command=ChooseAccount(account_id="account-1"))
+
+    snapshot = session.dispatch(
+        command=RequestBuild(pair_override="WU", allow_splash=False)
+    )
+
+    assert any(
+        item.progress == ProgressState(
+            operation=OperationKind.BUILD,
+            message="Building deck",
+        )
+        for item in published
+    )
+    assert snapshot.progress is None
+    assert snapshot.errors == ()
+    assert snapshot.build is not None
+    assert snapshot.build.selected_pair == "WU"
+    assert snapshot.build.pair_override == "WU"
+    assert sum(card.quantity for card in snapshot.build.spells) == len(database.cards)
+    assert all(card.score is not None for card in snapshot.build.spells)
+    assert [
+        card.card.mana_value for card in snapshot.build.spells
+    ] == sorted(card.card.mana_value for card in snapshot.build.spells)
+    assert sum(land.quantity for land in snapshot.build.lands) + sum(
+        card.quantity for card in snapshot.build.spells
+    ) == snapshot.build.deck_size
+    assert any(
+        option.pair == "WU" and option.selected and option.automatic
+        for option in snapshot.build.pair_options
+    )
+
+
+def test_live_session_build_request_reports_empty_and_invalid_builds(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    database = _fixture_card_database()
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-1",
+            screen_name="Player",
+            draft_id="draft-empty",
+            updated_at="2026-08-23T10:00:00+00:00",
+            pool_grp_ids=(),
+        ),
+        app_dir=app_dir,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=database,
+    )
+    session.dispatch(command=ChooseAccount(account_id="account-1"))
+
+    empty = session.dispatch(command=RequestBuild())
+
+    assert empty.build is None
+    assert empty.errors[-1].code == "build_failed"
+    assert "pool is empty" in empty.errors[-1].message
+    assert empty.errors[-1].recoverable is True
+
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-1",
+            screen_name="Player",
+            draft_id="draft-full",
+            updated_at="2026-08-23T11:00:00+00:00",
+            pool_grp_ids=tuple(database.cards),
+        ),
+        app_dir=app_dir,
+    )
+    session.dispatch(command=ChooseAccount(account_id="account-1"))
+
+    invalid = session.dispatch(command=RequestBuild(pair_override="ZZ"))
+
+    assert invalid.build is None
+    assert invalid.errors[-1].code == "build_failed"
+    assert "ZZ" in invalid.errors[-1].message
+
+
+def test_live_session_discards_build_completion_after_account_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir = tmp_path / "app"
+    database = _fixture_card_database()
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-a",
+            screen_name="Player A",
+            draft_id="draft-a",
+            updated_at="2026-08-23T10:00:00+00:00",
+            pool_grp_ids=tuple(database.cards),
+        ),
+        app_dir=app_dir,
+    )
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-b",
+            screen_name="Player B",
+            draft_id="draft-b",
+            updated_at="2026-08-23T11:00:00+00:00",
+            pool_grp_ids=(),
+        ),
+        app_dir=app_dir,
+    )
+    started = threading.Event()
+    release = threading.Event()
+    real_builder = session_module.build_deck_from_pool
+
+    def blocking_builder(*args: object, **kwargs: object) -> object:
+        started.set()
+        assert release.wait(timeout=2.0)
+        return real_builder(*args, **kwargs)
+
+    monkeypatch.setattr(session_module, "build_deck_from_pool", blocking_builder)
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=database,
+    )
+    session.dispatch(command=ChooseAccount(account_id="account-a"))
+    worker_errors: list[Exception] = []
+
+    def request_build() -> None:
+        try:
+            session.dispatch(command=RequestBuild(pair_override="WU"))
+        except Exception as error:
+            worker_errors.append(error)
+
+    worker = threading.Thread(target=request_build, daemon=True)
+    worker.start()
+    assert started.wait(timeout=2.0)
+
+    switched = session.dispatch(command=ChooseAccount(account_id="account-b"))
+    assert switched.draft is not None
+    assert switched.draft.draft_id == "draft-b"
+    assert switched.progress is None
+
+    release.set()
+    worker.join(timeout=2.0)
+
+    assert not worker.is_alive()
+    assert worker_errors == []
+    assert session.snapshot.draft is not None
+    assert session.snapshot.draft.draft_id == "draft-b"
+    assert session.snapshot.build is None
+    assert not any(error.operation == OperationKind.BUILD for error in session.snapshot.errors)
+
+
+def test_live_session_splash_change_discards_in_flight_build_and_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir = tmp_path / "app"
+    database = _fixture_card_database()
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-1",
+            screen_name="Player",
+            draft_id="draft-1",
+            updated_at="2026-08-23T10:00:00+00:00",
+            pool_grp_ids=tuple(database.cards),
+        ),
+        app_dir=app_dir,
+    )
+    started = threading.Event()
+    release = threading.Event()
+    real_builder = session_module.build_deck_from_pool
+
+    def blocking_builder(*args: object, **kwargs: object) -> object:
+        started.set()
+        assert release.wait(timeout=2.0)
+        return real_builder(*args, **kwargs)
+
+    monkeypatch.setattr(session_module, "build_deck_from_pool", blocking_builder)
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=database,
+    )
+    session.dispatch(command=ChooseAccount(account_id="account-1"))
+    worker_errors: list[Exception] = []
+
+    def request_build() -> None:
+        try:
+            session.dispatch(command=RequestBuild(allow_splash=True))
+        except Exception as error:
+            worker_errors.append(error)
+
+    worker = threading.Thread(
+        target=request_build,
+        daemon=True,
+    )
+    worker.start()
+    assert started.wait(timeout=2.0)
+
+    changed = session.dispatch(command=ChangeSplashPreference(enabled=False))
+
+    assert changed.progress is None
+    assert changed.build is None
+    assert changed.recommendations.splash_enabled is False
+
+    release.set()
+    worker.join(timeout=2.0)
+
+    assert not worker.is_alive()
+    assert worker_errors == []
+    assert session.snapshot.progress is None
+    assert session.snapshot.build is None
+
+
+def test_live_session_backtest_request_preserves_comparisons_and_missing_history(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    database = _fixture_card_database()
+    offered_grp_ids = tuple(database.cards)[:2]
+    state = replace(
+        _draft_state(
+            account_id="account-1",
+            screen_name="Player",
+            draft_id="draft-1",
+            updated_at="2026-08-23T10:00:00+00:00",
+            pool_grp_ids=(offered_grp_ids[0], offered_grp_ids[1]),
+        ),
+        picks=(
+            DraftPick(
+                pack_number=0,
+                pick_number=0,
+                offered_grp_ids=offered_grp_ids,
+                pool_before_pick=(),
+                chosen_grp_id=offered_grp_ids[0],
+            ),
+            DraftPick(
+                pack_number=0,
+                pick_number=1,
+                offered_grp_ids=None,
+                pool_before_pick=(offered_grp_ids[0],),
+                chosen_grp_id=offered_grp_ids[1],
+            ),
+        ),
+    )
+    save_draft_state(state=state, app_dir=app_dir)
+    published: list[LiveSessionSnapshot] = []
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=database,
+        snapshot_publisher=published.append,
+    )
+
+    snapshot = session.dispatch(
+        command=RequestBacktest(account_id="account-1", draft_id="draft-1")
+    )
+
+    assert any(
+        item.progress == ProgressState(
+            operation=OperationKind.BACKTEST,
+            message="Running backtest",
+        )
+        for item in published
+    )
+    assert snapshot.progress is None
+    assert snapshot.errors == ()
+    assert snapshot.backtest is not None
+    assert snapshot.backtest.compared_count == 1
+    assert snapshot.backtest.skipped_count == 1
+    assert snapshot.backtest.match_count == 1
+    assert snapshot.backtest.rows[0].recommended is not None
+    assert snapshot.backtest.rows[0].actual is not None
+    assert snapshot.backtest.rows[0].match is True
+    assert snapshot.backtest.rows[0].pool_size == 0
+    assert snapshot.backtest.rows[0].offered_count == 2
+    assert snapshot.backtest.rows[0].recommended_score is not None
+    assert snapshot.backtest.rows[1].skipped_reason == "missing offered-card history"
+
+
+def test_live_session_backtest_result_identifies_explicit_cross_account_draft(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    active_state = _draft_state(
+        account_id="account-a",
+        screen_name="Player A",
+        draft_id="draft-a",
+        updated_at="2026-08-23T10:00:00+00:00",
+        pool_grp_ids=(),
+    )
+    target_state = replace(
+        _draft_state(
+            account_id="account-b",
+            screen_name="Player B",
+            draft_id="draft-b",
+            updated_at="2026-08-23T11:00:00+00:00",
+            pool_grp_ids=(),
+        ),
+        completed=True,
+        completed_at="2026-08-23T11:30:00+00:00",
+    )
+    save_draft_state(state=active_state, app_dir=app_dir)
+    save_draft_state(state=target_state, app_dir=app_dir)
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+    )
+    session.dispatch(command=ChooseAccount(account_id="account-a"))
+
+    snapshot = session.dispatch(
+        command=RequestBacktest(account_id="account-b", draft_id="draft-b")
+    )
+
+    assert snapshot.draft is not None
+    assert snapshot.draft.account_id == "account-a"
+    assert snapshot.backtest is not None
+    assert snapshot.backtest.account_id == "account-b"
+    assert snapshot.backtest.account_screen_name == "Player B"
+    assert snapshot.backtest.draft_id == "draft-b"
+    assert snapshot.backtest.set_code == "TST"
+    assert snapshot.backtest.event_name == "QuickDraft_TST_20260823"
+    assert snapshot.backtest.completed is True
+    assert snapshot.backtest.chosen_pick_count == 0
+
+
+def test_live_session_backtest_request_returns_empty_success(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-1",
+            screen_name="Player",
+            draft_id="draft-empty",
+            updated_at="2026-08-23T10:00:00+00:00",
+            pool_grp_ids=(),
+        ),
+        app_dir=app_dir,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+    )
+
+    snapshot = session.dispatch(
+        command=RequestBacktest(
+            account_id="account-1",
+            draft_id="draft-empty",
+        )
+    )
+
+    assert snapshot.errors == ()
+    assert snapshot.backtest == BacktestResult(
+        ranking_mode="score",
+        rows=(),
+        match_count=0,
+        compared_count=0,
+        skipped_count=0,
+        data_sources=(),
+        account_id="account-1",
+        account_screen_name="Player",
+        draft_id="draft-empty",
+        set_code="TST",
+        event_name="QuickDraft_TST_20260823",
+        completed=False,
+        chosen_pick_count=0,
+    )
+
+
+def test_live_session_backtest_failure_can_retry_saved_request(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+    )
+    command = RequestBacktest(account_id="account-1", draft_id="draft-1")
+
+    failed = session.dispatch(command=command)
+
+    assert failed.backtest is None
+    assert failed.errors[-1].code == "backtest_failed"
+    assert failed.errors[-1].recoverable is True
+
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-1",
+            screen_name="Player",
+            draft_id="draft-1",
+            updated_at="2026-08-23T10:00:00+00:00",
+            pool_grp_ids=(),
+        ),
+        app_dir=app_dir,
+    )
+
+    retried = session.dispatch(command=RetryError(error_id="backtest"))
+
+    assert retried.errors == ()
+    assert retried.backtest is not None
+    assert retried.backtest.rows == ()
+
+
+def test_live_session_discards_older_overlapping_backtest_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir = tmp_path / "app"
+    for draft_id, updated_at in (
+        ("draft-1", "2026-08-23T10:00:00+00:00"),
+        ("draft-2", "2026-08-23T11:00:00+00:00"),
+    ):
+        save_draft_state(
+            state=_draft_state(
+                account_id="account-1",
+                screen_name="Player",
+                draft_id=draft_id,
+                updated_at=updated_at,
+                pool_grp_ids=(),
+            ),
+            app_dir=app_dir,
+        )
+    started = threading.Event()
+    release = threading.Event()
+    real_generator = session_module.generate_backtest_report
+
+    def blocking_generator(*args: object, **kwargs: object) -> object:
+        state = kwargs["state"]
+        assert isinstance(state, DraftState)
+        if state.draft_id == "draft-1":
+            started.set()
+            assert release.wait(timeout=2.0)
+
+        return real_generator(*args, **kwargs)
+
+    monkeypatch.setattr(
+        session_module,
+        "generate_backtest_report",
+        blocking_generator,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+    )
+    worker_errors: list[Exception] = []
+
+    def request_first_backtest() -> None:
+        try:
+            session.dispatch(
+                command=RequestBacktest(
+                    account_id="account-1",
+                    draft_id="draft-1",
+                )
+            )
+        except Exception as error:
+            worker_errors.append(error)
+
+    worker = threading.Thread(target=request_first_backtest, daemon=True)
+    worker.start()
+    assert started.wait(timeout=2.0)
+
+    newer = session.dispatch(
+        command=RequestBacktest(
+            account_id="account-1",
+            draft_id="draft-2",
+        )
+    )
+    assert newer.backtest is not None
+    assert newer.backtest.draft_id == "draft-2"
+
+    release.set()
+    worker.join(timeout=2.0)
+
+    assert not worker.is_alive()
+    assert worker_errors == []
+    assert session.snapshot.backtest is not None
+    assert session.snapshot.backtest.draft_id == "draft-2"
+
+
+def test_live_session_ranking_change_discards_in_flight_backtest_and_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir = tmp_path / "app"
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-1",
+            screen_name="Player",
+            draft_id="draft-1",
+            updated_at="2026-08-23T10:00:00+00:00",
+            pool_grp_ids=(),
+        ),
+        app_dir=app_dir,
+    )
+    started = threading.Event()
+    release = threading.Event()
+    real_generator = session_module.generate_backtest_report
+
+    def blocking_generator(*args: object, **kwargs: object) -> object:
+        started.set()
+        assert release.wait(timeout=2.0)
+        return real_generator(*args, **kwargs)
+
+    monkeypatch.setattr(
+        session_module,
+        "generate_backtest_report",
+        blocking_generator,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+    )
+    worker_errors: list[Exception] = []
+
+    def request_backtest() -> None:
+        try:
+            session.dispatch(
+                command=RequestBacktest(
+                    account_id="account-1",
+                    draft_id="draft-1",
+                )
+            )
+        except Exception as error:
+            worker_errors.append(error)
+
+    worker = threading.Thread(
+        target=request_backtest,
+        daemon=True,
+    )
+    worker.start()
+    assert started.wait(timeout=2.0)
+
+    changed = session.dispatch(command=ChangeRanking(ranking_mode="win_rate"))
+
+    assert changed.progress is None
+    assert changed.backtest is None
+    assert changed.recommendations.ranking_mode == "win_rate"
+
+    release.set()
+    worker.join(timeout=2.0)
+
+    assert not worker.is_alive()
+    assert worker_errors == []
+    assert session.snapshot.progress is None
+    assert session.snapshot.backtest is None
+
+
+def test_live_session_context_change_clears_derived_errors_and_retries(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    database = _fixture_card_database()
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-a",
+            screen_name="Player A",
+            draft_id="draft-a",
+            updated_at="2026-08-23T10:00:00+00:00",
+            pool_grp_ids=(),
+        ),
+        app_dir=app_dir,
+    )
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-b",
+            screen_name="Player B",
+            draft_id="draft-b",
+            updated_at="2026-08-23T11:00:00+00:00",
+            pool_grp_ids=tuple(database.cards),
+        ),
+        app_dir=app_dir,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=database,
+    )
+    session.dispatch(command=ChooseAccount(account_id="account-a"))
+    session.dispatch(command=RequestBuild())
+    failed = session.dispatch(
+        command=RequestBacktest(
+            account_id="account-a",
+            draft_id="missing-draft",
+        )
+    )
+    assert {
+        error.operation for error in failed.errors
+    } >= {OperationKind.BUILD, OperationKind.BACKTEST}
+
+    switched = session.dispatch(command=ChooseAccount(account_id="account-b"))
+
+    assert switched.draft is not None
+    assert switched.draft.draft_id == "draft-b"
+    assert not any(
+        error.operation in {OperationKind.BUILD, OperationKind.BACKTEST}
+        for error in switched.errors
+    )
+    with pytest.raises(ValueError, match="Unknown session error 'build'"):
+        session.dispatch(command=RetryError(error_id="build"))
+    with pytest.raises(ValueError, match="Unknown session error 'backtest'"):
+        session.dispatch(command=RetryError(error_id="backtest"))
 
 
 def _card() -> CardView:

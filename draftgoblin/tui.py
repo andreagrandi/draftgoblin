@@ -4,12 +4,7 @@ Render ranked packs and status updates without blocking fetches.
 
 from __future__ import annotations
 
-import hashlib
 import os
-import tempfile
-import urllib.error
-import urllib.parse
-import urllib.request
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
@@ -45,7 +40,8 @@ except Exception:  # pragma: no cover - graceful fallback when unavailable.
 
 from draftgoblin.audit import DraftAuditStore
 from draftgoblin.backtest import format_backtest_report, generate_backtest_report
-from draftgoblin.carddb import SCRYFALL_USER_AGENT, CardDatabase, CardInfo
+from draftgoblin.carddb import CardDatabase, CardInfo
+from draftgoblin.cardimages import CardImageService, card_image_cache_dir
 from draftgoblin.config import COLOR_PAIRS, POLL_INTERVAL_SECONDS
 from draftgoblin.deckbuilder import (
     BuildPool,
@@ -139,11 +135,7 @@ COLORLESS_KEY = "C"
 UNKNOWN_COLOR_KEY = "?"
 CURVE_BUCKET_LABELS = ("0", "1", "2", "3", "4", "5", "6+")
 SPARKLINE_GLYPHS = "▁▂▃▄▅▆▇█"
-CARD_IMAGE_CACHE_DIR_NAME = "card-images"
-CARD_IMAGE_PREVIEW_MAX_BYTES = 8 * 1024 * 1024
-CARD_IMAGE_PREVIEW_TIMEOUT_SECONDS = 10
 CARD_IMAGE_PREVIEW_ENV = "DRAFTGOBLIN_CARD_IMAGES"
-CARD_IMAGE_FILE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 CLOSE_DG_SCORE_THRESHOLD = 3.0
 CLOSE_WIN_RATE_THRESHOLD = 0.01
 MANA_ICON_GLYPHS = {
@@ -674,8 +666,11 @@ class DraftgoblinTuiApp(App[None]):
         self.once = once
         self.poll_enabled = poll_enabled
         self.poll_interval = poll_interval
-        self.card_image_fetcher = card_image_fetcher or _fetch_card_image
-        self._card_image_cache_dir = _card_image_cache_dir(app_dir=app_dir)
+        self.card_image_fetcher = card_image_fetcher
+        self._card_image_service = CardImageService(
+            cache_dir=card_image_cache_dir(app_dir=app_dir),
+        )
+        self._card_image_cache_dir = self._card_image_service.cache_dir
         self._card_image_preview_enabled = (
             _card_image_preview_enabled(env=os.environ)
             if image_preview_enabled is None
@@ -2558,7 +2553,15 @@ class DraftgoblinTuiApp(App[None]):
         image_panel.display = True
         image_uri = self._card_image_uri_for_card(card=card)
         if image_uri is None:
-            self._render_pending_card_image_uri(image_panel=image_panel, card=card)
+            if card.unknown:
+                image_panel.display = False
+                return
+
+            image_panel.update(
+                "Image preview unavailable\n"
+                f"{_format_card_name(card=card)}\n"
+                "Image URL is not in the local Scryfall cache. Run refresh-data."
+            )
             return
         image_path = self._card_image_paths_by_uri.get(image_uri)
         if image_path is not None and image_path.exists():
@@ -2570,8 +2573,7 @@ class DraftgoblinTuiApp(App[None]):
             )
             return
 
-        cached_path = _cached_card_image_path(
-            cache_dir=self._card_image_cache_dir,
+        cached_path = self._card_image_service.cached_path(
             image_uri=image_uri,
         )
         if cached_path.exists():
@@ -2602,32 +2604,16 @@ class DraftgoblinTuiApp(App[None]):
             self._fetch_card_image_worker(image_uri)
 
     def _card_image_uri_for_card(self, *, card: CardInfo) -> str | None:
-        if card.image_uri is not None:
-            return card.image_uri
-
-        return self._card_image_uris_by_grp_id.get(card.grp_id)
-
-    def _render_pending_card_image_uri(
-        self,
-        *,
-        image_panel: Static,
-        card: CardInfo,
-    ) -> None:
-        if card.unknown:
-            image_panel.display = False
-            return
-
-        image_uri = self.card_database.image_uri_for_name(name=card.name)
+        image_uri = self._card_image_uris_by_grp_id.get(card.grp_id)
+        if image_uri is None:
+            image_uri = self._card_image_service.resolve_image_uri(
+                card=card,
+                card_database=self.card_database,
+            )
         if image_uri is not None:
             self._card_image_uris_by_grp_id[card.grp_id] = image_uri
-            self._render_card_image_preview(card=card)
-            return
 
-        image_panel.update(
-            "Image preview unavailable\n"
-            f"{_format_card_name(card=card)}\n"
-            "Image URL is not in the local Scryfall cache. Run refresh-data."
-        )
+        return image_uri
 
     def _show_card_image(
         self,
@@ -2673,10 +2659,13 @@ class DraftgoblinTuiApp(App[None]):
         image_path = None
         error_message = None
         try:
-            image_path = self.card_image_fetcher(
-                image_uri,
-                self._card_image_cache_dir,
-            )
+            if self.card_image_fetcher is None:
+                image_path = self._card_image_service.fetch(image_uri=image_uri)
+            else:
+                image_path = self.card_image_fetcher(
+                    image_uri,
+                    self._card_image_cache_dir,
+                )
         except Exception as error:  # pragma: no cover - defensive network boundary.
             error_message = str(error)
 
@@ -3129,63 +3118,6 @@ def _card_image_preview_enabled(*, env: Mapping[str, str]) -> bool:
         or env.get("GHOSTTY_RESOURCES_DIR")
         or env.get("WEZTERM_EXECUTABLE")
     )
-
-
-def _card_image_cache_dir(*, app_dir: PathInput | None) -> Path:
-    store = DraftPoolStore(app_dir=app_dir)
-    return store.root.parent / CARD_IMAGE_CACHE_DIR_NAME
-
-
-def _fetch_card_image(image_uri: str, cache_dir: Path) -> Path:
-    image_path = _cached_card_image_path(cache_dir=cache_dir, image_uri=image_uri)
-    if image_path.exists():
-        return image_path
-
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(
-        image_uri,
-        headers={
-            "Accept": "image/*,*/*;q=0.8",
-            "User-Agent": SCRYFALL_USER_AGENT,
-        },
-    )
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=CARD_IMAGE_PREVIEW_TIMEOUT_SECONDS,
-        ) as response:
-            image_data = response.read(CARD_IMAGE_PREVIEW_MAX_BYTES + 1)
-    except urllib.error.URLError as error:
-        raise RuntimeError(f"image fetch failed: {error}") from error
-
-    if len(image_data) > CARD_IMAGE_PREVIEW_MAX_BYTES:
-        raise RuntimeError("image fetch failed: response too large")
-
-    with tempfile.NamedTemporaryFile(
-        mode="wb",
-        dir=cache_dir,
-        delete=False,
-    ) as temporary_file:
-        temporary_file.write(image_data)
-        temporary_path = Path(temporary_file.name)
-
-    temporary_path.replace(image_path)
-    return image_path
-
-
-def _cached_card_image_path(*, cache_dir: Path, image_uri: str) -> Path:
-    digest = hashlib.sha256(image_uri.encode("utf-8")).hexdigest()
-    extension = _card_image_extension(image_uri=image_uri)
-    return cache_dir / f"{digest}{extension}"
-
-
-def _card_image_extension(*, image_uri: str) -> str:
-    parsed_uri = urllib.parse.urlparse(image_uri)
-    extension = Path(parsed_uri.path).suffix.lower()
-    if extension in CARD_IMAGE_FILE_EXTENSIONS:
-        return extension
-
-    return ".jpg"
 
 
 _BUILD_COLUMN_MIN_WIDTH = 34
