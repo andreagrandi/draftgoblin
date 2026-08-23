@@ -43,6 +43,9 @@ Issues = "https://github.com/andreagrandi/draftgoblin/issues"
 draftgoblin = "draftgoblin.cli:main"
 draftgoblin-gui-mockup = "draftgoblin.qt_mock:main"
 
+[project.gui-scripts]
+draftgoblin-gui = "draftgoblin.qt_gui:main"
+
 [dependency-groups]
 dev = [
     "nox>=2026.4.10",

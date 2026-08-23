@@ -4,8 +4,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from draftgoblin.mock_session import MockLiveSession
-from draftgoblin.qt_mock import MockSessionAdapter, _to_qml_value
+from draftgoblin.mock_session import MOCK_SCENARIOS, MockLiveSession
+from draftgoblin.qt_adapter import _to_qml_value
+from draftgoblin.qt_mock import MockSessionAdapter
 from draftgoblin.session import LiveSessionSnapshot
 
 
@@ -18,9 +19,16 @@ def test_qt_translation_publishes_plain_values_without_domain_payloads() -> None
     assert "domain_selection" not in values["build"]
 
 
-def test_qt_adapter_selects_scenarios_and_dispatches_commands() -> None:
+def test_qt_mock_adapter_exposes_shared_provider_contract() -> None:
     session = MockLiveSession()
     adapter = MockSessionAdapter(session=session)
+
+    assert adapter.mockMode is True
+    assert adapter.scenario == "ready"
+    assert adapter.scenarios == list(MOCK_SCENARIOS)
+    assert adapter.recommendationsModel.rowCount() == len(
+        session.snapshot.recommendations.cards
+    )
 
     adapter.selectScenario("warning")
     assert adapter.scenario == "warning"
@@ -41,7 +49,6 @@ def test_qt_adapter_selects_scenarios_and_dispatches_commands() -> None:
 
     adapter.requestBacktest()
     assert adapter.state["backtest"]["rows"]
-
 
 def test_qt_adapter_ignores_unknown_visual_scenario() -> None:
     adapter = MockSessionAdapter(session=MockLiveSession())

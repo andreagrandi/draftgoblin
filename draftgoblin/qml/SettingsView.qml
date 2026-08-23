@@ -81,7 +81,7 @@ Item {
                                         return index
                                 return 0
                             }
-                            onActivated: mockProvider.changeRanking(model[currentIndex].key)
+                            onActivated: sessionProvider.changeRanking(model[currentIndex].key)
                         }
                     }
 
@@ -97,7 +97,7 @@ Item {
                         Switch {
                             checked: root.sessionState.recommendations.splash_enabled
                             Accessible.name: "Splash recommendations"
-                            onToggled: mockProvider.setSplashEnabled(checked)
+                            onToggled: sessionProvider.setSplashEnabled(checked)
                         }
                     }
                 }
@@ -208,7 +208,7 @@ Item {
                     Label { text: "Statistics attribution · 17Lands"; color: Theme.textMuted }
                     Button {
                         text: "Download or refresh ratings"
-                        onClicked: mockProvider.requestRatings()
+                        onClicked: sessionProvider.requestRatings()
                     }
                 }
             }

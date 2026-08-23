@@ -10,6 +10,38 @@ PROJECT_ROOT = Path(__file__).parent
 FIXTURES_DIRECTORY = PROJECT_ROOT / "tests" / "fixtures"
 GOLDEN_DIRECTORY = PROJECT_ROOT / "tests" / "golden"
 BULK_FILE_PATH = FIXTURES_DIRECTORY / "scryfall-default-cards-sample.jsonl"
+QML_DIRECTORY = PROJECT_ROOT / "draftgoblin" / "qml"
+
+
+@nox.session(python=False)
+def gui(session: nox.Session) -> None:
+    session.run("uv", "sync", "--locked", "--extra", "gui", external=True)
+    session.run(
+        "uv",
+        "run",
+        "pytest",
+        "tests/test_qt_adapter.py",
+        "tests/test_qt_mock.py",
+        external=True,
+    )
+    session.run(
+        "uv",
+        "run",
+        "pyside6-qmllint",
+        "-I",
+        str(QML_DIRECTORY),
+        *(str(path) for path in sorted(QML_DIRECTORY.glob("*.qml"))),
+        external=True,
+    )
+    session.run(
+        "uv",
+        "run",
+        "draftgoblin-gui",
+        "--provider",
+        "mock",
+        "--smoke-test",
+        external=True,
+    )
 
 
 @nox.session(python=False)

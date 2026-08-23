@@ -1,28 +1,47 @@
-# Desktop GUI mockup
+# Desktop GUI
 
-The deterministic PySide6/QML mockup is the visual-development surface for the planned desktop application. It uses production-target QML components and the immutable state and explicit command types from `draftgoblin.session`; it does not read Arena logs, cached card data, or network services.
+The PySide6/QML desktop application uses the same immutable session state and
+explicit commands as the terminal frontends. A Qt adapter schedules live
+session work outside the GUI thread and publishes plain Qt values and item
+models to presentation-only QML.
 
 ## Launch
 
-From the repository root, launch the wide live-draft view with:
+Install the optional GUI dependency and launch the live provider:
 
 ```bash
-uv run --extra gui draftgoblin-gui-mockup
+uv run --extra gui draftgoblin-gui
 ```
 
-The GUI dependency is optional so the terminal application and core modules remain independent of PySide6.
+The live provider follows Arena's standard `Player.log` location and loads the
+same card and ratings services as the terminal application. Use `--log-path`
+to override the platform default.
 
-Use the command-line selectors to open a specific surface, representative state, or responsive target:
+Select the deterministic provider for visual development without filesystem or
+network dependencies:
 
 ```bash
-uv run --extra gui draftgoblin-gui-mockup --surface build --width 1440 --height 900
-uv run --extra gui draftgoblin-gui-mockup --surface live --width 760 --height 900
-uv run --extra gui draftgoblin-gui-mockup --surface backtest --scenario error
+uv run --extra gui draftgoblin-gui --provider mock
 ```
 
-The top-bar state selector switches between `loading`, `ready`, `empty`, `progress`, `warning`, and `error` without filesystem or network dependencies. Primary navigation opens Live Draft, Deck Build, and Backtest. Settings remains available from the top bar.
+The legacy `draftgoblin-gui-mockup` command remains an equivalent mock-only
+entry point. Use the selectors to open a specific surface, representative
+state, or responsive target:
 
-For an automated launch and render check, use `--smoke-test`. Add `--screenshot /tmp/draftgoblin-gui.png` to capture the rendered window before the process exits.
+```bash
+uv run --extra gui draftgoblin-gui --provider mock --surface build --width 1440 --height 900
+uv run --extra gui draftgoblin-gui --provider mock --surface live --width 760 --height 900
+uv run --extra gui draftgoblin-gui --provider mock --surface backtest --scenario error
+```
+
+The mock-only top-bar selector switches between `loading`, `ready`, `empty`,
+`progress`, `warning`, and `error`. Primary navigation opens Live Draft, Deck
+Build, and Backtest. Settings remains available from the top bar in both
+provider modes.
+
+For an automated launch and render check, use `--smoke-test`. Add
+`--screenshot /tmp/draftgoblin-gui.png` to capture the rendered window before
+the process exits.
 
 ## Responsive behavior
 
@@ -43,7 +62,9 @@ The implementation follows the checked-in **Tactical Grimoire** design system an
 - persistent read-only status and 17Lands attribution;
 - neutral labelled card-image placeholders rather than generated Magic artwork.
 
-The generated HTML under `ui_mockups/` remains reference material only. QML owns presentation and local visual formatting; deterministic Python publishes representative immutable snapshots and receives the same explicit commands intended for the production adapter.
-
-Production GUI integration must reuse these QML components through a live Qt adapter rather than adding service, persistence, parsing, scoring, build, or backtest behavior to QML.
+The generated HTML under `ui_mockups/` remains reference material only. QML
+owns presentation and local visual formatting. Both providers publish the same
+narrow QObject properties and Qt item models, and receive the same explicit
+user intentions; parsing, persistence, scoring, builds, backtests, and recovery
+remain in shared Python.
 

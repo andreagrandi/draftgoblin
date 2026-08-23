@@ -41,7 +41,7 @@ Item {
 
             Button {
                 text: root.hasReport ? "Run again" : "Run backtest"
-                onClicked: mockProvider.requestBacktest()
+                onClicked: sessionProvider.requestBacktest()
             }
         }
 
