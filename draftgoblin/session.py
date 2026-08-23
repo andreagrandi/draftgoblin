@@ -4,11 +4,38 @@ Frontend adapters consume this contract without importing presentation framework
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from os import PathLike
+from pathlib import Path
 from typing import TypeAlias
 
-from draftgoblin.ranking import RankingMode
+from draftgoblin.audit import DraftAuditStore
+from draftgoblin.config import POLL_INTERVAL_SECONDS
+from draftgoblin.events import (
+    AccountEvent,
+    DraftCompletedEvent,
+    DraftEvent,
+    DraftLogParser,
+    DraftStartedEvent,
+    PackOfferedEvent,
+    PickMadeEvent,
+    QuickDraftDetectedEvent,
+)
+from draftgoblin.logfollow import LogFollower
+from draftgoblin.pool import (
+    AccountProfile,
+    DraftPoolError,
+    DraftPoolStore,
+    DraftState,
+    list_account_profiles,
+    list_draft_states,
+)
+from draftgoblin.ranking import DEFAULT_RANKING_MODE, RankingMode
+
+PathInput: TypeAlias = str | PathLike[str]
+SnapshotPublisher: TypeAlias = Callable[["LiveSessionSnapshot"], None]
 
 
 class ApplicationPhase(StrEnum):
@@ -351,3 +378,602 @@ LiveSessionCommand: TypeAlias = (
     | DismissError
     | RetryError
 )
+
+
+class LiveSession:
+    """Coordinate live Arena ingestion and persisted draft lifecycle state.
+    Frontends schedule polling and receive immutable snapshots through one contract.
+    """
+
+    def __init__(
+        self,
+        *,
+        log_path: PathInput,
+        app_dir: PathInput | None = None,
+        poll_interval: float = POLL_INTERVAL_SECONDS,
+        previous_log_path: PathInput | None = None,
+        snapshot_publisher: SnapshotPublisher | None = None,
+        ranking_mode: RankingMode = DEFAULT_RANKING_MODE,
+    ) -> None:
+        self.log_path = Path(log_path).expanduser().resolve(strict=False)
+        self.follower = LogFollower(
+            log_path=self.log_path,
+            app_dir=app_dir,
+            poll_interval=poll_interval,
+            previous_log_path=previous_log_path,
+        )
+        self.parser = DraftLogParser()
+        self.store = DraftPoolStore(app_dir=app_dir)
+        self.audit_store = DraftAuditStore(app_dir=self.store.root.parent)
+        self._snapshot_publisher = snapshot_publisher
+        self._ranking_mode = ranking_mode
+        self._login_generation = self.parser.login_generation
+        self._log_account_id: str | None = None
+        self._states_by_key: dict[tuple[str, str], DraftState] = {}
+        self._screen_names_by_account_id: dict[str, str] = {}
+        self._snapshot = LiveSessionSnapshot(
+            status=ApplicationStatus(
+                phase=ApplicationPhase.WAITING_FOR_DRAFT,
+                message="Waiting for a Quick Draft.",
+            ),
+            accounts=self._known_accounts(),
+            recommendations=RecommendationState(ranking_mode=ranking_mode),
+        )
+
+    @property
+    def snapshot(self) -> LiveSessionSnapshot:
+        """Return the latest immutable application snapshot.
+        Reading state has no parsing, persistence, or publication side effects.
+        """
+
+        return self._snapshot
+
+    def poll_once(self) -> LiveSessionSnapshot:
+        """Process one follower polling cycle and return the latest snapshot.
+        Frontends decide whether this call runs on a worker or event-loop callback.
+        """
+
+        return self.process_lines(lines=self.follower.poll())
+
+    def scan_startup_files(
+        self,
+        *,
+        include_previous: bool = True,
+    ) -> LiveSessionSnapshot:
+        """Process startup recovery logs in follower-defined chronological order.
+        The follower advances its offset so later polling does not replay current lines.
+        """
+
+        return self.process_lines(
+            lines=self.follower.scan_startup_files(
+                include_previous=include_previous,
+            )
+        )
+
+    def process_lines(self, *, lines: Iterable[str]) -> LiveSessionSnapshot:
+        """Consume complete Arena log lines and publish each resulting state change.
+        Parser and account context remain incremental across repeated batches.
+        """
+
+        for line in lines:
+            events = tuple(self.parser.parse_lines(lines=(line,)))
+            self._discard_previous_login_account_context()
+            for parsed_event in events:
+                event = self._event_with_log_account(event=parsed_event)
+                state = self._consume_store_event(event=event)
+                if state is not None:
+                    self._remember_state(state=state)
+                    self._log_account_id = state.account_id
+                    if _event_is_missing_account(event=event):
+                        event = replace(event, account_id=state.account_id)
+                self._consume_event(event=event, state=state)
+            self._persist_pending_login_name_for_observed_course()
+
+        return self.snapshot
+
+    def dispatch(self, *, command: LiveSessionCommand) -> LiveSessionSnapshot:
+        """Apply one explicit frontend intention and publish the resulting snapshot.
+        Commands owned by later extraction tickets fail until their services exist.
+        """
+
+        if isinstance(command, ChooseAccount):
+            self._choose_account(account_id=command.account_id)
+            return self.snapshot
+
+        if isinstance(command, ChangeRanking):
+            self._ranking_mode = command.ranking_mode
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    recommendations=replace(
+                        self.snapshot.recommendations,
+                        ranking_mode=command.ranking_mode,
+                    ),
+                )
+            )
+            return self.snapshot
+
+        raise ValueError(f"Live session command is not implemented yet: {command!r}.")
+
+    def stop(self) -> LiveSessionSnapshot:
+        """Publish the terminal stopped state without owning process shutdown.
+        Frontends remain responsible for timers, workers, and event-loop teardown.
+        """
+
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                status=ApplicationStatus(
+                    phase=ApplicationPhase.STOPPED,
+                    message="Draftgoblin stopped.",
+                ),
+            )
+        )
+        return self.snapshot
+
+    def _discard_previous_login_account_context(self) -> None:
+        if self.parser.login_generation == self._login_generation:
+            return
+
+        self._login_generation = self.parser.login_generation
+        self._log_account_id = None
+        self.store.clear_active_account()
+        self._restore_pending_login_account_context()
+
+    def _restore_pending_login_account_context(self) -> None:
+        profile = self._pending_login_account_profile()
+        if profile is None:
+            return
+
+        self._log_account_id = profile.account_id
+        self.store.set_active_account(
+            account_id=profile.account_id,
+            screen_name=profile.screen_name,
+        )
+        active_account = self.snapshot.active_account
+        if active_account is not None and active_account.account_id != profile.account_id:
+            return
+
+        if self.snapshot.draft is not None or self.snapshot.pool.total_cards:
+            return
+
+        state = self._latest_state_for_account(
+            account_id=profile.account_id,
+            require_pool=True,
+        )
+        if state is None:
+            self._select_account_without_draft(account_id=profile.account_id)
+        else:
+            self._select_state(state=state, recovered=True)
+
+    def _consume_store_event(self, *, event: DraftEvent) -> DraftState | None:
+        try:
+            return self.store.consume(event=event)
+        except DraftPoolError as error:
+            if _is_missing_account_error(event=event, error=error):
+                self._publish_missing_account_status()
+                return None
+
+            raise
+
+    def _event_with_log_account(self, *, event: DraftEvent) -> DraftEvent:
+        if self._log_account_id is None or not _event_is_missing_account(event=event):
+            return event
+
+        return replace(event, account_id=self._log_account_id)
+
+    def _consume_event(self, *, event: DraftEvent, state: DraftState | None) -> None:
+        if isinstance(event, AccountEvent):
+            self._consume_account_event(event=event)
+            return
+
+        if isinstance(event, QuickDraftDetectedEvent):
+            self._consume_detected_event(event=event)
+            return
+
+        if state is None:
+            return
+
+        if isinstance(event, DraftStartedEvent):
+            self.audit_store.record_draft_started(state=state)
+            self._select_state(
+                state=state,
+                recovered=False,
+                event=event,
+                message=f"Draft started for {event.set_code}.",
+            )
+            return
+
+        if isinstance(event, PackOfferedEvent):
+            self._select_state(
+                state=state,
+                recovered=False,
+                event=event,
+                message=(
+                    f"Pack {event.pack_number + 1}, pick {event.pick_number + 1}."
+                ),
+            )
+            return
+
+        if isinstance(event, PickMadeEvent):
+            self.audit_store.record_choice(
+                state=state,
+                event=event,
+                ranking_mode=self._ranking_mode,
+            )
+            self._select_state(
+                state=state,
+                recovered=False,
+                event=event,
+                message=(
+                    f"Pack {event.pack_number + 1}, pick "
+                    f"{event.pick_number + 1} recorded."
+                ),
+            )
+            return
+
+        if isinstance(event, DraftCompletedEvent):
+            self.audit_store.record_draft_completed(state=state, event=event)
+            self._select_state(
+                state=state,
+                recovered=False,
+                event=event,
+                message="Draft complete.",
+            )
+
+    def _consume_account_event(self, *, event: AccountEvent) -> None:
+        self._log_account_id = event.client_id
+        if event.screen_name is not None:
+            self._screen_names_by_account_id[event.client_id] = event.screen_name
+
+        active_account = self.snapshot.active_account
+        if (
+            active_account is not None
+            and active_account.account_id != event.client_id
+            and (self.snapshot.draft is not None or self.snapshot.pool.total_cards)
+        ):
+            self._refresh_accounts()
+            return
+
+        state = self._latest_state_for_account(
+            account_id=event.client_id,
+            require_pool=True,
+        )
+        if state is None:
+            self._select_account_without_draft(account_id=event.client_id)
+        else:
+            self._select_state(state=state, recovered=True)
+
+    def _consume_detected_event(self, *, event: QuickDraftDetectedEvent) -> None:
+        account_id = event.account_id or self._log_account_id
+        active_account = self._identity_for(account_id=account_id)
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                status=ApplicationStatus(
+                    phase=ApplicationPhase.WAITING_FOR_DRAFT,
+                    message=f"Preparing Quick Draft data for {event.set_code}.",
+                ),
+                accounts=self._known_accounts(),
+                active_account=active_account,
+                draft=None,
+                recommendations=RecommendationState(
+                    ranking_mode=self._ranking_mode,
+                ),
+                pool=PoolState(),
+                build=None,
+                backtest=None,
+            )
+        )
+
+    def _choose_account(self, *, account_id: str) -> None:
+        known_account_ids = {account.account_id for account in self._known_accounts()}
+        if account_id not in known_account_ids:
+            raise ValueError(f"Unknown Arena account {account_id!r}.")
+
+        state = self._latest_state_for_account(
+            account_id=account_id,
+            require_pool=False,
+        )
+        if state is None:
+            self._select_account_without_draft(account_id=account_id)
+        else:
+            self._select_state(state=state, recovered=True)
+
+    def _select_account_without_draft(self, *, account_id: str) -> None:
+        identity = self._identity_for(account_id=account_id)
+        if identity is None:
+            raise ValueError(f"Unknown Arena account {account_id!r}.")
+
+        self.store.set_active_account(
+            account_id=account_id,
+            screen_name=identity.screen_name,
+        )
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                status=ApplicationStatus(
+                    phase=ApplicationPhase.WAITING_FOR_DRAFT,
+                    message="Waiting for a Quick Draft.",
+                ),
+                accounts=self._known_accounts(),
+                active_account=identity,
+                draft=None,
+                recommendations=RecommendationState(
+                    ranking_mode=self._ranking_mode,
+                ),
+                pool=PoolState(),
+                build=None,
+                backtest=None,
+            )
+        )
+
+    def _select_state(
+        self,
+        *,
+        state: DraftState,
+        recovered: bool,
+        event: DraftEvent | None = None,
+        message: str | None = None,
+    ) -> None:
+        self._remember_state(state=state)
+        self.store.set_active_account(
+            account_id=state.account_id,
+            screen_name=state.account_screen_name,
+        )
+        pack_number, pick_number = _draft_coordinates(state=state, event=event)
+        if message is None:
+            if state.completed:
+                message = "Recovered completed draft."
+            elif recovered:
+                message = "Recovered draft in progress."
+            else:
+                message = "Draft in progress."
+        phase = (
+            ApplicationPhase.DRAFT_COMPLETE
+            if state.completed
+            else ApplicationPhase.DRAFTING
+        )
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                status=ApplicationStatus(phase=phase, message=message),
+                accounts=self._known_accounts(),
+                active_account=AccountIdentity(
+                    account_id=state.account_id,
+                    screen_name=self._screen_name_for_state(state=state),
+                ),
+                draft=DraftIdentity(
+                    account_id=state.account_id,
+                    draft_id=state.draft_id,
+                    event_name=state.event_name,
+                    set_code=state.set_code,
+                    course_id=state.course_id,
+                    pack_number=pack_number,
+                    pick_number=pick_number,
+                    completed=state.completed,
+                ),
+                pool=PoolState(total_cards=len(state.pool_grp_ids)),
+            )
+        )
+
+    def _publish_missing_account_status(self) -> None:
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                status=ApplicationStatus(
+                    phase=ApplicationPhase.WAITING_FOR_DRAFT,
+                    message="Draft detected; waiting for an Arena account ID.",
+                ),
+                accounts=self._known_accounts(),
+                active_account=None,
+                draft=None,
+                recommendations=RecommendationState(
+                    ranking_mode=self._ranking_mode,
+                ),
+                pool=PoolState(),
+                progress=None,
+                build=None,
+                backtest=None,
+            )
+        )
+
+    def _remember_state(self, *, state: DraftState) -> None:
+        self._states_by_key[(state.account_id, state.draft_id)] = state
+        if state.account_screen_name is not None:
+            self._screen_names_by_account_id[state.account_id] = (
+                state.account_screen_name
+            )
+
+    def _known_accounts(self) -> tuple[AccountIdentity, ...]:
+        screen_names: dict[str, str | None] = dict(
+            self._screen_names_by_account_id
+        )
+        for state in self._recovered_states():
+            if state.account_screen_name is not None:
+                screen_names.setdefault(state.account_id, state.account_screen_name)
+            else:
+                screen_names.setdefault(state.account_id, None)
+        for profile in list_account_profiles(app_dir=self.store.app_dir):
+            screen_names[profile.account_id] = profile.screen_name
+
+        return tuple(
+            sorted(
+                (
+                    AccountIdentity(
+                        account_id=account_id,
+                        screen_name=screen_name,
+                    )
+                    for account_id, screen_name in screen_names.items()
+                ),
+                key=lambda account: (
+                    (account.screen_name or account.account_id).casefold(),
+                    account.account_id,
+                ),
+            )
+        )
+
+    def _identity_for(self, *, account_id: str | None) -> AccountIdentity | None:
+        if account_id is None:
+            return None
+
+        return next(
+            (
+                account
+                for account in self._known_accounts()
+                if account.account_id == account_id
+            ),
+            AccountIdentity(account_id=account_id, screen_name=None),
+        )
+
+    def _refresh_accounts(self) -> None:
+        active_account_id = (
+            None
+            if self.snapshot.active_account is None
+            else self.snapshot.active_account.account_id
+        )
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                accounts=self._known_accounts(),
+                active_account=self._identity_for(account_id=active_account_id),
+            )
+        )
+
+    def _pending_login_account_profile(self) -> AccountProfile | None:
+        pending_screen_name = self.parser.pending_login_screen_name
+        if pending_screen_name is None:
+            return None
+
+        pending_key = _account_screen_name_match_key(
+            screen_name=pending_screen_name,
+        )
+        matches = tuple(
+            profile
+            for profile in list_account_profiles(app_dir=self.store.app_dir)
+            if _account_screen_name_match_key(screen_name=profile.screen_name)
+            == pending_key
+        )
+        if len(matches) != 1:
+            return None
+
+        return matches[0]
+
+    def _recovered_states(self) -> tuple[DraftState, ...]:
+        states = dict(self._states_by_key)
+        states.update(
+            {
+                (state.account_id, state.draft_id): state
+                for state in list_draft_states(app_dir=self.store.app_dir)
+            }
+        )
+        return tuple(states.values())
+
+    def _latest_state_for_account(
+        self,
+        *,
+        account_id: str,
+        require_pool: bool,
+    ) -> DraftState | None:
+        states = tuple(
+            state
+            for state in self._recovered_states()
+            if state.account_id == account_id
+            and (not require_pool or bool(state.pool_grp_ids))
+        )
+        if not states:
+            return None
+
+        return max(states, key=_latest_draft_state_sort_key)
+
+    def _persist_pending_login_name_for_observed_course(self) -> None:
+        screen_name = self.parser.pending_login_screen_name
+        course_ids = self.parser.observed_quick_draft_course_ids
+        if screen_name is None or not course_ids:
+            return
+
+        matching_account_ids = {
+            state.account_id
+            for state in self._recovered_states()
+            if state.course_id in course_ids or state.draft_id in course_ids
+        }
+        if len(matching_account_ids) != 1:
+            return
+
+        account_id = matching_account_ids.pop()
+        identity = self._identity_for(account_id=account_id)
+        if identity is not None and identity.screen_name is not None:
+            return
+
+        self.store.set_active_account(
+            account_id=account_id,
+            screen_name=screen_name,
+        )
+        self._screen_names_by_account_id[account_id] = screen_name
+        self._refresh_accounts()
+
+    def _screen_name_for_state(self, *, state: DraftState) -> str | None:
+        identity = self._identity_for(account_id=state.account_id)
+        if identity is not None and identity.screen_name is not None:
+            return identity.screen_name
+
+        return state.account_screen_name
+
+    def _publish(self, snapshot: LiveSessionSnapshot) -> None:
+        if snapshot == self._snapshot:
+            return
+
+        self._snapshot = snapshot
+        if self._snapshot_publisher is not None:
+            self._snapshot_publisher(snapshot)
+
+
+def _draft_coordinates(
+    *,
+    state: DraftState,
+    event: DraftEvent | None,
+) -> tuple[int | None, int | None]:
+    if isinstance(event, (PackOfferedEvent, PickMadeEvent, DraftCompletedEvent)):
+        return (event.pack_number, event.pick_number)
+
+    if not state.picks:
+        return (None, None)
+
+    pick = max(state.picks, key=lambda candidate: candidate.coordinate)
+    return pick.coordinate
+
+
+def _latest_draft_state_sort_key(state: DraftState) -> tuple[str, str, str]:
+    return (state.updated_at, state.account_id, state.draft_id)
+
+
+def _is_missing_account_error(*, event: DraftEvent, error: DraftPoolError) -> bool:
+    return (
+        str(error) == "Draft event is missing an MTGA account id."
+        and _event_is_missing_account(event=event)
+    )
+
+
+def _event_is_missing_account(*, event: DraftEvent) -> bool:
+    return (
+        isinstance(
+            event,
+            (
+                QuickDraftDetectedEvent,
+                DraftStartedEvent,
+                PackOfferedEvent,
+                PickMadeEvent,
+                DraftCompletedEvent,
+            ),
+        )
+        and event.account_id is None
+    )
+
+
+def _account_screen_name_match_key(*, screen_name: str) -> str:
+    normalized = screen_name.strip()
+    name, separator, discriminator = normalized.rpartition("#")
+    if separator and name and discriminator.isdigit():
+        normalized = name
+
+    return normalized.casefold()
