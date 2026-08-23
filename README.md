@@ -40,23 +40,29 @@ For the complete methodology, see [pick scoring](docs/pick-scoring.md), [benchma
 
 ## How to use it
 
-Draftgoblin requires [uv](https://docs.astral.sh/uv/), which provides the required Python runtime and installs the command in an isolated environment.
+On macOS, Homebrew installs Draftgoblin and its Python runtime together. The cross-platform alternative is [uv](https://docs.astral.sh/uv/), which provides the required Python runtime and installs the command in an isolated environment.
 
 ### 1. Install
 
-Install uv with Homebrew on macOS:
+Install Draftgoblin directly from its Homebrew tap on macOS:
+
+```bash
+brew install andreagrandi/tap/draftgoblin
+```
+
+Alternatively, install uv on macOS:
 
 ```bash
 brew install uv
 ```
 
-Or with WinGet on Windows:
+Or install uv with WinGet on Windows:
 
 ```powershell
 winget install --id=astral-sh.uv -e
 ```
 
-Then install Draftgoblin:
+Then install Draftgoblin with uv:
 
 ```bash
 uv tool install draftgoblin
@@ -90,7 +96,13 @@ Draftgoblin uses the standard Arena log location on macOS and Windows. If your l
 draftgoblin watch --log-path /path/to/Player.log
 ```
 
-Upgrade later with:
+Upgrade a Homebrew installation later with:
+
+```bash
+brew upgrade draftgoblin
+```
+
+Or upgrade a uv installation with:
 
 ```bash
 uv tool upgrade draftgoblin
