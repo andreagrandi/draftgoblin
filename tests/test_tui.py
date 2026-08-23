@@ -41,6 +41,7 @@ from draftgoblin.seventeen import (
     SeventeenLandsDownloadProgress,
     SeventeenLandsFormatData,
 )
+from draftgoblin.session import ApplicationPhase, DataLoadPhase, OperationKind
 from draftgoblin.splash import SplashAssessment
 from draftgoblin.tui import (
     MANA_CARD_TYPE_GLYPHS,
@@ -217,8 +218,19 @@ async def _assert_fixture_stream_updates_pack_panel(tmp_path: Path) -> None:
         table = app.query_one("#pack-table", DataTable)
         rows = [table.get_row_at(index) for index in range(table.row_count)]
         status = _status_text(app=app)
+        snapshot = app.session.snapshot
 
         assert table.row_count == 14
+        assert snapshot.status.phase == ApplicationPhase.DRAFTING
+        assert snapshot.active_account is not None
+        assert snapshot.active_account.account_id == FIXTURE_ACCOUNT_ID
+        assert snapshot.draft is not None
+        assert snapshot.draft.draft_id == FIXTURE_DRAFT_ID
+        assert snapshot.pool.total_cards == 0
+        assert len(snapshot.recommendations.cards) == 14
+        assert snapshot.current_pack_event is not None
+        assert snapshot.current_pack_event.account_id == FIXTURE_ACCOUNT_ID
+        assert snapshot.current_scored_pack is not None
         assert DraftgoblinTuiApp.TITLE == "Draft Goblin"
         assert any("Fixture Spider" in row for row in _card_cells(rows=rows))
         assert "Account: FixturePlayer" in status
@@ -479,6 +491,67 @@ def test_tui_account_cycle_returns_to_live_account_without_a_saved_draft(
             tmp_path=tmp_path,
         )
     )
+
+
+def test_tui_account_cycle_never_pairs_new_account_with_prior_pack(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_account_cycle_pack_state_is_atomic(tmp_path=tmp_path))
+
+
+async def _assert_account_cycle_pack_state_is_atomic(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    pending_state = replace(
+        _draft_state(
+            account_id="alpha-account",
+            account_screen_name="Alpha",
+            draft_id="alpha-live",
+            event_name="QuickDraft_MSH_20260702",
+            pool_grp_ids=(),
+        ),
+        completed=False,
+        picks=(
+            DraftPick(
+                pack_number=0,
+                pick_number=0,
+                offered_grp_ids=(104894, 105097),
+                pool_before_pick=(),
+            ),
+        ),
+    )
+    completed_state = _draft_state(
+        account_id="beta-account",
+        account_screen_name="Beta",
+        draft_id="beta-complete",
+        event_name="QuickDraft_MSH_20260702",
+        pool_grp_ids=(104894, 105097),
+    )
+    for state in (pending_state, completed_state):
+        save_draft_state(state=state, app_dir=tmp_path / "app")
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert app.session.snapshot.active_account is not None
+        assert app.session.snapshot.active_account.account_id == "alpha-account"
+        assert app.session.snapshot.current_pack_event is not None
+        assert app.session.snapshot.current_pack_event.account_id == "alpha-account"
+        assert app._current_pack_event is not None
+
+        await pilot.press("a")
+        await pilot.pause()
+
+        snapshot = app.session.snapshot
+        assert snapshot.active_account is not None
+        assert snapshot.active_account.account_id == "beta-account"
+        assert snapshot.draft is not None
+        assert snapshot.draft.completed is True
+        assert snapshot.current_pack_event is None
+        assert snapshot.current_scored_pack is None
+        assert app._current_pack_event is None
+        assert app._current_pack is None
+        assert "Account: Beta" in _status_text(app=app)
 
 
 async def _assert_account_cycle_returns_to_live_account_without_a_saved_draft(
@@ -831,6 +904,36 @@ async def _assert_accountless_draft_event_does_not_show_repeating_error(
         assert "Error: Draft event is missing an MTGA account id." not in status
         assert "Account: unknown" in status
         assert "Pick: waiting" in status
+
+
+def test_tui_accountless_live_path_retains_picks_and_completion(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_accountless_live_path_completes(tmp_path=tmp_path))
+
+
+async def _assert_accountless_live_path_completes(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+    accountless_lines = _full_fixture_lines()[2:]
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.process_lines(lines=accountless_lines)
+        await pilot.pause()
+
+        snapshot = app.session.snapshot
+        assert snapshot.status.phase == ApplicationPhase.DRAFT_COMPLETE
+        assert snapshot.active_account is None
+        assert snapshot.draft is None
+        assert snapshot.pool.total_cards == 42
+        assert snapshot.current_pack_event is None
+        assert snapshot.current_scored_pack is None
+        assert app._pool_size == 42
+        assert app._current_pack_event is None
+        assert app.build_view_text.startswith("[bold]Suggested deck[/bold]\n\n")
+        assert "Account: unknown" in _status_text(app=app)
+        assert "Pick: complete" in _status_text(app=app)
+        state_root = tmp_path / "app" / "state"
+        assert not state_root.exists() or not tuple(state_root.rglob("*.json"))
 
 
 def test_tui_pack_rows_show_17lands_win_rate_grade_and_dg_score(
@@ -1339,6 +1442,10 @@ async def _assert_completion_build_view_and_pair_override(tmp_path: Path) -> Non
         assert table.display is False
         assert build_scroll.display is True
         assert pool_summary.display is False
+        assert app.session.snapshot.status.phase == ApplicationPhase.DRAFT_COMPLETE
+        assert app.session.snapshot.draft is not None
+        assert app.session.snapshot.draft.completed is True
+        assert app.session.snapshot.pool.total_cards == 42
         assert app.build_view_text.startswith("[bold]Suggested deck[/bold]\n\n")
         assert "Selected spells by mana value" in app.build_view_text
         assert "Color pair: WU (automatic" in app.build_view_text
@@ -1698,6 +1805,64 @@ def test_tui_loads_card_metadata_after_rendering_the_shell(tmp_path: Path) -> No
     asyncio.run(_assert_card_metadata_load_starts_after_shell_renders(tmp_path=tmp_path))
 
 
+def test_tui_startup_recovery_hands_off_to_exactly_once_polling(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_startup_recovery_serializes_polling(tmp_path=tmp_path))
+
+
+async def _assert_startup_recovery_serializes_polling(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    log_path = tmp_path / "Player.log"
+    log_path.write_text(
+        "\n".join(_first_pack_lines()) + "\n",
+        encoding="utf-8",
+    )
+
+    def slow_loader(set_code: str) -> SeventeenLandsData:
+        started.set()
+        release.wait(timeout=5.0)
+        return _graded_ratings_data(set_code)
+
+    app = _tui_app(
+        tmp_path=tmp_path,
+        ratings_loader=slow_loader,
+        poll_enabled=True,
+        startup_scan=True,
+        poll_interval=0.01,
+    )
+
+    try:
+        async with app.run_test(size=(120, 30)) as pilot:
+            assert await asyncio.to_thread(started.wait, 0.5)
+            with log_path.open(mode="a", encoding="utf-8") as log_file:
+                log_file.write(_first_pick_lines()[7] + "\n")
+
+            await pilot.pause(0.1)
+            assert app.session.snapshot.pool.total_cards == 0
+
+            release.set()
+            for _ in range(40):
+                await pilot.pause(0.05)
+                if app.session.snapshot.pool.total_cards == 1:
+                    break
+
+            assert app.session.snapshot.pool.total_cards == 1
+            audit_records = load_draft_audit_records(
+                account_id=FIXTURE_ACCOUNT_ID,
+                draft_id=FIXTURE_DRAFT_ID,
+                app_dir=tmp_path / "app",
+            )
+            assert [record["record_type"] for record in audit_records] == [
+                "draft_started",
+                "decision_evaluated",
+                "choice_made",
+            ]
+    finally:
+        release.set()
+
+
 async def _assert_card_metadata_load_starts_after_shell_renders(tmp_path: Path) -> None:
     started = threading.Event()
     release = threading.Event()
@@ -1902,6 +2067,9 @@ async def _assert_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
             assert elapsed < 0.25
             assert await asyncio.to_thread(started.wait, 0.5)
             assert "MSH" in app.loading_rating_sets
+            assert app.session.snapshot.ratings.phase == DataLoadPhase.LOADING
+            assert app.session.snapshot.progress is not None
+            assert app.session.snapshot.progress.operation == OperationKind.RATINGS
 
             await pilot.press("s")
             assert app.sort_mode == "win_rate"
@@ -1913,8 +2081,76 @@ async def _assert_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
                     break
 
             assert "MSH" not in app.loading_rating_sets
+            assert app.session.snapshot.ratings.phase == DataLoadPhase.READY
+            assert app.session.snapshot.progress is None
         finally:
             release.set()
+
+
+def test_tui_clears_automatic_ratings_progress_notice_when_ready(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_automatic_ratings_notice_clears(tmp_path=tmp_path))
+
+
+async def _assert_automatic_ratings_notice_clears(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path, ratings_loader=_graded_ratings_data)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if app.session.snapshot.ratings.phase == DataLoadPhase.READY:
+                break
+
+        assert app.session.snapshot.ratings.phase == DataLoadPhase.READY
+        assert app.query_one("#ratings-download-panel").display is False
+        assert "MSH" not in app._rating_notices_by_set
+
+
+def test_tui_clears_session_error_after_successful_ratings_retry(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_ratings_retry_clears_session_error(tmp_path=tmp_path))
+
+
+async def _assert_ratings_retry_clears_session_error(tmp_path: Path) -> None:
+    load_count = 0
+
+    def retrying_loader(set_code: str) -> SeventeenLandsData:
+        nonlocal load_count
+        load_count += 1
+        if load_count == 1:
+            raise RuntimeError("temporary ratings failure")
+
+        return _graded_ratings_data(set_code)
+
+    app = _tui_app(tmp_path=tmp_path, ratings_loader=retrying_loader)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        app.process_lines(lines=_first_pack_lines())
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if app.session.snapshot.ratings.phase == DataLoadPhase.FAILED:
+                break
+
+        assert app.session.snapshot.ratings.phase == DataLoadPhase.FAILED
+        assert "Error: 17Lands ratings failed for MSH" in _status_text(app=app)
+
+        await pilot.press("d")
+        await pilot.pause()
+        assert isinstance(app.screen, MissingRatingsScreen)
+        await pilot.click("#download-ratings")
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if app.session.snapshot.ratings.phase == DataLoadPhase.READY:
+                break
+
+        assert load_count == 2
+        assert app.session.snapshot.ratings.phase == DataLoadPhase.READY
+        assert app.session.snapshot.errors == ()
+        assert "temporary ratings failure" not in _status_text(app=app)
+        assert "Error: 17Lands ratings failed for MSH" not in _status_text(app=app)
 
 
 def test_tui_visibility_dialog_saves_preferences_and_restores_them_after_restart(
@@ -2189,6 +2425,8 @@ def _tui_app(
     mana_icons_enabled: bool = False,
     card_image_fetcher: Callable[[str, Path], Path] | None = None,
     poll_enabled: bool = False,
+    startup_scan: bool = False,
+    poll_interval: float = 1.0,
     visibility_preferences: TuiVisibilityPreferences | None = None,
 ) -> DraftgoblinTuiApp:
     return DraftgoblinTuiApp(
@@ -2204,6 +2442,8 @@ def _tui_app(
         ratings_progress_loader=ratings_progress_loader,
         ratings_cache_checker=ratings_cache_checker,
         poll_enabled=poll_enabled,
+        startup_scan=startup_scan,
+        poll_interval=poll_interval,
         image_preview_enabled=image_preview_enabled,
         mana_icons_enabled=mana_icons_enabled,
         card_image_fetcher=card_image_fetcher,

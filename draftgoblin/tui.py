@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from os import PathLike
 from pathlib import Path
+from threading import Lock, get_ident
 from typing import TypeAlias
 
 from rich.align import Align
@@ -38,7 +39,6 @@ try:  # pragma: no cover - import availability depends on optional terminal extr
 except Exception:  # pragma: no cover - graceful fallback when unavailable.
     TgpImage = None
 
-from draftgoblin.audit import DraftAuditStore
 from draftgoblin.backtest import format_backtest_report, generate_backtest_report
 from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.cardimages import CardImageService, card_image_cache_dir
@@ -52,24 +52,16 @@ from draftgoblin.deckbuilder import (
     build_deck_from_pool,
 )
 from draftgoblin.events import (
-    EXPECTED_PICKS_PER_PACK,
     AccountEvent,
     DraftCompletedEvent,
-    DraftEvent,
-    DraftLogParser,
     DraftStartedEvent,
     PackOfferedEvent,
     PickMadeEvent,
     QuickDraftDetectedEvent,
 )
-from draftgoblin.logfollow import LogFollower
-from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
+from draftgoblin.pickengine import ScoredCard, ScoredPack
 from draftgoblin.pool import (
-    AccountProfile,
-    DraftPoolError,
-    DraftPoolStore,
     DraftState,
-    list_account_profiles,
     list_draft_states,
 )
 from draftgoblin.preferences import (
@@ -84,11 +76,23 @@ from draftgoblin.ranking import (
     rank_scored_cards,
     ranking_label,
 )
+from draftgoblin.session import (
+    ApplicationPhase,
+    ChangeRanking,
+    ChangeSplashPreference,
+    ChooseAccount,
+    DataLoadPhase,
+    LiveSession,
+    LiveSessionCommand,
+    LiveSessionEvent,
+    LiveSessionSnapshot,
+    OperationKind,
+    RequestRatingsDownload,
+)
 from draftgoblin.seventeen import (
     SEVENTEEN_LANDS_ATTRIBUTION,
     DownloadProgressCallback,
     SeventeenLandsData,
-    SeventeenLandsDownloadProgress,
 )
 from draftgoblin.setinfo import format_set_label
 
@@ -626,6 +630,7 @@ class DraftgoblinTuiApp(App[None]):
         )
         if configured_ratings_loaders > 1:
             raise ValueError("Configure exactly one ratings loader or loader factory.")
+        self._ratings_operations_may_block = configured_ratings_loaders > 0
 
         self.log_path = Path(log_path).expanduser().resolve(strict=False)
         self._preferences_app_dir = app_dir
@@ -643,25 +648,27 @@ class DraftgoblinTuiApp(App[None]):
                 splash_enabled=splash_enabled,
             )
         self._preferences_save_warning: str | None = None
-        self._card_database = card_database
-        self.card_database_loader = card_database_loader
+        self._app_dir = app_dir
         self._card_database_error: str | None = None
         self._log_processing_started = False
-        self._ratings_loader_factory = ratings_loader_factory
-        self._ratings_progress_loader_factory = ratings_progress_loader_factory
-        self.follower = LogFollower(
+        self._ingestion_lock = Lock()
+        self._textual_thread_id: int | None = None
+        self.session = LiveSession(
             log_path=self.log_path,
+            card_database=card_database,
+            card_database_loader=card_database_loader,
             app_dir=app_dir,
             poll_interval=poll_interval,
             previous_log_path=previous_log_path,
+            snapshot_publisher=self._publish_session_snapshot,
+            event_publisher=self._publish_session_event,
+            ratings_loader=ratings_loader,
+            ratings_loader_factory=ratings_loader_factory,
+            ratings_progress_loader=ratings_progress_loader,
+            ratings_progress_loader_factory=ratings_progress_loader_factory,
+            ratings_cache_checker=ratings_cache_checker,
+            splash_enabled=self.visibility_preferences.splash_enabled,
         )
-        self.parser = DraftLogParser()
-        self._login_generation = self.parser.login_generation
-        self.store = DraftPoolStore(app_dir=app_dir)
-        self.audit_store = DraftAuditStore(app_dir=self.store.root.parent)
-        self.ratings_loader = ratings_loader
-        self.ratings_progress_loader = ratings_progress_loader
-        self.ratings_cache_checker = ratings_cache_checker
         self.startup_scan = startup_scan
         self.once = once
         self.poll_enabled = poll_enabled
@@ -686,8 +693,6 @@ class DraftgoblinTuiApp(App[None]):
         self.sort_mode = DEFAULT_RANKING_MODE
         self._view_mode = "pack"
         self._visible_column_keys: tuple[str, ...] = ()
-        self._account_labels: dict[str, str] = {}
-        self._log_account_id: str | None = None
         self._active_account_id: str | None = None
         self._active_account_label = "unknown"
         self._event_name: str | None = None
@@ -700,7 +705,7 @@ class DraftgoblinTuiApp(App[None]):
         self._commitment_label = "0% open"
         self._data_source = "unknown"
         self._last_error: str | None = None
-        self._last_picks: list[str] = []
+        self._session_error: str | None = None
         self._forced_pair: str | None = None
         self._build_pair_label = "—"
         self._build_text = "Build view: no picked cards yet."
@@ -720,16 +725,10 @@ class DraftgoblinTuiApp(App[None]):
         self._build_render_mana_base: ManaBase | None = None
         self._current_pack_event: PackOfferedEvent | None = None
         self._current_pack: ScoredPack | None = None
-        self._ratings_data_by_set: dict[str, SeventeenLandsData | None] = {}
-        self._rating_errors_by_set: dict[str, str] = {}
-        self._loading_rating_sets: set[str] = set()
-        self._missing_rating_sets: set[str] = set()
         self._rating_prompted_sets: set[str] = set()
         self._rating_prompt_open_sets: set[str] = set()
-        self._rating_progress_by_set: dict[str, SeventeenLandsDownloadProgress] = {}
         self._rating_notices_by_set: dict[str, str] = {}
-        self._rating_network_download_sets: set[str] = set()
-        self._draft_states_by_key: dict[tuple[str, str], DraftState] = {}
+        self._rating_download_requested_sets: set[str] = set()
 
     @property
     def card_database(self) -> CardDatabase:
@@ -737,10 +736,11 @@ class DraftgoblinTuiApp(App[None]):
         Startup code must wait for the loader worker before accessing it.
         """
 
-        if self._card_database is None:
+        database = self.session.card_database
+        if database is None:
             raise RuntimeError("Card metadata is not ready.")
 
-        return self._card_database
+        return database
 
     @property
     def card_database_loading(self) -> bool:
@@ -748,7 +748,10 @@ class DraftgoblinTuiApp(App[None]):
         Tests use this to verify startup work stays outside the render loop.
         """
 
-        return self._card_database is None and self._card_database_error is None
+        return self.session.snapshot.card_data.phase in {
+            DataLoadPhase.IDLE,
+            DataLoadPhase.LOADING,
+        }
 
     @property
     def visible_column_keys(self) -> tuple[str, ...]:
@@ -764,7 +767,11 @@ class DraftgoblinTuiApp(App[None]):
         Tests use this to confirm slow loads stay off the render loop.
         """
 
-        return frozenset(self._loading_rating_sets)
+        ratings = self.session.snapshot.ratings
+        if ratings.phase != DataLoadPhase.LOADING or ratings.set_code is None:
+            return frozenset()
+
+        return frozenset((ratings.set_code,))
 
     @property
     def build_view_text(self) -> str:
@@ -817,6 +824,7 @@ class DraftgoblinTuiApp(App[None]):
         Log processing begins only after card data is available for scoring.
         """
 
+        self._textual_thread_id = get_ident()
         table = self.query_one("#pack-table", DataTable)
         table.cursor_type = "row"
         table.zebra_stripes = True
@@ -840,9 +848,16 @@ class DraftgoblinTuiApp(App[None]):
         self._log_processing_started = True
         if self.startup_scan:
             self._scan_startup_files_worker(exit_after=self.once)
-        else:
-            self._poll_log_worker(exit_after=self.once)
+            return
 
+        self._start_polling()
+
+    def _start_polling(self) -> None:
+        """Begin polling only after optional startup recovery has finished.
+        The first poll catches lines appended while startup recovery was running.
+        """
+
+        self._poll_log_worker(exit_after=self.once)
         if not self.once:
             self.set_interval(self.poll_interval, self._poll_log_worker)
 
@@ -885,10 +900,11 @@ class DraftgoblinTuiApp(App[None]):
         self.show_secondary_columns = preferences.secondary_columns
         self._build_show_details = preferences.build_details
         self._save_visibility_preferences()
+        self.session.dispatch(
+            command=ChangeSplashPreference(enabled=preferences.splash_enabled),
+        )
         if self._build_render_pool is not None:
             self._rebuild_build_view()
-        else:
-            self._score_current_pack()
         self._render_all()
 
     def _save_visibility_preferences(self) -> None:
@@ -919,10 +935,11 @@ class DraftgoblinTuiApp(App[None]):
             self._render_all()
             return
 
-        if set_code in self._loading_rating_sets:
+        ratings = self.session.snapshot.ratings
+        if ratings.phase == DataLoadPhase.LOADING:
             return
 
-        if self._ratings_data_by_set.get(set_code) is not None:
+        if ratings.phase == DataLoadPhase.READY:
             self._rating_notices_by_set[set_code] = (
                 f"17Lands data is already ready for {set_code}."
             )
@@ -945,6 +962,9 @@ class DraftgoblinTuiApp(App[None]):
         else:
             index = SORT_MODES.index(self.sort_mode)
             self.sort_mode = SORT_MODES[(index + 1) % len(SORT_MODES)]
+            self.session.dispatch(
+                command=ChangeRanking(ranking_mode=self.sort_mode),
+            )
             if self._view_mode == "backtest":
                 self._rebuild_backtest_view()
                 self._backtest_action_status = (
@@ -1077,31 +1097,12 @@ class DraftgoblinTuiApp(App[None]):
         Multiple saved drafts for one account must not create duplicate stops.
         """
 
-        states = self._available_account_draft_states()
-        state_by_account_id = {state.account_id: state for state in states}
-        profiles = self._known_account_profiles()
-        account_ids = (
-            set(state_by_account_id)
-            | {profile.account_id for profile in profiles}
-            | set(self._account_labels)
-        )
-        if self._log_account_id is not None:
-            account_ids.add(self._log_account_id)
-        if self._active_account_id is not None:
-            account_ids.add(self._active_account_id)
-        if not account_ids:
+        accounts = self.session.known_accounts()
+        if not accounts:
             self._record_error("no known accounts to switch to")
             return
 
-        ordered_account_ids = tuple(
-            sorted(
-                account_ids,
-                key=lambda account_id: (
-                    self._account_label(account_id=account_id),
-                    account_id,
-                ),
-            )
-        )
+        ordered_account_ids = tuple(account.account_id for account in accounts)
         if self._active_account_id in ordered_account_ids:
             index = (ordered_account_ids.index(self._active_account_id) + 1) % len(
                 ordered_account_ids
@@ -1110,12 +1111,11 @@ class DraftgoblinTuiApp(App[None]):
             index = 0
 
         account_id = ordered_account_ids[index]
-        state = state_by_account_id.get(account_id)
-        if state is None:
-            self._select_account_without_draft(account_id=account_id)
+        command = ChooseAccount(account_id=account_id)
+        if self._ratings_operations_may_block:
+            self._dispatch_session_command_worker(command)
         else:
-            self._select_draft_state(state=state)
-        self._render_all()
+            self.session.dispatch(command=command)
 
     def action_rebuild_with_pair_override(self) -> None:
         """Force the next color pair and refresh the build view.
@@ -1143,446 +1143,307 @@ class DraftgoblinTuiApp(App[None]):
         if self.card_database_loading or self._card_database_error is not None:
             return
 
-        try:
-            for line in lines:
-                events_tuple = tuple(self.parser.parse_lines(lines=(line,)))
-                self._discard_previous_login_account_context()
-                for parsed_event in events_tuple:
-                    if (
-                        isinstance(parsed_event, QuickDraftDetectedEvent)
-                        and not include_pre_draft_detection
-                    ):
-                        continue
+        line_batch = tuple(lines)
+        if (
+            self.is_running
+            and line_batch
+            and self._ratings_operations_may_block
+        ):
+            self._process_lines_worker(
+                lines=line_batch,
+                include_pre_draft_detection=include_pre_draft_detection,
+            )
+            return
 
-                    event = self._event_with_active_account(event=parsed_event)
-                    state = self._consume_store_event(event=event)
-                    if state is not None:
-                        self._remember_draft_state(state=state)
-                        if _event_is_missing_account(event=event):
-                            event = replace(event, account_id=state.account_id)
-                    self._consume_event(event=event, state=state)
-            self._persist_pending_login_name_for_observed_course()
+        try:
+            with self._ingestion_lock:
+                self.session.process_lines(
+                    lines=line_batch,
+                    include_pre_draft_detection=include_pre_draft_detection,
+                )
         except Exception as error:  # pragma: no cover - defensive UI boundary.
-            self._last_error = str(error)
+            self._record_error(str(error))
+            return
 
         self._render_all()
+
+    @work(thread=True, exclusive=True, group="session-ingestion")
+    def _process_lines_worker(
+        self,
+        *,
+        lines: tuple[str, ...],
+        include_pre_draft_detection: bool,
+    ) -> None:
+        """Run shared ingestion and ratings work away from Textual's thread.
+        Session publications marshal immutable state back to the adapter.
+        """
+
+        worker = get_current_worker()
+        try:
+            with self._ingestion_lock:
+                if worker.is_cancelled:
+                    return
+                self.session.process_lines(
+                    lines=lines,
+                    include_pre_draft_detection=include_pre_draft_detection,
+                )
+        except Exception as error:  # pragma: no cover - defensive UI boundary.
+            self.call_from_thread(self._record_error, str(error))
 
     @work(thread=True, exclusive=True, group="card-database")
     def _load_card_database_worker(self) -> None:
-        """Load or refresh card metadata away from the Textual render loop.
-        The loaded database and any UI state changes are published on the main thread.
+        """Ask the shared session to load metadata outside the Textual thread.
+        Published readiness and errors are marshalled back as immutable state.
         """
 
         worker = get_current_worker()
         if worker.is_cancelled:
             return
 
-        database = None
-        error_message = None
         try:
-            if self.card_database_loader is None:
-                raise RuntimeError("No card metadata loader is configured.")
-            database = self.card_database_loader()
+            self.session.load_card_data()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
-            error_message = str(error)
+            self.call_from_thread(self._record_error, str(error))
 
-        if worker.is_cancelled:
-            return
-
-        self.call_from_thread(
-            self._finish_card_database_load,
-            database,
-            error_message,
-        )
-
-    def _finish_card_database_load(
-        self,
-        database: CardDatabase | None,
-        error_message: str | None,
-    ) -> None:
-        if database is None:
-            detail = error_message or "unknown error"
-            self._card_database_error = (
-                f"{detail}. Run `draftgoblin refresh-data` after checking your "
-                "network connection and local card-data cache."
-            )
-            self._render_all()
-            return
-
-        self._card_database = database
-        if self._ratings_loader_factory is not None:
-            self.ratings_loader = self._ratings_loader_factory(database)
-        if self._ratings_progress_loader_factory is not None:
-            self.ratings_progress_loader = self._ratings_progress_loader_factory(database)
-        self._render_all()
-        self._start_log_processing()
-
-    @work(thread=True, exclusive=True, group="log-poll")
+    @work(thread=True, exclusive=True, group="session-ingestion")
     def _poll_log_worker(self, *, exit_after: bool = False) -> None:
-        """Poll the followed log in a worker thread.
-        Parsed lines are handed back to Textual on the main thread.
+        """Schedule one shared-session polling cycle in a Textual worker.
+        Session publications marshal state changes onto the Textual thread.
         """
 
+        worker = get_current_worker()
         try:
-            lines = tuple(self.follower.poll())
+            with self._ingestion_lock:
+                if worker.is_cancelled:
+                    return
+                self.session.poll_once()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.call_from_thread(self._record_error, str(error))
             if exit_after:
                 self.call_from_thread(self.exit)
             return
 
-        self.call_from_thread(self.process_lines, lines=lines)
         if exit_after:
             self.call_from_thread(self.exit)
 
-    @work(thread=True, exclusive=True, group="startup-scan")
+    @work(thread=True, exclusive=True, group="session-ingestion")
     def _scan_startup_files_worker(self, *, exit_after: bool = False) -> None:
-        """Scan startup recovery files in a worker thread.
-        Startup scans may read Player-prev.log and the current Player.log.
+        """Schedule shared startup recovery in a Textual worker.
+        Historical pre-draft detection remains excluded from the live surface.
         """
 
+        worker = get_current_worker()
         try:
-            lines = tuple(self.follower.scan_startup_files(include_previous=True))
+            with self._ingestion_lock:
+                if worker.is_cancelled:
+                    return
+                self.session.scan_startup_files(
+                    include_previous=True,
+                    include_pre_draft_detection=False,
+                )
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.call_from_thread(self._record_error, str(error))
             if exit_after:
                 self.call_from_thread(self.exit)
             return
 
-        self.call_from_thread(
-            self.process_lines,
-            lines=lines,
-            include_pre_draft_detection=False,
-        )
         if exit_after:
             self.call_from_thread(self.exit)
+            return
 
-    @work(thread=True, group="ratings")
-    def _load_ratings_worker(self, set_code: str) -> None:
-        """Load or refresh 17Lands ratings away from the render loop.
-        UI updates are marshalled back to Textual's main thread.
+        self.call_from_thread(self._start_polling)
+
+    @work(thread=True, group="session-commands")
+    def _dispatch_session_command_worker(
+        self,
+        command: LiveSessionCommand,
+    ) -> None:
+        """Dispatch a potentially blocking shared command in a worker.
+        Session progress and results return through immutable publications.
         """
 
         worker = get_current_worker()
         if worker.is_cancelled:
             return
 
-        ratings_data = None
-        error_message = None
         try:
-            if self.ratings_progress_loader is not None:
-
-                def report_progress(
-                    progress: SeventeenLandsDownloadProgress,
-                ) -> None:
-                    if worker.is_cancelled:
-                        return
-
-                    self.call_from_thread(
-                        self._update_ratings_progress,
-                        set_code,
-                        progress,
-                    )
-
-                ratings_data = self.ratings_progress_loader(
-                    set_code,
-                    report_progress,
-                )
-            elif self.ratings_loader is not None:
-                ratings_data = self.ratings_loader(set_code)
+            self.session.dispatch(command=command)
         except Exception as error:  # pragma: no cover - defensive UI boundary.
-            error_message = str(error)
+            self.call_from_thread(self._record_error, str(error))
 
-        if worker.is_cancelled:
-            return
+    def _publish_session_snapshot(self, snapshot: LiveSessionSnapshot) -> None:
+        """Marshal one immutable shared snapshot onto Textual's thread.
+        Pack projections travel with the snapshot so account state stays coherent.
+        """
 
-        self.call_from_thread(
-            self._finish_ratings_load,
-            set_code,
-            ratings_data,
-            error_message,
-        )
-
-    def _discard_previous_login_account_context(self) -> None:
-        if self.parser.login_generation == self._login_generation:
-            return
-
-        self._login_generation = self.parser.login_generation
-        self._log_account_id = None
-        self.store.clear_active_account()
-        self._restore_pending_login_account_context()
-
-    def _restore_pending_login_account_context(self) -> None:
-        profile = self._pending_login_account_profile()
-        if profile is None:
-            return
-
-        self._log_account_id = profile.account_id
-        self.store.set_active_account(
-            account_id=profile.account_id,
-            screen_name=profile.screen_name,
-        )
         if (
-            self._active_account_id in {None, profile.account_id}
-            and self._draft_id is None
-            and self._current_pack_event is None
-            and not self._pool_grp_ids
+            self.is_running
+            and self._textual_thread_id is not None
+            and get_ident() != self._textual_thread_id
         ):
-            self._active_account_id = profile.account_id
-            self._active_account_label = self._account_label(
-                account_id=profile.account_id
+            self.call_from_thread(
+                self._apply_session_snapshot,
+                snapshot,
             )
-            self._recover_latest_account_state(account_id=profile.account_id)
-
-    def _consume_store_event(self, *, event: DraftEvent) -> DraftState | None:
-        try:
-            return self.store.consume(event=event)
-        except DraftPoolError as error:
-            if _is_missing_account_error(event=event, error=error):
-                return None
-
-            raise
-
-    def _event_with_active_account(self, *, event: DraftEvent) -> DraftEvent:
-        if self._log_account_id is None:
-            return event
-
-        if not _event_is_missing_account(event=event):
-            return event
-
-        return replace(event, account_id=self._log_account_id)
-
-    def _consume_event(self, *, event: DraftEvent, state: DraftState | None) -> None:
-        if isinstance(event, AccountEvent):
-            self._consume_account_event(event=event)
             return
 
-        if isinstance(event, QuickDraftDetectedEvent):
-            self._consume_detected_event(event=event)
-            return
+        self._apply_session_snapshot(snapshot)
 
-        if isinstance(event, DraftStartedEvent):
-            self._consume_started_event(event=event, state=state)
-            return
+    def _publish_session_event(self, published: LiveSessionEvent) -> None:
+        """Marshal an ordered domain event onto Textual's presentation thread.
+        Events drive view transitions without re-owning application state.
+        """
 
-        if isinstance(event, PackOfferedEvent):
-            self._consume_pack_event(event=event, state=state)
-            return
-
-        if isinstance(event, PickMadeEvent):
-            self._consume_pick_event(event=event, state=state)
-            return
-
-        if isinstance(event, DraftCompletedEvent):
-            self._consume_completed_event(event=event, state=state)
-
-    def _consume_account_event(self, *, event: AccountEvent) -> None:
-        self._log_account_id = event.client_id
-        self._remember_account_label_for(
-            client_id=event.client_id,
-            screen_name=event.screen_name,
-            replace=True,
-        )
-        if self._active_account_id == event.client_id:
-            self._active_account_label = self._account_label(account_id=event.client_id)
-        elif self._should_display_account_event(event=event):
-            self._active_account_id = event.client_id
-            self._active_account_label = self._account_label(account_id=event.client_id)
-            self._recover_latest_account_state(account_id=event.client_id)
-
-    def _should_display_account_event(self, *, event: AccountEvent) -> bool:
-        return (
-            self._active_account_id in {None, event.client_id}
-            and self._draft_id is None
-            and self._current_pack_event is None
-            and not self._pool_grp_ids
-        )
-
-    def _recover_latest_account_state(self, *, account_id: str) -> None:
         if (
-            self._draft_id is not None
-            or self._current_pack_event is not None
-            or self._pool_grp_ids
+            self.is_running
+            and self._textual_thread_id is not None
+            and get_ident() != self._textual_thread_id
         ):
+            self.call_from_thread(self._apply_session_event, published)
             return
 
-        states = tuple(
-            state
-            for state in self._available_draft_states()
-            if state.account_id == account_id and state.pool_grp_ids
-        )
-        if not states:
-            return
+        self._apply_session_event(published)
 
-        self._select_draft_state(state=max(states, key=_latest_draft_state_sort_key))
-
-    def _consume_started_event(
+    def _apply_session_snapshot(
         self,
-        *,
-        event: DraftStartedEvent,
-        state: DraftState | None,
+        snapshot: LiveSessionSnapshot,
     ) -> None:
-        self._active_account_id = self._display_account_id(account_id=event.account_id)
+        previous_identity = (self._active_account_id, self._draft_id)
+        account = snapshot.active_account
+        draft = snapshot.draft
+        self._active_account_id = None if account is None else account.account_id
         self._active_account_label = self._account_label(
-            account_id=self._active_account_id
+            account_id=self._active_account_id,
+            snapshot=snapshot,
         )
-        self._event_name = event.event_name
-        self._set_code = event.set_code
-        self._draft_id = event.course_id
-        self._pick_label = "waiting"
-        self._pool_size = 0
-        self._pool_grp_ids = ()
-        self._last_picks = []
-        self._current_pack_event = None
-        self._current_pack = None
-        self._pair_label = "open"
-        self._commitment_label = "0% open"
-        self._view_mode = "pack"
-        self._forced_pair = None
-        self._build_pair_label = "—"
-        self._build_text = "Build view: no picked cards yet."
-        self._build_error = None
-        self._build_action_status = None
-        self._backtest_text = "Backtest view: complete a draft, then press t."
-        self._backtest_error = None
-        self._backtest_action_status = None
-        self._last_build_signature = None
-        self._build_spell_sort_mode = "curve"
-        self._build_show_details = self.visibility_preferences.build_details
-        self._clear_build_render_state()
-        self._ensure_ratings_load_started(set_code=event.set_code)
-        if state is not None:
-            self.audit_store.record_draft_started(state=state)
-
-    def _consume_detected_event(self, *, event: QuickDraftDetectedEvent) -> None:
-        self._active_account_id = self._display_account_id(account_id=event.account_id)
-        self._active_account_label = self._account_label(
-            account_id=self._active_account_id
-        )
-        self._event_name = event.event_name
-        self._set_code = event.set_code
-        self._draft_id = None
-        self._pick_label = "preparing"
-        self._pool_size = 0
-        self._pool_grp_ids = ()
-        self._last_picks = []
-        self._current_pack_event = None
-        self._current_pack = None
-        self._pair_label = "open"
-        self._commitment_label = "0% open"
-        self._view_mode = "pack"
-        self._forced_pair = None
-        self._build_pair_label = "—"
-        self._build_text = "Build view: no picked cards yet."
-        self._build_error = None
-        self._build_action_status = None
-        self._backtest_text = "Backtest view: complete a draft, then press t."
-        self._backtest_error = None
-        self._backtest_action_status = None
-        self._last_build_signature = None
-        self._build_spell_sort_mode = "curve"
-        self._build_show_details = self.visibility_preferences.build_details
-        self._clear_build_render_state()
-        self._ensure_ratings_load_started(set_code=event.set_code)
-
-    def _consume_pack_event(
-        self,
-        *,
-        event: PackOfferedEvent,
-        state: DraftState | None,
-    ) -> None:
-        self._active_account_id = (
-            state.account_id
-            if state is not None
-            else self._display_account_id(account_id=event.account_id)
-        )
-        self._active_account_label = self._account_label(
-            account_id=self._active_account_id
-        )
-        if state is not None:
-            self._draft_id = state.draft_id
-        self._event_name = event.event_name
-        self._set_code = event.set_code
-        self._pick_label = f"P{event.pack_number + 1}P{event.pick_number + 1}"
-        self._pool_size = len(event.pool_grp_ids)
-        self._pool_grp_ids = event.pool_grp_ids
-        self._build_action_status = None
-        self._backtest_action_status = None
-        self._current_pack_event = event
-        self._view_mode = "pack"
-        self._ensure_ratings_load_started(set_code=event.set_code)
-        self._score_current_pack()
-
-    def _consume_pick_event(
-        self,
-        *,
-        event: PickMadeEvent,
-        state: DraftState | None,
-    ) -> None:
-        self._active_account_id = self._display_account_id(account_id=event.account_id)
-        self._active_account_label = self._account_label(
-            account_id=self._active_account_id
-        )
-        self._pick_label = f"P{event.pack_number + 1}P{event.pick_number + 1} picked"
-        if state is not None:
-            self._pool_size = len(state.pool_grp_ids)
-            self._pool_grp_ids = state.pool_grp_ids
+        self._event_name = None if draft is None else draft.event_name
+        self._set_code = snapshot.ratings.set_code
+        if self._set_code is None and draft is not None:
+            self._set_code = draft.set_code
+        self._draft_id = None if draft is None else draft.draft_id
+        self._current_pack_event = snapshot.current_pack_event
+        self._current_pack = snapshot.current_scored_pack
+        if snapshot.status.phase == ApplicationPhase.DRAFT_COMPLETE:
+            self._pick_label = "complete"
+        elif snapshot.current_pack_event is not None:
+            self._pick_label = (
+                f"P{snapshot.current_pack_event.pack_number + 1}"
+                f"P{snapshot.current_pack_event.pick_number + 1}"
+            )
+        elif draft is not None:
+            self._pick_label = "recovered"
+        elif snapshot.ratings.set_code is not None:
+            self._pick_label = "preparing"
         else:
-            self._pool_grp_ids = self._pool_grp_ids + (event.chosen_grp_id,)
-            self._pool_size = len(self._pool_grp_ids)
-
-        self._build_action_status = None
-        self._backtest_action_status = None
-        if state is not None:
-            self.audit_store.record_choice(
-                state=state,
-                event=event,
-                ranking_mode=self.sort_mode,
-            )
-        card = self.card_database.lookup(grp_id=event.chosen_grp_id)
-        self._last_picks.append(_format_card_name(card=card))
-        self._last_picks = self._last_picks[-5:]
-
-    def _consume_completed_event(
-        self,
-        *,
-        event: DraftCompletedEvent,
-        state: DraftState | None,
-    ) -> None:
-        self._active_account_id = self._display_account_id(account_id=event.account_id)
-        self._active_account_label = self._account_label(
-            account_id=self._active_account_id
+            self._pick_label = "—"
+        self._pool_grp_ids = self._snapshot_pool_grp_ids(snapshot=snapshot)
+        self._pool_size = snapshot.pool.total_cards
+        self._pair_label = snapshot.pool.inferred_pair or "open"
+        self._commitment_label = _commitment_label(
+            commitment=snapshot.pool.commitment,
         )
-        self._event_name = event.event_name
-        self._set_code = event.set_code
-        self._pick_label = "complete"
-        self._pool_grp_ids = event.picked_grp_ids if state is None else state.pool_grp_ids
-        self._pool_size = len(self._pool_grp_ids)
-        self._build_action_status = None
-        self._backtest_action_status = None
-        self._current_pack_event = None
-        self._current_pack = None
-        if state is not None:
-            self.audit_store.record_draft_completed(state=state, event=event)
-        self._ensure_ratings_load_started(set_code=event.set_code)
-        if self._rebuild_build_view():
-            self._view_mode = "build"
+        self.sort_mode = snapshot.recommendations.ranking_mode
+        self._data_source = self._session_data_source(snapshot=snapshot)
+        self._apply_card_data_state(snapshot=snapshot)
+        self._apply_ratings_state(snapshot=snapshot)
+        self._session_error = (
+            None if not snapshot.errors else snapshot.errors[-1].message
+        )
 
-    def _ensure_ratings_load_started(self, *, set_code: str) -> None:
-        if self.ratings_loader is None and self.ratings_progress_loader is None:
+        identity = (self._active_account_id, self._draft_id)
+        if identity != previous_identity:
+            self._adopt_changed_session_identity(snapshot=snapshot)
+
+        if snapshot.card_data.phase == DataLoadPhase.READY:
+            self._start_log_processing()
+
+        self._render_all()
+
+    def _apply_session_event(self, published: LiveSessionEvent) -> None:
+        event = published.event
+        if isinstance(
+            event,
+            (
+                QuickDraftDetectedEvent,
+                DraftStartedEvent,
+                PackOfferedEvent,
+                PickMadeEvent,
+                DraftCompletedEvent,
+            ),
+        ):
+            self._event_name = event.event_name
+            self._set_code = event.set_code
+
+        if isinstance(event, (QuickDraftDetectedEvent, DraftStartedEvent)):
+            self._reset_secondary_view_state()
+            self._view_mode = "pack"
+            self._pick_label = (
+                "preparing"
+                if isinstance(event, QuickDraftDetectedEvent)
+                else "waiting"
+            )
+        elif isinstance(event, PackOfferedEvent):
+            self._view_mode = "pack"
+            self._pick_label = f"P{event.pack_number + 1}P{event.pick_number + 1}"
+            self._build_action_status = None
+            self._backtest_action_status = None
+        elif isinstance(event, PickMadeEvent):
+            self._pick_label = (
+                f"P{event.pack_number + 1}P{event.pick_number + 1} picked"
+            )
+            self._build_action_status = None
+            self._backtest_action_status = None
+        elif isinstance(event, DraftCompletedEvent):
+            self._pick_label = "complete"
+            self._build_action_status = None
+            self._backtest_action_status = None
+            if self._rebuild_build_view():
+                self._view_mode = "build"
+
+        self._render_all()
+
+    def _apply_card_data_state(self, *, snapshot: LiveSessionSnapshot) -> None:
+        if snapshot.card_data.phase != DataLoadPhase.FAILED:
+            self._card_database_error = None
             return
 
-        if (
-            self._ratings_data_by_set.get(set_code) is not None
-            or set_code in self._loading_rating_sets
-        ):
+        error = next(
+            (
+                candidate
+                for candidate in snapshot.errors
+                if candidate.operation == OperationKind.CARD_DATA
+            ),
+            None,
+        )
+        detail = snapshot.card_data.message if error is None else error.message
+        detail = detail.removeprefix("Card metadata failed to load: ").removesuffix(
+            "."
+        )
+        self._card_database_error = (
+            f"{detail}. Run `draftgoblin refresh-data` after checking your "
+            "network connection and local card-data cache."
+        )
+
+    def _apply_ratings_state(self, *, snapshot: LiveSessionSnapshot) -> None:
+        ratings = snapshot.ratings
+        set_code = ratings.set_code
+        if set_code is None:
             return
 
+        progress = snapshot.progress
         if (
-            self.ratings_cache_checker is not None
-            and not self.ratings_cache_checker(set_code)
+            ratings.phase == DataLoadPhase.LOADING
+            and progress is not None
+            and progress.operation == OperationKind.RATINGS
         ):
-            self._missing_rating_sets.add(set_code)
+            completed = 0 if progress.completed is None else progress.completed
+            total = "?" if progress.total is None else str(progress.total)
+            self._rating_notices_by_set[set_code] = (
+                f"{progress.message} for {set_code} ({completed}/{total})"
+            )
+            return
+
+        if ratings.phase == DataLoadPhase.MISSING:
             self._rating_notices_by_set[set_code] = (
                 f"No local 17Lands data for {set_code}; neutral-prior scores are "
                 "active. Choose Download data, or press d later."
@@ -1590,7 +1451,109 @@ class DraftgoblinTuiApp(App[None]):
             self._show_missing_ratings_prompt(set_code=set_code)
             return
 
-        self._start_ratings_load(set_code=set_code)
+        if ratings.phase == DataLoadPhase.FAILED:
+            self._rating_notices_by_set[set_code] = (
+                f"{ratings.message} Press d to retry."
+            )
+            return
+
+        if ratings.phase != DataLoadPhase.READY:
+            return
+
+        if set_code in self._rating_download_requested_sets:
+            self._rating_notices_by_set[set_code] = self._ratings_ready_notice(
+                snapshot=snapshot,
+            )
+            return
+
+        self._rating_notices_by_set.pop(set_code, None)
+
+    def _ratings_ready_notice(self, *, snapshot: LiveSessionSnapshot) -> str:
+        ratings = snapshot.ratings
+        set_code = ratings.set_code or "unknown set"
+        total_cards = ratings.total_cards
+        rated_cards = ratings.rated_cards
+        if total_cards is None or rated_cards is None:
+            return f"17Lands data ready for {set_code}; future scores will use it."
+        if rated_cards == total_cards:
+            return (
+                f"17Lands data ready for {set_code}; scores recalculated. "
+                f"All {total_cards} offered cards have usable ratings."
+            )
+
+        return (
+            f"17Lands data ready for {set_code}; scores recalculated. "
+            f"{rated_cards}/{total_cards} offered cards have usable ratings; "
+            "neutral priors remain where 17Lands samples are unavailable or thin."
+        )
+
+    def _adopt_changed_session_identity(
+        self,
+        *,
+        snapshot: LiveSessionSnapshot,
+    ) -> None:
+        self._reset_secondary_view_state()
+        if self._current_pack_event is not None:
+            self._view_mode = "pack"
+            return
+        if snapshot.draft is None:
+            self._view_mode = "pack"
+            return
+        if self._rebuild_build_view():
+            self._view_mode = "build"
+
+    def _reset_secondary_view_state(self) -> None:
+        self._forced_pair = None
+        self._build_pair_label = "—"
+        self._build_text = "Build view: no picked cards yet."
+        self._build_error = None
+        self._build_action_status = None
+        self._backtest_text = "Backtest view: complete a draft, then press t."
+        self._backtest_error = None
+        self._backtest_action_status = None
+        self._last_build_signature = None
+        self._build_spell_sort_mode = "curve"
+        self._build_show_details = self.visibility_preferences.build_details
+        self._clear_build_render_state()
+
+    def _snapshot_pool_grp_ids(
+        self,
+        *,
+        snapshot: LiveSessionSnapshot,
+    ) -> tuple[int, ...]:
+        draft = snapshot.draft
+        if draft is not None:
+            state = self._persisted_draft_state(
+                account_id=draft.account_id,
+                draft_id=draft.draft_id,
+            )
+            if state is not None:
+                return state.pool_grp_ids
+
+        return tuple(
+            pool_card.card.grp_id
+            for pool_card in snapshot.pool.cards
+            for _ in range(pool_card.quantity)
+        )
+
+    def _session_data_source(self, *, snapshot: LiveSessionSnapshot) -> str:
+        source = snapshot.recommendations.source_summary
+        if source is None:
+            return "unknown"
+        if snapshot.ratings.phase == DataLoadPhase.LOADING:
+            return f"{source} (downloading ratings)"
+        if snapshot.ratings.phase == DataLoadPhase.FAILED:
+            return f"{source} (ratings unavailable)"
+        if snapshot.ratings.phase == DataLoadPhase.MISSING:
+            return f"{source} (no local 17Lands data)"
+        if (
+            snapshot.ratings.phase == DataLoadPhase.READY
+            and snapshot.ratings.total_cards
+            and snapshot.ratings.rated_cards == 0
+        ):
+            return f"{source} (17Lands cached; samples unavailable or thin)"
+
+        return source
 
     def _show_missing_ratings_prompt(
         self,
@@ -1633,468 +1596,39 @@ class DraftgoblinTuiApp(App[None]):
         self._render_all()
 
     def _start_ratings_load(self, *, set_code: str) -> None:
-        if set_code in self._loading_rating_sets:
+        if self.session.snapshot.ratings.phase == DataLoadPhase.LOADING:
             return
 
-        self._loading_rating_sets.add(set_code)
-        self._rating_progress_by_set[set_code] = SeventeenLandsDownloadProgress(
-            completed_requests=0,
-            total_requests=4,
-            message=f"Checking 17Lands data for {set_code}",
-        )
+        self._rating_download_requested_sets.add(set_code)
         self._rating_notices_by_set[set_code] = (
             f"Checking 17Lands data for {set_code}…"
         )
-        if (
-            self._current_pack_event is not None
-            and self._current_pack_event.set_code == set_code
-        ):
-            self._score_current_pack()
         self._render_all()
-        if self.is_running:
-            self._load_ratings_worker(set_code)
-
-    def _update_ratings_progress(
-        self,
-        set_code: str,
-        progress: SeventeenLandsDownloadProgress,
-    ) -> None:
-        if set_code not in self._loading_rating_sets:
-            return
-
-        if progress.message.startswith("Downloaded "):
-            self._rating_network_download_sets.add(set_code)
-        self._rating_progress_by_set[set_code] = progress
-        self._rating_notices_by_set[set_code] = (
-            f"{progress.message} for {set_code} "
-            f"({progress.completed_requests}/{progress.total_requests})"
+        self._dispatch_session_command_worker(
+            RequestRatingsDownload(set_code=set_code),
         )
-        self._render_all()
 
-    def _finish_ratings_load(
-        self,
-        set_code: str,
-        ratings_data: SeventeenLandsData | None,
-        error_message: str | None,
-    ) -> None:
-        self._loading_rating_sets.discard(set_code)
-        self._ratings_data_by_set[set_code] = ratings_data
-        if error_message is None:
-            self._rating_errors_by_set.pop(set_code, None)
-            self._missing_rating_sets.discard(set_code)
-        else:
-            self._rating_errors_by_set[set_code] = error_message
-
-        if (
-            self._current_pack_event is not None
-            and self._current_pack_event.set_code == set_code
-        ):
-            self._score_current_pack()
-
-        if self._view_mode == "build" and self._set_code == set_code:
-            self._rebuild_build_view()
-
-        if self._view_mode == "backtest" and self._set_code == set_code:
-            self._rebuild_backtest_view()
-
-        if (
-            error_message is not None
-            or ratings_data is None
-            or set_code in self._rating_network_download_sets
-        ):
-            self._rating_notices_by_set[set_code] = self._ratings_load_notice(
-                set_code=set_code,
-                ratings_data=ratings_data,
-                error_message=error_message,
-            )
-        else:
-            self._rating_notices_by_set.pop(set_code, None)
-        self._render_all()
-
-    def _ratings_load_notice(
+    def _persisted_draft_state(
         self,
         *,
-        set_code: str,
-        ratings_data: SeventeenLandsData | None,
-        error_message: str | None,
-    ) -> str:
-        if error_message is not None or ratings_data is None:
-            detail = error_message or "no ratings were returned"
-            return (
-                f"17Lands download failed for {set_code}: {detail}. "
-                "Neutral-prior scores remain; press d to retry."
-            )
-
-        if (
-            self._current_pack is None
-            or self._current_pack_event is None
-            or self._current_pack_event.set_code != set_code
-        ):
-            return f"17Lands data ready for {set_code}; future scores will use it."
-
-        total_cards = len(self._current_pack.cards)
-        rated_cards = sum(not card.no_data for card in self._current_pack.cards)
-        if rated_cards == total_cards:
-            return (
-                f"17Lands data ready for {set_code}; scores recalculated. "
-                f"All {total_cards} offered cards have usable ratings."
-            )
-
-        return (
-            f"17Lands data ready for {set_code}; scores recalculated. "
-            f"{rated_cards}/{total_cards} offered cards have usable ratings; "
-            "neutral priors remain where 17Lands samples are unavailable or thin."
-        )
-
-    def _remember_draft_state(self, *, state: DraftState) -> None:
-        self._draft_states_by_key[(state.account_id, state.draft_id)] = state
-        self._remember_account_label(state=state)
-
-    def _remember_account_label(self, *, state: DraftState) -> None:
-        self._remember_account_label_for(
-            client_id=state.account_id,
-            screen_name=state.account_screen_name,
-            replace=False,
-        )
-
-    def _remember_account_label_for(
-        self,
-        *,
-        client_id: str,
-        screen_name: str | None,
-        replace: bool,
-    ) -> None:
-        if screen_name is None:
-            return
-
-        existing_label = self._account_labels.get(client_id)
-        if replace or existing_label is None or existing_label == client_id:
-            self._account_labels[client_id] = _format_account_label(
-                client_id=client_id,
-                screen_name=screen_name,
-            )
-
-    def _known_account_profiles(self) -> tuple[AccountProfile, ...]:
-        profiles = list_account_profiles(app_dir=self.store.app_dir)
-        for profile in profiles:
-            self._remember_account_label_for(
-                client_id=profile.account_id,
-                screen_name=profile.screen_name,
-                replace=False,
-            )
-
-        return profiles
-
-    def _pending_login_account_profile(self) -> AccountProfile | None:
-        pending_screen_name = self.parser.pending_login_screen_name
-        if pending_screen_name is None:
-            return None
-
-        pending_key = _account_screen_name_match_key(
-            screen_name=pending_screen_name
-        )
-        matches = tuple(
-            profile
-            for profile in self._known_account_profiles()
-            if _account_screen_name_match_key(screen_name=profile.screen_name)
-            == pending_key
-        )
-        if len(matches) != 1:
-            return None
-
-        return matches[0]
-
-    def _recovered_draft_states(self) -> tuple[DraftState, ...]:
-        states = dict(self._draft_states_by_key)
-        states.update(
-            {
-                (state.account_id, state.draft_id): state
-                for state in list_draft_states(app_dir=self.store.app_dir)
-            }
-        )
-        values = tuple(states.values())
-        for state in values:
-            self._remember_account_label(state=state)
-
-        return values
-
-    def _available_draft_states(self) -> tuple[DraftState, ...]:
-        values = self._recovered_draft_states()
-        if not values:
-            return ()
-
-        matching_event = tuple(
-            state
-            for state in values
-            if self._event_name is not None
-            and state.event_name == self._event_name
-            and state.set_code == self._set_code
-        )
-        if len(matching_event) > 1:
-            return tuple(sorted(matching_event, key=self._draft_state_sort_key))
-
-        matching_set = tuple(
-            state
-            for state in values
-            if self._set_code is not None and state.set_code == self._set_code
-        )
-        if len(matching_set) > 1:
-            return tuple(sorted(matching_set, key=self._draft_state_sort_key))
-
-        return tuple(sorted(values, key=self._draft_state_sort_key))
-
-    def _available_account_draft_states(self) -> tuple[DraftState, ...]:
-        latest_state_by_account: dict[str, DraftState] = {}
-        for state in self._recovered_draft_states():
-            current = latest_state_by_account.get(state.account_id)
-            if current is None or _latest_draft_state_sort_key(state) > _latest_draft_state_sort_key(
-                current
-            ):
-                latest_state_by_account[state.account_id] = state
-
-        return tuple(
-            sorted(
-                latest_state_by_account.values(),
-                key=self._draft_state_sort_key,
-            )
-        )
-
-    def _draft_state_sort_key(self, state: DraftState) -> tuple[str, str, str, str]:
-        return (
-            self._account_label(account_id=state.account_id),
-            state.set_code,
-            state.event_name,
-            state.draft_id,
-        )
-
-    def _persist_pending_login_name_for_observed_course(self) -> None:
-        """Persist an unbound login name when one saved account owns its course.
-        Arena can omit authentication while still listing that account's active draft.
-        """
-
-        screen_name = self.parser.pending_login_screen_name
-        course_ids = self.parser.observed_quick_draft_course_ids
-        if screen_name is None or not course_ids:
-            return
-
-        states_by_key = dict(self._draft_states_by_key)
-        states_by_key.update(
-            {
-                (candidate.account_id, candidate.draft_id): candidate
-                for candidate in list_draft_states(app_dir=self.store.app_dir)
-            }
-        )
-        matching_account_ids = {
-            candidate.account_id
-            for candidate in states_by_key.values()
-            if candidate.course_id in course_ids or candidate.draft_id in course_ids
-        }
-        if len(matching_account_ids) != 1:
-            return
-
-        account_id = matching_account_ids.pop()
-        if account_id in self._account_labels:
-            return
-
-        self.store.set_active_account(
-            account_id=account_id,
-            screen_name=screen_name,
-        )
-        for key, candidate in tuple(self._draft_states_by_key.items()):
-            if candidate.account_id == account_id:
-                self._draft_states_by_key[key] = replace(
-                    candidate,
-                    account_screen_name=screen_name,
-                )
-
-    def _select_account_without_draft(self, *, account_id: str) -> None:
-        """Show an account with no recovered draft without retaining another account's pool.
-        This keeps the live logged-in account reachable through the account cycle.
-        """
-
-        self._active_account_id = account_id
-        self.store.set_active_account(account_id=account_id)
-        self._active_account_label = self._account_label(account_id=account_id)
-        self._event_name = None
-        self._set_code = None
-        self._draft_id = None
-        self._pick_label = "—"
-        self._pool_size = 0
-        self._pool_grp_ids = ()
-        self._last_picks = []
-        self._current_pack_event = None
-        self._current_pack = None
-        self._pair_label = "open"
-        self._commitment_label = "0% open"
-        self._view_mode = "pack"
-        self._forced_pair = None
-        self._build_pair_label = "—"
-        self._build_text = "Build view: no picked cards yet."
-        self._build_error = None
-        self._build_action_status = None
-        self._backtest_text = "Backtest view: complete a draft, then press t."
-        self._backtest_error = None
-        self._backtest_action_status = None
-        self._last_build_signature = None
-        self._build_spell_sort_mode = "curve"
-        self._build_show_details = self.visibility_preferences.build_details
-        self._clear_build_render_state()
-
-    def _select_draft_state(self, *, state: DraftState) -> None:
-        self._remember_draft_state(state=state)
-        self._active_account_id = state.account_id
-        self.store.set_active_account(
-            account_id=state.account_id,
-            screen_name=state.account_screen_name,
-        )
-        self._active_account_label = self._account_label(account_id=state.account_id)
-        self._event_name = state.event_name
-        self._set_code = state.set_code
-        self._draft_id = state.draft_id
-        self._pick_label = "complete" if state.completed else "recovered"
-        self._pool_grp_ids = state.pool_grp_ids
-        self._pool_size = len(state.pool_grp_ids)
-        self._current_pack_event = self._pending_pack_event_for_state(state=state)
-        self._current_pack = None
-        self._pair_label = "open"
-        self._commitment_label = "0% recovered"
-        self._forced_pair = None
-        self._build_action_status = None
-        self._backtest_action_status = None
-        self._last_picks = [
-            _format_card_name(card=self.card_database.lookup(grp_id=grp_id))
-            for grp_id in state.pool_grp_ids[-5:]
-        ]
-        self._ensure_ratings_load_started(set_code=state.set_code)
-        if self._current_pack_event is not None:
-            self._pick_label = (
-                f"P{self._current_pack_event.pack_number + 1}"
-                f"P{self._current_pack_event.pick_number + 1}"
-            )
-            self._view_mode = "pack"
-            self._score_current_pack()
-            return
-
-        if self._rebuild_build_view():
-            self._view_mode = "build"
-
-    def _pending_pack_event_for_state(
-        self,
-        *,
-        state: DraftState,
-    ) -> PackOfferedEvent | None:
-        """Rebuild the latest unchosen offer from persisted draft history.
-        Account cycling can then restore the in-progress recommendation view.
-        """
-
-        if state.completed:
-            return None
-
-        pending_picks = tuple(
-            pick
-            for pick in state.picks
-            if pick.offered_grp_ids and pick.chosen_grp_id is None
-        )
-        if not pending_picks:
-            return None
-
-        pending_pick = max(pending_picks, key=lambda pick: pick.coordinate)
-        offered_grp_ids = pending_pick.offered_grp_ids
-        if offered_grp_ids is None:
-            return None
-
-        pool_grp_ids = (
-            state.pool_grp_ids
-            if pending_pick.pool_before_pick is None
-            else pending_pick.pool_before_pick
-        )
-        return PackOfferedEvent(
-            event_name=state.event_name,
-            set_code=state.set_code,
-            pack_number=pending_pick.pack_number,
-            pick_number=pending_pick.pick_number,
-            offered_grp_ids=offered_grp_ids,
-            pool_grp_ids=pool_grp_ids,
-            account_id=state.account_id,
-        )
-
-    def _score_current_pack(self) -> None:
-        event = self._current_pack_event
-        if event is None:
-            self._current_pack = None
-            self._data_source = "unknown"
-            return
-
-        ratings_data = self._ratings_data_for_scoring(set_code=event.set_code)
-        engine = PickEngine(
-            ratings_data=ratings_data,
-            splash_enabled=self.visibility_preferences.splash_enabled,
-        )
-        self._current_pack = engine.score_pack(
-            offered_grp_ids=event.offered_grp_ids,
-            card_database=self.card_database,
-            pool_grp_ids=event.pool_grp_ids,
-            pick_index=_draft_pick_index(event=event),
-        )
-        commitment = self._current_pack.commitment
-        self._pair_label = commitment.inferred_pair or "open"
-        self._commitment_label = (
-            f"{int(round(commitment.level * 100))}% {commitment.phase}"
-        )
-        self._pool_size = commitment.pool_size
-        self._data_source = self._data_source_label(set_code=event.set_code)
-        state = self._active_draft_state()
-        if state is not None:
-            self.audit_store.record_decision(
-                state=state,
-                event=event,
-                scored_pack=self._current_pack,
-                config=engine.config,
-                ratings_data=ratings_data,
-            )
-
-    def _active_draft_state(self) -> DraftState | None:
-        """Return the persisted state backing the currently displayed draft.
-        Audit logging skips unresolved account or course contexts.
-        """
-
-        if self._active_account_id is None or self._draft_id is None:
-            return None
-
-        return self._draft_states_by_key.get(
-            (self._active_account_id, self._draft_id)
+        account_id: str,
+        draft_id: str,
+    ) -> DraftState | None:
+        return next(
+            (
+                state
+                for state in list_draft_states(app_dir=self._app_dir)
+                if state.account_id == account_id and state.draft_id == draft_id
+            ),
+            None,
         )
 
     def _ratings_data_for_scoring(self, *, set_code: str) -> SeventeenLandsData | None:
-        ratings_data = self._ratings_data_by_set.get(set_code)
+        ratings_data = self.session.ratings_data(set_code=set_code)
         if ratings_data is None:
             return None
 
         return replace(ratings_data, pair_card_ratings_loader=None)
-
-    def _data_source_label(self, *, set_code: str) -> str:
-        if self._current_pack is None:
-            return "unknown"
-
-        label = self._current_pack.source_summary
-        if set_code in self._loading_rating_sets:
-            return f"{label} (downloading ratings)"
-
-        error_message = self._rating_errors_by_set.get(set_code)
-        if error_message is not None:
-            return f"{label} (ratings unavailable)"
-
-        if set_code in self._missing_rating_sets:
-            return f"{label} (no local 17Lands data)"
-
-        if (
-            self._ratings_data_by_set.get(set_code) is not None
-            and self._current_pack.cards
-            and all(card.no_data for card in self._current_pack.cards)
-        ):
-            return f"{label} (17Lands cached; samples unavailable or thin)"
-
-        return label
 
     def _render_all(self) -> None:
         if not self.is_mounted:
@@ -2124,17 +1658,22 @@ class DraftgoblinTuiApp(App[None]):
             return
 
         label.update(notice)
+        snapshot = self.session.snapshot
         downloading = (
-            set_code is not None and set_code in self._loading_rating_sets
+            set_code is not None
+            and snapshot.ratings.set_code == set_code
+            and snapshot.ratings.phase == DataLoadPhase.LOADING
         )
         progress_bar.display = downloading
         if not downloading or set_code is None:
             return
 
-        progress = self._rating_progress_by_set[set_code]
+        progress = snapshot.progress
+        if progress is None or progress.operation != OperationKind.RATINGS:
+            return
         progress_bar.update(
-            total=progress.total_requests,
-            progress=progress.completed_requests,
+            total=1 if progress.total is None else progress.total,
+            progress=0 if progress.completed is None else progress.completed,
         )
 
     def _update_responsive_visibility(self) -> None:
@@ -2252,15 +1791,16 @@ class DraftgoblinTuiApp(App[None]):
 
         set_label = format_set_label(set_code=set_code)
         prefix = f"17Lands reliability for {set_label} Quick Draft:"
-        if set_code in self._loading_rating_sets:
+        ratings = self.session.snapshot.ratings
+        if ratings.phase == DataLoadPhase.LOADING:
             readiness.update(f"{prefix} Checking…")
             return
 
-        if set_code in self._rating_errors_by_set:
+        if ratings.phase == DataLoadPhase.FAILED:
             readiness.update(f"{prefix} Unavailable")
             return
 
-        ratings_data = self._ratings_data_by_set.get(set_code)
+        ratings_data = self.session.ratings_data(set_code=set_code)
         if ratings_data is not None:
             reliability = ratings_data.set_reliability
             readiness.update(
@@ -2268,7 +1808,7 @@ class DraftgoblinTuiApp(App[None]):
             )
             return
 
-        if set_code in self._missing_rating_sets:
+        if ratings.phase == DataLoadPhase.MISSING:
             readiness.update(f"{prefix} Not checked — press d to download data")
             return
 
@@ -2839,6 +2379,8 @@ class DraftgoblinTuiApp(App[None]):
             segments.insert(0, f"Backtest: {self._backtest_error}")
         if self._last_error is not None:
             segments.insert(0, f"Error: {self._last_error}")
+        if self._session_error is not None:
+            segments.insert(0, f"Error: {self._session_error}")
         if self._preferences_save_warning is not None:
             segments.insert(0, self._preferences_save_warning)
         if self._preferences_load_warning is not None:
@@ -2942,20 +2484,23 @@ class DraftgoblinTuiApp(App[None]):
         return True
 
     def _current_backtest_state(self) -> DraftState | None:
+        states = list_draft_states(app_dir=self._app_dir)
         if self._active_account_id is not None and self._draft_id is not None:
-            key = (self._active_account_id, self._draft_id)
-            cached = self._draft_states_by_key.get(key)
-            if cached is not None:
-                return cached
-
-            for state in self._available_draft_states():
-                if (state.account_id, state.draft_id) == key:
-                    self._remember_draft_state(state=state)
-                    return state
+            state = next(
+                (
+                    candidate
+                    for candidate in states
+                    if candidate.account_id == self._active_account_id
+                    and candidate.draft_id == self._draft_id
+                ),
+                None,
+            )
+            if state is not None:
+                return state
 
         matching_states = tuple(
             state
-            for state in self._available_draft_states()
+            for state in states
             if self._event_name is not None
             and state.event_name == self._event_name
             and state.set_code == self._set_code
@@ -3076,21 +2621,29 @@ class DraftgoblinTuiApp(App[None]):
         index = COLOR_PAIRS.index(current_pair)
         return COLOR_PAIRS[(index + 1) % len(COLOR_PAIRS)]
 
-    def _display_account_id(self, *, account_id: str | None) -> str | None:
-        if (
-            account_id is None
-            and self.parser.pending_login_screen_name is not None
-        ):
-            return None
-
-        return account_id or self._active_account_id
-
-    def _account_label(self, *, account_id: str | None) -> str:
+    def _account_label(
+        self,
+        *,
+        account_id: str | None,
+        snapshot: LiveSessionSnapshot | None = None,
+    ) -> str:
         client_id = account_id or self._active_account_id
         if client_id is None:
             return "unknown"
 
-        return self._account_labels.get(client_id, client_id)
+        current = self.session.snapshot if snapshot is None else snapshot
+        identity = next(
+            (
+                account
+                for account in current.accounts
+                if account.account_id == client_id
+            ),
+            None,
+        )
+        if identity is None or identity.screen_name is None:
+            return client_id
+
+        return identity.screen_name
 
     def _record_error(self, message: str) -> None:
         self._last_error = message
@@ -4016,51 +3569,19 @@ def _row_cells(
     return tuple(values[column_key] for column_key in column_keys)
 
 
-def _draft_pick_index(*, event: PackOfferedEvent) -> int:
-    return (event.pack_number * EXPECTED_PICKS_PER_PACK) + event.pick_number + 1
-
-
 def _latest_draft_state_sort_key(state: DraftState) -> tuple[str, str, str]:
     return (state.updated_at, state.account_id, state.draft_id)
 
 
-def _is_missing_account_error(*, event: DraftEvent, error: DraftPoolError) -> bool:
-    return (
-        str(error) == "Draft event is missing an MTGA account id."
-        and _event_is_missing_account(event=event)
-    )
+def _commitment_label(*, commitment: float) -> str:
+    if commitment <= 0.0:
+        phase = "open"
+    elif commitment >= 1.0:
+        phase = "locked"
+    else:
+        phase = "building"
 
-
-def _event_is_missing_account(*, event: DraftEvent) -> bool:
-    return (
-        isinstance(
-            event,
-            (
-                QuickDraftDetectedEvent,
-                DraftStartedEvent,
-                PackOfferedEvent,
-                PickMadeEvent,
-                DraftCompletedEvent,
-            ),
-        )
-        and event.account_id is None
-    )
-
-
-def _format_account_label(*, client_id: str, screen_name: str | None) -> str:
-    if screen_name is None:
-        return client_id
-
-    return screen_name
-
-
-def _account_screen_name_match_key(*, screen_name: str) -> str:
-    normalized = screen_name.strip()
-    name, separator, discriminator = normalized.rpartition("#")
-    if separator and name and discriminator.isdigit():
-        normalized = name
-
-    return normalized.casefold()
+    return f"{int(round(commitment * 100))}% {phase}"
 
 
 def _format_card_name(*, card: CardInfo) -> str:

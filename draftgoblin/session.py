@@ -386,6 +386,8 @@ class LiveSessionSnapshot:
     ratings: RatingsState = field(default_factory=RatingsState)
     recommendations: RecommendationState = field(default_factory=RecommendationState)
     pool: PoolState = field(default_factory=PoolState)
+    current_pack_event: PackOfferedEvent | None = None
+    current_scored_pack: ScoredPack | None = None
     progress: ProgressState | None = None
     errors: tuple[SessionError, ...] = ()
     build: BuildResult | None = None
@@ -571,6 +573,7 @@ class LiveSession:
         self._active_set_code_value: str | None = None
         self._current_pack_event: PackOfferedEvent | None = None
         self._current_scored_pack: ScoredPack | None = None
+        self._transient_pool_grp_ids: tuple[int, ...] = ()
         self._last_build_request: RequestBuild | None = None
         self._last_backtest_request: RequestBacktest | None = None
         self._build_request_generation = 0
@@ -615,6 +618,44 @@ class LiveSession:
 
         return self._snapshot
 
+    @property
+    def card_database(self) -> CardDatabase | None:
+        """Return the card database currently owned by the live session.
+        Frontends may use it for presentation-only metadata lookups.
+        """
+
+        return self._card_database
+
+    @property
+    def current_pack_event(self) -> PackOfferedEvent | None:
+        """Return the active immutable pack event, when one is available.
+        Presentation adapters may use its coordinates and offered card ids.
+        """
+
+        return self.snapshot.current_pack_event
+
+    @property
+    def current_scored_pack(self) -> ScoredPack | None:
+        """Return the active immutable scored pack, when one is available.
+        Presentation adapters may retain their existing domain renderers.
+        """
+
+        return self.snapshot.current_scored_pack
+
+    def ratings_data(self, *, set_code: str) -> SeventeenLandsData | None:
+        """Return loaded ratings for presentation-adjacent legacy services.
+        The live session remains the only owner of ratings loading and caching.
+        """
+
+        return self._ratings_data_by_set.get(set_code.upper())
+
+    def known_accounts(self) -> tuple[AccountIdentity, ...]:
+        """Return known accounts from current profiles and persisted drafts.
+        Adapters can refresh choices added after session construction.
+        """
+
+        return self._known_accounts()
+
     def poll_once(self) -> LiveSessionSnapshot:
         """Process one follower polling cycle and return the latest snapshot.
         Frontends decide whether this call runs on a worker or event-loop callback.
@@ -626,6 +667,7 @@ class LiveSession:
         self,
         *,
         include_previous: bool = True,
+        include_pre_draft_detection: bool = True,
     ) -> LiveSessionSnapshot:
         """Process startup recovery logs in follower-defined chronological order.
         The follower advances its offset so later polling does not replay current lines.
@@ -634,10 +676,16 @@ class LiveSession:
         return self.process_lines(
             lines=self.follower.scan_startup_files(
                 include_previous=include_previous,
-            )
+            ),
+            include_pre_draft_detection=include_pre_draft_detection,
         )
 
-    def process_lines(self, *, lines: Iterable[str]) -> LiveSessionSnapshot:
+    def process_lines(
+        self,
+        *,
+        lines: Iterable[str],
+        include_pre_draft_detection: bool = True,
+    ) -> LiveSessionSnapshot:
         """Consume complete Arena log lines and publish each resulting state change.
         Parser and account context remain incremental across repeated batches.
         """
@@ -646,6 +694,12 @@ class LiveSession:
             events = tuple(self.parser.parse_lines(lines=(line,)))
             self._discard_previous_login_account_context()
             for parsed_event in events:
+                if (
+                    isinstance(parsed_event, QuickDraftDetectedEvent)
+                    and not include_pre_draft_detection
+                ):
+                    continue
+
                 event = self._event_with_log_account(event=parsed_event)
                 state = self._consume_store_event(event=event)
                 if state is not None:
@@ -1795,9 +1849,10 @@ class LiveSession:
             ),
         )
 
-    def _restore_recommendations(self, *, state: DraftState) -> None:
+    def _select_recovered_state(self, *, state: DraftState) -> None:
         self._current_pack_event = _pending_pack_event(state=state)
         self._current_scored_pack = None
+        self._select_state(state=state, recovered=True)
         self._ensure_ratings_loaded(set_code=state.set_code)
         self._score_current_pack()
 
@@ -1834,15 +1889,13 @@ class LiveSession:
         if state is None:
             self._select_account_without_draft(account_id=profile.account_id)
         else:
-            self._select_state(state=state, recovered=True)
-            self._restore_recommendations(state=state)
+            self._select_recovered_state(state=state)
 
     def _consume_store_event(self, *, event: DraftEvent) -> DraftState | None:
         try:
             return self.store.consume(event=event)
         except DraftPoolError as error:
             if _is_missing_account_error(event=event, error=error):
-                self._publish_missing_account_status()
                 return None
 
             raise
@@ -1862,15 +1915,8 @@ class LiveSession:
             self._consume_detected_event(event=event)
             return
 
-        if state is None and isinstance(event, PackOfferedEvent):
-            self._current_pack_event = event
-            self._current_scored_pack = None
-            self._set_active_set_code(set_code=event.set_code)
-            self._ensure_ratings_loaded(set_code=event.set_code)
-            self._score_current_pack()
-            return
-
         if state is None:
+            self._consume_accountless_event(event=event)
             return
 
         if isinstance(event, DraftStartedEvent):
@@ -1930,6 +1976,106 @@ class LiveSession:
             )
             self._ensure_ratings_loaded(set_code=event.set_code)
 
+    def _consume_accountless_event(self, *, event: DraftEvent) -> None:
+        if isinstance(event, DraftStartedEvent):
+            self._current_pack_event = None
+            self._current_scored_pack = None
+            self._transient_pool_grp_ids = ()
+            self._set_active_set_code(set_code=event.set_code)
+            self._publish_accountless_state(
+                event=event,
+                phase=ApplicationPhase.WAITING_FOR_DRAFT,
+                message="Draft detected; waiting for an Arena account ID.",
+                keep_recommendations=False,
+            )
+            self._ensure_ratings_loaded(set_code=event.set_code)
+            return
+
+        if isinstance(event, PackOfferedEvent):
+            self._current_pack_event = event
+            self._current_scored_pack = None
+            self._transient_pool_grp_ids = event.pool_grp_ids
+            self._set_active_set_code(set_code=event.set_code)
+            self._publish_accountless_state(
+                event=event,
+                phase=ApplicationPhase.DRAFTING,
+                message=(
+                    f"Pack {event.pack_number + 1}, pick "
+                    f"{event.pick_number + 1}; waiting for an account ID."
+                ),
+                keep_recommendations=False,
+            )
+            self._ensure_ratings_loaded(set_code=event.set_code)
+            self._score_current_pack()
+            return
+
+        if isinstance(event, PickMadeEvent):
+            self._transient_pool_grp_ids += (event.chosen_grp_id,)
+            self._publish_accountless_state(
+                event=event,
+                phase=ApplicationPhase.DRAFTING,
+                message=(
+                    f"Pack {event.pack_number + 1}, pick "
+                    f"{event.pick_number + 1} recorded without an account ID."
+                ),
+                keep_recommendations=True,
+            )
+            return
+
+        if isinstance(event, DraftCompletedEvent):
+            self._current_pack_event = None
+            self._current_scored_pack = None
+            self._transient_pool_grp_ids = event.picked_grp_ids
+            self._set_active_set_code(set_code=event.set_code)
+            self._publish_accountless_state(
+                event=event,
+                phase=ApplicationPhase.DRAFT_COMPLETE,
+                message="Draft complete without an account ID.",
+                keep_recommendations=False,
+            )
+            self._ensure_ratings_loaded(set_code=event.set_code)
+
+    def _publish_accountless_state(
+        self,
+        *,
+        event: DraftEvent,
+        phase: ApplicationPhase,
+        message: str,
+        keep_recommendations: bool,
+    ) -> None:
+        set_code = event.set_code.upper()
+        ratings = self._ratings_state_by_set.get(
+            set_code,
+            replace(self._initial_ratings_state(), set_code=set_code),
+        )
+        with self._state_lock:
+            errors = self._retire_derived_operations()
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    status=ApplicationStatus(phase=phase, message=message),
+                    accounts=self._known_accounts(),
+                    active_account=None,
+                    draft=None,
+                    ratings=ratings,
+                    recommendations=(
+                        self.snapshot.recommendations
+                        if keep_recommendations
+                        else RecommendationState(
+                            ranking_mode=self._ranking_mode,
+                            splash_enabled=self._splash_enabled,
+                        )
+                    ),
+                    pool=self._pool_state(
+                        pool_grp_ids=self._transient_pool_grp_ids,
+                    ),
+                    progress=None,
+                    errors=errors,
+                    build=None,
+                    backtest=None,
+                )
+            )
+
     def _consume_account_event(self, *, event: AccountEvent) -> None:
         self._log_account_id = event.client_id
         if event.screen_name is not None:
@@ -1951,12 +2097,12 @@ class LiveSession:
         if state is None:
             self._select_account_without_draft(account_id=event.client_id)
         else:
-            self._select_state(state=state, recovered=True)
-            self._restore_recommendations(state=state)
+            self._select_recovered_state(state=state)
 
     def _consume_detected_event(self, *, event: QuickDraftDetectedEvent) -> None:
         self._current_pack_event = None
         self._current_scored_pack = None
+        self._transient_pool_grp_ids = ()
         self._set_active_set_code(set_code=event.set_code)
         account_id = event.account_id or self._log_account_id
         active_account = self._identity_for(account_id=account_id)
@@ -1997,8 +2143,7 @@ class LiveSession:
         if state is None:
             self._select_account_without_draft(account_id=account_id)
         else:
-            self._select_state(state=state, recovered=True)
-            self._restore_recommendations(state=state)
+            self._select_recovered_state(state=state)
 
     def _select_account_without_draft(self, *, account_id: str) -> None:
         identity = self._identity_for(account_id=account_id)
@@ -2011,6 +2156,7 @@ class LiveSession:
         )
         self._current_pack_event = None
         self._current_scored_pack = None
+        self._transient_pool_grp_ids = ()
         self._set_active_set_code(set_code=None)
         with self._state_lock:
             errors = self._retire_derived_operations()
@@ -2046,6 +2192,7 @@ class LiveSession:
         message: str | None = None,
     ) -> None:
         self._remember_state(state=state)
+        self._transient_pool_grp_ids = state.pool_grp_ids
         self._set_active_set_code(set_code=state.set_code)
         self.store.set_active_account(
             account_id=state.account_id,
@@ -2096,32 +2243,6 @@ class LiveSession:
                     pool=self._pool_state(
                         pool_grp_ids=state.pool_grp_ids,
                     ),
-                    progress=None,
-                    errors=errors,
-                    build=None,
-                    backtest=None,
-                )
-            )
-
-    def _publish_missing_account_status(self) -> None:
-        self._set_active_set_code(set_code=None)
-        with self._state_lock:
-            errors = self._retire_derived_operations()
-            self._publish(
-                snapshot=replace(
-                    self.snapshot,
-                    status=ApplicationStatus(
-                        phase=ApplicationPhase.WAITING_FOR_DRAFT,
-                        message="Draft detected; waiting for an Arena account ID.",
-                    ),
-                    accounts=self._known_accounts(),
-                    active_account=None,
-                    draft=None,
-                    recommendations=RecommendationState(
-                        ranking_mode=self._ranking_mode,
-                        splash_enabled=self._splash_enabled,
-                    ),
-                    pool=PoolState(),
                     progress=None,
                     errors=errors,
                     build=None,
@@ -2272,6 +2393,11 @@ class LiveSession:
 
     def _publish(self, snapshot: LiveSessionSnapshot) -> None:
         with self._state_lock:
+            snapshot = replace(
+                snapshot,
+                current_pack_event=self._current_pack_event,
+                current_scored_pack=self._current_scored_pack,
+            )
             if snapshot == self._snapshot:
                 return
 
