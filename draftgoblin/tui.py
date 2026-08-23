@@ -39,18 +39,10 @@ try:  # pragma: no cover - import availability depends on optional terminal extr
 except Exception:  # pragma: no cover - graceful fallback when unavailable.
     TgpImage = None
 
-from draftgoblin.backtest import format_backtest_report, generate_backtest_report
 from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.cardimages import CardImageService, card_image_cache_dir
 from draftgoblin.config import COLOR_PAIRS, POLL_INTERVAL_SECONDS
-from draftgoblin.deckbuilder import (
-    BuildPool,
-    DeckBuilderError,
-    ManaBase,
-    PairSelection,
-    SpellSelection,
-    build_deck_from_pool,
-)
+from draftgoblin.deckbuilder import BuildPool, ManaBase, PairSelection, SpellSelection
 from draftgoblin.events import (
     AccountEvent,
     DraftCompletedEvent,
@@ -60,10 +52,6 @@ from draftgoblin.events import (
     QuickDraftDetectedEvent,
 )
 from draftgoblin.pickengine import ScoredCard, ScoredPack
-from draftgoblin.pool import (
-    DraftState,
-    list_draft_states,
-)
 from draftgoblin.preferences import (
     TuiVisibilityPreferences,
     load_tui_preferences,
@@ -78,6 +66,10 @@ from draftgoblin.ranking import (
 )
 from draftgoblin.session import (
     ApplicationPhase,
+    BacktestPickResult,
+    BacktestResult,
+    BuildResult,
+    CardView,
     ChangeRanking,
     ChangeSplashPreference,
     ChooseAccount,
@@ -87,7 +79,11 @@ from draftgoblin.session import (
     LiveSessionEvent,
     LiveSessionSnapshot,
     OperationKind,
+    PoolState,
+    RequestBacktest,
+    RequestBuild,
     RequestRatingsDownload,
+    SessionError,
 )
 from draftgoblin.seventeen import (
     SEVENTEEN_LANDS_ATTRIBUTION,
@@ -109,8 +105,6 @@ RatingsProgressLoaderFactory: TypeAlias = Callable[
     RatingsProgressLoader,
 ]
 RatingsCacheChecker: TypeAlias = Callable[[str], bool]
-CardImageFetcher: TypeAlias = Callable[[str, Path], Path]
-BuildSignature: TypeAlias = tuple[str, tuple[int, ...], str | None]
 TuiCardQuantityKey: TypeAlias = tuple[str, str]
 TuiCardQuantityGroup: TypeAlias = tuple[ScoredCard, int]
 
@@ -610,7 +604,7 @@ class DraftgoblinTuiApp(App[None]):
         poll_enabled: bool = True,
         image_preview_enabled: bool | None = None,
         mana_icons_enabled: bool = False,
-        card_image_fetcher: CardImageFetcher | None = None,
+        card_image_service: CardImageService | None = None,
         visibility_preferences: TuiVisibilityPreferences | None = None,
         splash_enabled: bool | None = None,
     ) -> None:
@@ -648,7 +642,6 @@ class DraftgoblinTuiApp(App[None]):
                 splash_enabled=splash_enabled,
             )
         self._preferences_save_warning: str | None = None
-        self._app_dir = app_dir
         self._card_database_error: str | None = None
         self._log_processing_started = False
         self._ingestion_lock = Lock()
@@ -673,11 +666,9 @@ class DraftgoblinTuiApp(App[None]):
         self.once = once
         self.poll_enabled = poll_enabled
         self.poll_interval = poll_interval
-        self.card_image_fetcher = card_image_fetcher
-        self._card_image_service = CardImageService(
+        self._card_image_service = card_image_service or CardImageService(
             cache_dir=card_image_cache_dir(app_dir=app_dir),
         )
-        self._card_image_cache_dir = self._card_image_service.cache_dir
         self._card_image_preview_enabled = (
             _card_image_preview_enabled(env=os.environ)
             if image_preview_enabled is None
@@ -711,18 +702,17 @@ class DraftgoblinTuiApp(App[None]):
         self._build_text = "Build view: no picked cards yet."
         self._build_error: str | None = None
         self._build_action_status: str | None = None
-        self._backtest_text = "Backtest view: complete a draft, then press t."
-        self._backtest_error: str | None = None
-        self._backtest_action_status: str | None = None
-        self._last_build_signature: BuildSignature | None = None
+        self._pending_build_success_message: str | None = None
         self._build_spell_sort_mode = "curve"
         self._build_show_details = self.visibility_preferences.build_details
         self._build_focus_cards: tuple[TuiCardQuantityGroup, ...] = ()
         self._build_focused_card_index = 0
-        self._build_render_pool: BuildPool | None = None
-        self._build_render_selection: PairSelection | None = None
-        self._build_render_spell_selection: SpellSelection | None = None
-        self._build_render_mana_base: ManaBase | None = None
+        self._build_result: BuildResult | None = None
+        self._backtest_text = "Backtest view: complete a draft, then press t."
+        self._backtest_error: str | None = None
+        self._backtest_action_status: str | None = None
+        self._pending_backtest_success_message: str | None = None
+        self._open_backtest_when_ready = False
         self._current_pack_event: PackOfferedEvent | None = None
         self._current_pack: ScoredPack | None = None
         self._rating_prompted_sets: set[str] = set()
@@ -896,6 +886,10 @@ class DraftgoblinTuiApp(App[None]):
         if preferences is None:
             return
 
+        splash_changed = (
+            self.visibility_preferences.splash_enabled != preferences.splash_enabled
+        )
+        had_build_result = self._build_result is not None
         self.visibility_preferences = preferences
         self.show_secondary_columns = preferences.secondary_columns
         self._build_show_details = preferences.build_details
@@ -903,8 +897,10 @@ class DraftgoblinTuiApp(App[None]):
         self.session.dispatch(
             command=ChangeSplashPreference(enabled=preferences.splash_enabled),
         )
-        if self._build_render_pool is not None:
-            self._rebuild_build_view()
+        if had_build_result and splash_changed:
+            self._request_build_view(success_message=None)
+        elif self._build_result is not None:
+            self._refresh_build_text_from_result()
         self._render_all()
 
     def _save_visibility_preferences(self) -> None:
@@ -920,7 +916,7 @@ class DraftgoblinTuiApp(App[None]):
 
         self.mana_icons_enabled = not self.mana_icons_enabled
         if self._view_mode == "build":
-            self._rebuild_build_view()
+            self._refresh_build_text_from_result()
 
         self._render_all()
 
@@ -958,7 +954,7 @@ class DraftgoblinTuiApp(App[None]):
             self._build_spell_sort_mode = BUILD_SPELL_SORT_MODES[
                 (index + 1) % len(BUILD_SPELL_SORT_MODES)
             ]
-            self._rebuild_build_view()
+            self._refresh_build_text_from_result()
         else:
             index = SORT_MODES.index(self.sort_mode)
             self.sort_mode = SORT_MODES[(index + 1) % len(SORT_MODES)]
@@ -966,55 +962,46 @@ class DraftgoblinTuiApp(App[None]):
                 command=ChangeRanking(ranking_mode=self.sort_mode),
             )
             if self._view_mode == "backtest":
-                self._rebuild_backtest_view()
-                self._backtest_action_status = (
-                    f"rebuilt {ranking_label(ranking_mode=self.sort_mode)} "
-                    "recommendation comparison"
+                self._request_backtest_view(
+                    success_message=(
+                        f"rebuilt {ranking_label(ranking_mode=self.sort_mode)} "
+                        "recommendation comparison"
+                    ),
+                    open_when_ready=False,
                 )
 
         self._render_all()
 
     def action_open_build_view(self) -> None:
-        """Build the current pool and show the build sheet.
-        The draft may still be in progress when this is invoked.
-        """
+        """Request a build for the current pool and show the shared result."""
 
-        pool = self._current_build_pool()
-        if pool is not None:
-            signature = self._build_signature(pool=pool)
-            if (
-                self._view_mode == "build"
-                and self._build_error is None
-                and self._last_build_signature == signature
-            ):
-                self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
-                self._last_error = None
-                self._build_action_status = "no build needed — current pool already shown"
-                self._render_all()
-                return
+        current_build = self.session.snapshot.build
+        if (
+            self._view_mode == "build"
+            and self._build_error is None
+            and current_build is not None
+            and current_build.pair_override == self._forced_pair
+        ):
+            self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
+            self._last_error = None
+            self._build_action_status = "no build needed — current pool already shown"
+            self._render_all()
+            return
 
-        if self._rebuild_build_view():
-            self._view_mode = "build"
-        self._record_build_action_result(success_message="rebuilt current pool")
+        self._request_build_view(success_message="rebuilt current pool")
         self._render_all()
 
     def action_open_backtest_report(self) -> None:
-        """Run a saved-pick dry run and show recommendation matches.
-        The report uses persisted offered-card and pre-pick pool history.
-        """
+        """Request the shared persisted-pick recommendation comparison."""
 
         self._build_action_status = None
-        if self._rebuild_backtest_view():
-            self._view_mode = "backtest"
-            self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
-            self._last_error = None
-            self._backtest_action_status = (
+        self._request_backtest_view(
+            success_message=(
                 f"rebuilt {ranking_label(ranking_mode=self.sort_mode)} "
                 "recommendation comparison"
-            )
-        else:
-            self._backtest_action_status = f"cannot backtest — {self._backtest_error}"
-
+            ),
+            open_when_ready=True,
+        )
         self._render_all()
 
     def action_navigate_previous_card(self) -> None:
@@ -1118,14 +1105,10 @@ class DraftgoblinTuiApp(App[None]):
             self.session.dispatch(command=command)
 
     def action_rebuild_with_pair_override(self) -> None:
-        """Force the next color pair and refresh the build view.
-        Repeated presses cycle through all configured color pairs.
-        """
+        """Request a shared build after cycling the TUI pair override."""
 
         self._forced_pair = self._next_forced_pair()
-        if self._rebuild_build_view():
-            self._view_mode = "build"
-        self._record_build_action_result(
+        self._request_build_view(
             success_message=f"rebuilt with forced pair {self._forced_pair}",
         )
         self._render_all()
@@ -1346,14 +1329,19 @@ class DraftgoblinTuiApp(App[None]):
         self._data_source = self._session_data_source(snapshot=snapshot)
         self._apply_card_data_state(snapshot=snapshot)
         self._apply_ratings_state(snapshot=snapshot)
+        general_errors = tuple(
+            error
+            for error in snapshot.errors
+            if error.operation not in {OperationKind.BUILD, OperationKind.BACKTEST}
+        )
         self._session_error = (
-            None if not snapshot.errors else snapshot.errors[-1].message
+            None if not general_errors else general_errors[-1].message
         )
 
         identity = (self._active_account_id, self._draft_id)
         if identity != previous_identity:
             self._adopt_changed_session_identity(snapshot=snapshot)
-
+        self._apply_secondary_results(snapshot=snapshot)
         if snapshot.card_data.phase == DataLoadPhase.READY:
             self._start_log_processing()
 
@@ -1387,20 +1375,60 @@ class DraftgoblinTuiApp(App[None]):
             self._pick_label = f"P{event.pack_number + 1}P{event.pick_number + 1}"
             self._build_action_status = None
             self._backtest_action_status = None
+            self._build_result = None
+            self._backtest_error = None
+            self._clear_build_render_state()
         elif isinstance(event, PickMadeEvent):
             self._pick_label = (
                 f"P{event.pack_number + 1}P{event.pick_number + 1} picked"
             )
             self._build_action_status = None
             self._backtest_action_status = None
+            self._build_result = None
+            self._backtest_error = None
+            self._clear_build_render_state()
         elif isinstance(event, DraftCompletedEvent):
             self._pick_label = "complete"
             self._build_action_status = None
             self._backtest_action_status = None
-            if self._rebuild_build_view():
-                self._view_mode = "build"
+            self._request_build_view(success_message=None)
 
         self._render_all()
+
+    def _apply_secondary_results(self, *, snapshot: LiveSessionSnapshot) -> None:
+        progress = snapshot.progress
+        build_in_progress = (
+            progress is not None and progress.operation == OperationKind.BUILD
+        )
+        backtest_in_progress = (
+            progress is not None and progress.operation == OperationKind.BACKTEST
+        )
+
+        if not build_in_progress:
+            build_error = _operation_error(
+                snapshot=snapshot,
+                operation=OperationKind.BUILD,
+            )
+            if build_error is not None:
+                message = build_error.message.removeprefix("Deck build failed: ")
+                self._adopt_build_error(snapshot=snapshot, message=message)
+            elif snapshot.build is not None:
+                self._adopt_build_result(result=snapshot.build)
+
+        if not backtest_in_progress:
+            backtest_error = _operation_error(
+                snapshot=snapshot,
+                operation=OperationKind.BACKTEST,
+            )
+            if backtest_error is not None:
+                message = backtest_error.message.removeprefix("Backtest failed: ")
+                self._backtest_error = message
+                self._backtest_text = f"Backtest view unavailable: {message}"
+                self._backtest_action_status = f"cannot backtest — {message}"
+                self._pending_backtest_success_message = None
+                self._open_backtest_when_ready = False
+            elif snapshot.backtest is not None:
+                self._adopt_backtest_result(result=snapshot.backtest)
 
     def _apply_card_data_state(self, *, snapshot: LiveSessionSnapshot) -> None:
         if snapshot.card_data.phase != DataLoadPhase.FAILED:
@@ -1496,11 +1524,11 @@ class DraftgoblinTuiApp(App[None]):
         if self._current_pack_event is not None:
             self._view_mode = "pack"
             return
-        if snapshot.draft is None:
+        if snapshot.draft is None or snapshot.pool.total_cards == 0:
             self._view_mode = "pack"
             return
-        if self._rebuild_build_view():
-            self._view_mode = "build"
+
+        self._request_build_view(success_message=None)
 
     def _reset_secondary_view_state(self) -> None:
         self._forced_pair = None
@@ -1508,12 +1536,15 @@ class DraftgoblinTuiApp(App[None]):
         self._build_text = "Build view: no picked cards yet."
         self._build_error = None
         self._build_action_status = None
+        self._pending_build_success_message = None
+        self._build_spell_sort_mode = "curve"
+        self._build_show_details = self.visibility_preferences.build_details
+        self._build_result = None
         self._backtest_text = "Backtest view: complete a draft, then press t."
         self._backtest_error = None
         self._backtest_action_status = None
-        self._last_build_signature = None
-        self._build_spell_sort_mode = "curve"
-        self._build_show_details = self.visibility_preferences.build_details
+        self._pending_backtest_success_message = None
+        self._open_backtest_when_ready = False
         self._clear_build_render_state()
 
     def _snapshot_pool_grp_ids(
@@ -1521,15 +1552,6 @@ class DraftgoblinTuiApp(App[None]):
         *,
         snapshot: LiveSessionSnapshot,
     ) -> tuple[int, ...]:
-        draft = snapshot.draft
-        if draft is not None:
-            state = self._persisted_draft_state(
-                account_id=draft.account_id,
-                draft_id=draft.draft_id,
-            )
-            if state is not None:
-                return state.pool_grp_ids
-
         return tuple(
             pool_card.card.grp_id
             for pool_card in snapshot.pool.cards
@@ -1608,27 +1630,6 @@ class DraftgoblinTuiApp(App[None]):
             RequestRatingsDownload(set_code=set_code),
         )
 
-    def _persisted_draft_state(
-        self,
-        *,
-        account_id: str,
-        draft_id: str,
-    ) -> DraftState | None:
-        return next(
-            (
-                state
-                for state in list_draft_states(app_dir=self._app_dir)
-                if state.account_id == account_id and state.draft_id == draft_id
-            ),
-            None,
-        )
-
-    def _ratings_data_for_scoring(self, *, set_code: str) -> SeventeenLandsData | None:
-        ratings_data = self.session.ratings_data(set_code=set_code)
-        if ratings_data is None:
-            return None
-
-        return replace(ratings_data, pair_card_ratings_loader=None)
 
     def _render_all(self) -> None:
         if not self.is_mounted:
@@ -1924,7 +1925,7 @@ class DraftgoblinTuiApp(App[None]):
             max(target_index, 0),
             len(self._build_focus_cards) - 1,
         )
-        self._refresh_build_text_from_render_state()
+        self._refresh_build_text_from_result()
         self.query_one("#build-scroll", VerticalScroll).focus()
         self.query_one("#build-view", Static).update(self._build_text)
         self._render_focused_card_details()
@@ -2199,13 +2200,7 @@ class DraftgoblinTuiApp(App[None]):
         image_path = None
         error_message = None
         try:
-            if self.card_image_fetcher is None:
-                image_path = self._card_image_service.fetch(image_uri=image_uri)
-            else:
-                image_path = self.card_image_fetcher(
-                    image_uri,
-                    self._card_image_cache_dir,
-                )
+            image_path = self._card_image_service.fetch(image_uri=image_uri)
         except Exception as error:  # pragma: no cover - defensive network boundary.
             error_message = str(error)
 
@@ -2420,17 +2415,6 @@ class DraftgoblinTuiApp(App[None]):
             phase=self._current_pack.commitment.phase,
         )
 
-    def _current_build_pool(self) -> BuildPool | None:
-        if self._set_code is None or not self._pool_grp_ids:
-            return None
-
-        return BuildPool(
-            set_code=self._set_code,
-            pool_grp_ids=self._pool_grp_ids,
-            source_label="live draft",
-            account_id=self._active_account_id,
-            draft_id=self._draft_id,
-        )
 
     def _metadata_status_text(self) -> str:
         visible_count = len(self._visible_metadata_grp_ids())
@@ -2462,108 +2446,113 @@ class DraftgoblinTuiApp(App[None]):
 
         return self._build_text
 
-    def _rebuild_backtest_view(self) -> bool:
-        state = self._current_backtest_state()
-        if state is None:
-            self._backtest_error = "no persisted draft state for current draft"
-            self._backtest_text = (
-                "Backtest view unavailable: no persisted draft state for the "
-                "current draft. Watch or replay a draft first."
-            )
-            return False
-
-        report = generate_backtest_report(
-            state=state,
-            card_database=self.card_database,
-            ratings_data=self._ratings_data_for_scoring(set_code=state.set_code),
-            ranking_mode=self.sort_mode,
-            splash_enabled=self.visibility_preferences.splash_enabled,
-        )
-        self._backtest_error = None
-        self._backtest_text = format_backtest_report(report).rstrip("\n")
-        return True
-
-    def _current_backtest_state(self) -> DraftState | None:
-        states = list_draft_states(app_dir=self._app_dir)
-        if self._active_account_id is not None and self._draft_id is not None:
-            state = next(
-                (
-                    candidate
-                    for candidate in states
-                    if candidate.account_id == self._active_account_id
-                    and candidate.draft_id == self._draft_id
-                ),
-                None,
-            )
-            if state is not None:
-                return state
-
-        matching_states = tuple(
-            state
-            for state in states
-            if self._event_name is not None
-            and state.event_name == self._event_name
-            and state.set_code == self._set_code
-        )
-        if not matching_states:
-            return None
-
-        return max(matching_states, key=_latest_draft_state_sort_key)
-
-    def _rebuild_build_view(self) -> bool:
-        pool = self._current_build_pool()
-        if pool is None:
+    def _request_build_view(self, *, success_message: str | None) -> None:
+        if self.session.snapshot.pool.total_cards == 0 or self._set_code is None:
             self._build_error = "no picked cards yet"
             self._build_text = "Build view: no picked cards yet."
             self._build_pair_label = "—"
-            self._last_build_signature = None
+            self._build_result = None
             self._clear_build_render_state()
-            return False
+            if success_message is not None:
+                self._build_action_status = "cannot build — no picked cards yet"
+            return
 
-        try:
-            selection, build_sheet = build_deck_from_pool(
-                pool=pool,
-                card_database=self.card_database,
-                ratings_data=self._ratings_data_for_scoring(set_code=pool.set_code),
-                forced_pair=self._forced_pair,
+        self._pending_build_success_message = success_message
+        if success_message is not None:
+            self._build_action_status = None
+        self._build_error = None
+        self._view_mode = "build"
+        self._dispatch_session_command_worker(
+            RequestBuild(
+                pair_override=self._forced_pair,
                 allow_splash=self.visibility_preferences.splash_enabled,
             )
-        except DeckBuilderError as error:
-            self._build_error = str(error)
-            self._build_text = _format_tui_build_error(
-                pool=pool,
-                card_database=self.card_database,
-                error=str(error),
-                width=self._build_text_width(),
-                mana_icons_enabled=self.mana_icons_enabled,
-            )
-            self._build_pair_label = "—"
-            self._last_build_signature = None
-            self._clear_build_render_state()
-            return True
+        )
 
+    def _request_backtest_view(
+        self,
+        *,
+        success_message: str,
+        open_when_ready: bool,
+    ) -> None:
+        self._pending_backtest_success_message = success_message
+        self._backtest_action_status = None
+        self._backtest_error = None
+        self._open_backtest_when_ready = open_when_ready
+        self._dispatch_session_command_worker(
+            RequestBacktest(
+                account_id=self._active_account_id,
+                draft_id=self._draft_id,
+            )
+        )
+
+    def _adopt_build_result(self, *, result: BuildResult) -> None:
+        if (
+            result.domain_pool is None
+            or result.domain_selection is None
+            or result.domain_spell_selection is None
+            or result.domain_mana_base is None
+        ):
+            self._adopt_build_error(
+                snapshot=self.session.snapshot,
+                message="Shared build result is missing detailed build data.",
+            )
+            return
+
+        self._build_result = result
         self._build_error = None
         self._last_error = None
-        self._build_pair_label = selection.chosen.pair
-        self._last_build_signature = self._build_signature(pool=pool)
-        self._build_render_pool = pool
-        self._build_render_selection = selection
-        self._build_render_spell_selection = build_sheet.spell_selection
-        self._build_render_mana_base = build_sheet.mana_base
-        self._refresh_build_text_from_render_state()
-        return True
+        self._build_pair_label = result.selected_pair
+        if self._pending_build_success_message is not None:
+            self._build_action_status = self._pending_build_success_message
+        self._pending_build_success_message = None
+        self._refresh_build_text_from_result()
 
-    def _refresh_build_text_from_render_state(self) -> None:
+    def _adopt_build_error(
+        self,
+        *,
+        snapshot: LiveSessionSnapshot,
+        message: str,
+    ) -> None:
+        self._build_error = message
+        self._build_text = _format_tui_build_error(
+            pool=snapshot.pool,
+            error=message,
+            width=self._build_text_width(),
+            mana_icons_enabled=self.mana_icons_enabled,
+        )
+        self._build_pair_label = "—"
+        self._build_result = None
+        self._clear_build_render_state()
+        self._pending_build_success_message = None
+        self._build_action_status = f"cannot build — {message}"
+
+    def _adopt_backtest_result(self, *, result: BacktestResult) -> None:
+        self._backtest_error = None
+        self._backtest_text = _format_tui_backtest_result(result=result).rstrip("\n")
+        if self._pending_backtest_success_message is not None:
+            self._backtest_action_status = self._pending_backtest_success_message
+        self._pending_backtest_success_message = None
+        if self._open_backtest_when_ready:
+            self._view_mode = "backtest"
+            self.query_one("#build-scroll", VerticalScroll).scroll_home(animate=False)
+            self._last_error = None
+        self._open_backtest_when_ready = False
+
+    def _refresh_build_text_from_result(self) -> None:
+        result = self._build_result
         if (
-            self._build_render_pool is None
-            or self._build_render_selection is None
-            or self._build_render_spell_selection is None
-            or self._build_render_mana_base is None
+            result is None
+            or result.domain_pool is None
+            or result.domain_selection is None
+            or result.domain_spell_selection is None
+            or result.domain_mana_base is None
         ):
             return
 
+        spell_selection = result.domain_spell_selection
         self._build_focus_cards = _tui_selected_spell_groups(
-            spell_selection=self._build_render_spell_selection,
+            spell_selection=spell_selection,
             spell_sort_mode=self._build_spell_sort_mode,
         )
         if not self._build_focus_cards:
@@ -2575,10 +2564,10 @@ class DraftgoblinTuiApp(App[None]):
             )
 
         self._build_text = _format_tui_build_result(
-            pool=self._build_render_pool,
-            selection=self._build_render_selection,
-            spell_selection=self._build_render_spell_selection,
-            mana_base=self._build_render_mana_base,
+            pool=result.domain_pool,
+            selection=result.domain_selection,
+            spell_selection=spell_selection,
+            mana_base=result.domain_mana_base,
             card_database=self.card_database,
             spell_sort_mode=self._build_spell_sort_mode,
             show_details=self._build_show_details,
@@ -2591,20 +2580,6 @@ class DraftgoblinTuiApp(App[None]):
     def _clear_build_render_state(self) -> None:
         self._build_focus_cards = ()
         self._build_focused_card_index = 0
-        self._build_render_pool = None
-        self._build_render_selection = None
-        self._build_render_spell_selection = None
-        self._build_render_mana_base = None
-
-    def _build_signature(self, *, pool: BuildPool) -> BuildSignature:
-        return (pool.set_code, pool.pool_grp_ids, self._forced_pair)
-
-    def _record_build_action_result(self, *, success_message: str) -> None:
-        if self._build_error is None:
-            self._build_action_status = success_message
-            return
-
-        self._build_action_status = f"cannot build — {self._build_error}"
 
     def _build_text_width(self) -> int:
         sidebar_width = max(0, self.query_one("#sidebar", Vertical).size.width)
@@ -2671,6 +2646,184 @@ def _card_image_preview_enabled(*, env: Mapping[str, str]) -> bool:
         or env.get("GHOSTTY_RESOURCES_DIR")
         or env.get("WEZTERM_EXECUTABLE")
     )
+
+def _operation_error(
+    *,
+    snapshot: LiveSessionSnapshot,
+    operation: OperationKind,
+) -> SessionError | None:
+    return next(
+        (
+            error
+            for error in reversed(snapshot.errors)
+            if error.operation == operation
+        ),
+        None,
+    )
+
+
+def _format_tui_backtest_result(*, result: BacktestResult) -> str:
+    account = result.account_id or "unknown"
+    if result.account_screen_name is not None:
+        account = f"{result.account_screen_name} ({account})"
+    completed = (
+        "unknown" if result.completed is None else _format_tui_yes_no(result.completed)
+    )
+    chosen_pick_count = (
+        "unknown"
+        if result.chosen_pick_count is None
+        else str(result.chosen_pick_count)
+    )
+    data_sources = "none" if not result.data_sources else "; ".join(result.data_sources)
+    lines = [
+        "Draftgoblin backtest",
+        f"Account: {account}",
+        f"Set: {result.set_code or 'unknown'}",
+        f"Event: {result.event_name or 'unknown'}",
+        f"Draft: {result.draft_id or 'unknown'}",
+        f"Completed: {completed}",
+        f"Ranking: {ranking_label(ranking_mode=result.ranking_mode)}",
+        (
+            f"Picks: {chosen_pick_count} chosen, "
+            f"{result.compared_count} compared, {result.skipped_count} skipped"
+        ),
+        f"Data sources: {data_sources}",
+        "",
+    ]
+    lines.extend(_format_tui_backtest_rows(result=result))
+    lines.append("")
+    lines.extend(_format_tui_backtest_summary(result=result))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _format_tui_backtest_rows(*, result: BacktestResult) -> list[str]:
+    if not result.rows:
+        return ["No saved picks were found for this draft."]
+
+    recommended_values = tuple(
+        _format_tui_backtest_recommended(row=row) for row in result.rows
+    )
+    actual_values = tuple(_format_tui_backtest_actual(row=row) for row in result.rows)
+    recommended_width = max(
+        len("Recommended"),
+        *(len(value) for value in recommended_values),
+    )
+    actual_width = max(len("Actual"), *(len(value) for value in actual_values))
+    lines = [
+        "Pack  Pick  Pool  17L WR  DG   "
+        f"{'Recommended':<{recommended_width}}  "
+        f"{'Actual':<{actual_width}}  "
+        "Match"
+    ]
+    for row, recommended, actual in zip(
+        result.rows,
+        recommended_values,
+        actual_values,
+        strict=True,
+    ):
+        lines.append(
+            f"{row.pack_number + 1:>4}  "
+            f"{row.pick_number + 1:>4}  "
+            f"{_format_tui_optional_int(row.pool_size):>4}  "
+            f"{_format_tui_backtest_win_rate(row=row):>6}  "
+            f"{_format_tui_backtest_score(row=row):>3}  "
+            f"{recommended:<{recommended_width}}  "
+            f"{actual:<{actual_width}}  "
+            f"{_format_tui_backtest_match(row=row)}"
+        )
+
+    return lines
+
+
+def _format_tui_backtest_summary(*, result: BacktestResult) -> list[str]:
+    if result.compared_count == 0:
+        lines = [
+            f"Summary: no comparable picks; {result.skipped_count} skipped."
+        ]
+    else:
+        match_rate = result.match_count / result.compared_count
+        lines = [
+            "Summary: "
+            f"{result.match_count}/{result.compared_count} recommendations matched "
+            f"actual picks ({match_rate:.1%})."
+        ]
+
+    if result.skipped_count:
+        lines.append(
+            "Skipped picks were not scored when saved offered-card or "
+            "pool-before-pick history was missing."
+        )
+
+    return lines
+
+
+def _format_tui_backtest_recommended(*, row: BacktestPickResult) -> str:
+    if row.recommended is not None:
+        return _format_tui_card_view(card=row.recommended)
+
+    reason = row.skipped_reason or "not scored"
+    return f"skipped: {reason}"
+
+
+def _format_tui_backtest_actual(*, row: BacktestPickResult) -> str:
+    if row.actual is not None:
+        return _format_tui_card_view(card=row.actual)
+
+    return row.skipped_reason or "missing actual selected card"
+
+
+def _format_tui_backtest_win_rate(*, row: BacktestPickResult) -> str:
+    if row.recommended is None or row.recommended_win_rate is None:
+        return "—"
+
+    return f"{row.recommended_win_rate:.1%}"
+
+
+def _format_tui_backtest_score(*, row: BacktestPickResult) -> str:
+    if row.recommended is None or row.recommended_score is None:
+        return "—"
+
+    return str(row.recommended_score)
+
+
+def _format_tui_backtest_match(*, row: BacktestPickResult) -> str:
+    if row.match is None:
+        return "skipped"
+
+    return _format_tui_yes_no(row.match)
+
+
+def _format_tui_card_view(*, card: CardView) -> str:
+    colors = "Unknown" if _card_view_is_unknown(card=card) else (
+        "".join(card.colors) if card.colors else "Colorless"
+    )
+    return f"{card.name} [{colors}] (grpId {card.grp_id})"
+
+
+def _format_tui_optional_int(value: int | None) -> str:
+    return "—" if value is None else str(value)
+
+
+def _format_tui_yes_no(value: bool) -> str:
+    return "yes" if value else "no"
+
+
+def _card_info_from_view(*, card: CardView) -> CardInfo:
+    return CardInfo(
+        grp_id=card.grp_id,
+        name=card.name,
+        colors=card.colors,
+        mana_value=card.mana_value,
+        rarity=card.rarity,
+        types=card.types,
+        mana_cost=card.mana_cost,
+        unknown=_card_view_is_unknown(card=card),
+    )
+
+
+def _card_view_is_unknown(*, card: CardView) -> bool:
+    return card.rarity == "unknown" and card.types == ("Unknown",)
+
 
 
 _BUILD_COLUMN_MIN_WIDTH = 34
@@ -2832,8 +2985,7 @@ def _format_tui_build_context(
 
 def _format_tui_build_error(
     *,
-    pool: BuildPool,
-    card_database: CardDatabase,
+    pool: PoolState,
     error: str,
     width: int,
     mana_icons_enabled: bool = False,
@@ -2843,14 +2995,42 @@ def _format_tui_build_error(
         "",
     ]
     lines.extend(
-        _format_tui_picked_pool(
+        _format_tui_snapshot_pool(
             pool=pool,
-            card_database=card_database,
             width=width,
             mana_icons_enabled=mana_icons_enabled,
         )
     )
     return "\n".join(lines) + "\n"
+
+
+def _format_tui_snapshot_pool(
+    *,
+    pool: PoolState,
+    width: int,
+    mana_icons_enabled: bool = False,
+) -> list[str]:
+    lines = [f"Picked pool ({pool.total_cards})"]
+    if not pool.cards:
+        return lines + ["- none"]
+
+    index = 0
+    for pool_card in pool.cards:
+        card = _card_info_from_view(card=pool_card.card)
+        for _ in range(pool_card.quantity):
+            index += 1
+            lines.append(
+                _clip(
+                    text=_format_tui_picked_card(
+                        index=index,
+                        card=card,
+                        mana_icons_enabled=mana_icons_enabled,
+                    ),
+                    width=width,
+                )
+            )
+
+    return lines
 
 
 def _format_tui_picked_pool(
@@ -3569,8 +3749,6 @@ def _row_cells(
     return tuple(values[column_key] for column_key in column_keys)
 
 
-def _latest_draft_state_sort_key(state: DraftState) -> tuple[str, str, str]:
-    return (state.updated_at, state.account_id, state.draft_id)
 
 
 def _commitment_label(*, commitment: float) -> str:
