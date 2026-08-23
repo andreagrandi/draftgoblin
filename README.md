@@ -40,29 +40,15 @@ For the complete methodology, see [pick scoring](docs/pick-scoring.md), [benchma
 
 ## How to use it
 
-On macOS, Homebrew installs Draftgoblin and its Python runtime together. The cross-platform alternative is [uv](https://docs.astral.sh/uv/), which provides the required Python runtime and installs the command in an isolated environment.
-
 ### 1. Install
 
-Install Draftgoblin directly from its Homebrew tap on macOS:
+On macOS, install Draftgoblin with Homebrew:
 
 ```bash
 brew install andreagrandi/tap/draftgoblin
 ```
 
-Alternatively, install uv on macOS:
-
-```bash
-brew install uv
-```
-
-Or install uv with WinGet on Windows:
-
-```powershell
-winget install --id=astral-sh.uv -e
-```
-
-Then install Draftgoblin with uv:
+On other platforms, [install uv](https://docs.astral.sh/uv/getting-started/installation/) and run:
 
 ```bash
 uv tool install draftgoblin
@@ -72,43 +58,17 @@ uv tool install draftgoblin
 
 In MTG Arena, open **Settings → Account**, enable **Detailed Logs (Plugin Support)**, and restart Arena.
 
-### 3. Prepare card data
-
-Run this once after installation, and again when you want fresh card metadata:
-
-```bash
-draftgoblin refresh-data
-```
-
-### 4. Start drafting
+### 3. Start Draftgoblin
 
 Start Draftgoblin before entering a Quick Draft:
 
 ```bash
-draftgoblin watch
+draftgoblin
 ```
 
-The app detects the set and follows the draft automatically. If 17Lands ratings are not cached for that set, it offers to download them. Use the arrow keys or `j`/`k` to browse cards, `s` to change the ranking, `b` to open the current build, `c` to configure the view and optional splash recommendations, and `q` to quit.
+The app loads card metadata when needed, watches Arena's standard log location, detects the set, and follows the draft automatically. If 17Lands ratings are not cached for that set, it offers to download them. Use the arrow keys or `j`/`k` to browse cards, `s` to change the ranking, `b` to open the current build, `c` to configure the view and optional splash recommendations, and `q` to quit.
 
-Draftgoblin uses the standard Arena log location on macOS and Windows. If your log is elsewhere, pass it explicitly:
-
-```bash
-draftgoblin watch --log-path /path/to/Player.log
-```
-
-Upgrade a Homebrew installation later with:
-
-```bash
-brew upgrade draftgoblin
-```
-
-Or upgrade a uv installation with:
-
-```bash
-uv tool upgrade draftgoblin
-```
-
-Live recommendations currently support Quick Draft. Windows support is best-effort; Linux can be used only by pointing `--log-path` to an Arena log inside Wine or Proton.
+Live recommendations currently support Quick Draft. Windows support is best-effort.
 
 ## Local draft audit data
 
