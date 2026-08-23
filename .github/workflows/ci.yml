@@ -39,6 +39,9 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Install Qt runtime libraries
+        run: sudo apt-get update && sudo apt-get install --yes libegl1
+
       - name: Sync GUI dependencies
         run: uv sync --locked --extra gui
 

@@ -980,6 +980,22 @@ async def _assert_pack_rows_show_17lands_stats(tmp_path: Path) -> None:
         assert str(split_card_row[score_index]).isdigit()
 
 
+def test_tui_render_ignores_publications_during_screen_teardown(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_render_ignores_screen_teardown(tmp_path=tmp_path))
+
+
+async def _assert_render_ignores_screen_teardown(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(140, 24)):
+        sidebar = app.query_one("#sidebar")
+        await sidebar.remove()
+
+        app._render_all()
+
+
 def test_tui_status_shows_close_pick_confidence(tmp_path: Path) -> None:
     asyncio.run(_assert_status_shows_close_pick_confidence(tmp_path=tmp_path))
 

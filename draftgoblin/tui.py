@@ -1634,6 +1634,10 @@ class DraftgoblinTuiApp(App[None]):
     def _render_all(self) -> None:
         if not self.is_mounted:
             return
+        try:
+            self.query_one("#sidebar", Vertical)
+        except NoMatches:
+            return
 
         self._update_responsive_visibility()
         self._render_pack_title()
