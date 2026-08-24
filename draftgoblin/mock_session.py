@@ -235,7 +235,7 @@ def _build() -> BuildResult:
     bench = (
         BuildCard(
             card=CARDS[6],
-            quantity=1,
+            quantity=2,
             score=62,
             win_rate=0.572,
             average_last_seen_at=5.37,
