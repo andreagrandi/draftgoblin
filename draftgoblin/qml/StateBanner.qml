@@ -15,11 +15,41 @@ Rectangle {
     readonly property bool hasWarning: sessionState.ratings && sessionState.ratings.phase === "missing"
     readonly property bool shown: hasError || hasProgress || hasWarning
     readonly property var activeError: hasError ? sessionState.errors[0] : null
+    readonly property string bannerTitle: {
+        if (root.activeError)
+            return root.activeError.recoverable ? "Recoverable error" : "Application error"
+        if (root.hasWarning)
+            return "Ratings unavailable"
+        if (root.hasProgress)
+            return root.sessionState.progress.message
+        return ""
+    }
+    readonly property string bannerMessage: {
+        if (root.activeError)
+            return root.activeError.message
+        if (root.hasWarning)
+            return root.sessionState.ratings.message
+        return "The current view remains available while work continues."
+    }
+    readonly property color bannerColor: {
+        if (root.hasError)
+            return Theme.errorDark
+        if (root.hasWarning)
+            return Theme.warningDark
+        return Theme.surfaceHigh
+    }
+    readonly property color bannerBorderColor: {
+        if (root.hasError)
+            return Theme.error
+        if (root.hasWarning)
+            return Theme.warning
+        return Theme.outline
+    }
 
     visible: shown
     implicitHeight: shown ? content.implicitHeight + 20 : 0
-    color: hasError ? Theme.errorDark : hasWarning ? Theme.warningDark : Theme.surfaceHigh
-    border.color: hasError ? Theme.error : hasWarning ? Theme.warning : Theme.outline
+    color: root.bannerColor
+    border.color: root.bannerBorderColor
     border.width: 1
     radius: Theme.radius
 
@@ -35,22 +65,14 @@ Rectangle {
 
             Label {
                 Layout.fillWidth: true
-                text: root.hasError
-                    ? root.activeError.recoverable ? "Recoverable error" : "Application error"
-                    : root.hasWarning
-                        ? "Ratings unavailable"
-                        : root.hasProgress ? root.sessionState.progress.message : ""
+                text: root.bannerTitle
                 color: Theme.text
                 font.bold: true
             }
 
             Label {
                 Layout.fillWidth: true
-                text: root.hasError
-                    ? root.activeError.message
-                    : root.hasWarning
-                        ? root.sessionState.ratings.message
-                        : "The current view remains available while work continues."
+                text: root.bannerMessage
                 color: Theme.textMuted
                 wrapMode: Text.WordWrap
             }
@@ -79,35 +101,59 @@ Rectangle {
         }
 
         Button {
+            id: ratingsDownloadButton
             visible: root.hasWarning
                 && root.sessionState.ratings.set_code !== null
                 && root.sessionState.ratings.set_code !== undefined
             text: "Download ratings"
             Accessible.name: "Download ratings"
             objectName: "ratingsDownloadButton"
-            onClicked: ratingsDownloadDialog.open()
+            onClicked: {
+                ratingsDownloadDialog.returnFocusItem = ratingsDownloadButton
+                ratingsDownloadDialog.open()
+            }
         }
 
         Button {
-            visible: root.hasError && root.activeError.recoverable
+            objectName: "sessionErrorRetryButton"
+            visible: root.activeError && root.activeError.recoverable
             text: "Retry"
-            onClicked: sessionProvider.retryError(root.activeError.error_id)
+            Accessible.name: "Retry failed operation"
+            Accessible.description: "Retries the published recoverable error."
+            onClicked: {
+                const error = root.activeError
+                if (error)
+                    sessionProvider.retryError(error.error_id)
+            }
         }
 
         Button {
-            visible: root.hasError
+            objectName: "sessionErrorDismissButton"
+            visible: root.activeError
             text: "Dismiss"
-            onClicked: sessionProvider.dismissError(root.activeError.error_id)
+            Accessible.name: "Dismiss error"
+            Accessible.description: "Dismisses the published error."
+            onClicked: {
+                const error = root.activeError
+                if (error)
+                    sessionProvider.dismissError(error.error_id)
+            }
         }
     }
 
     Dialog {
         id: ratingsDownloadDialog
         objectName: "ratingsDownloadDialog"
+        property var returnFocusItem: null
         implicitWidth: 400
         modal: true
+        focus: true
         parent: Overlay.overlay
         title: "Download ratings?"
+        onClosed: {
+            if (returnFocusItem)
+                returnFocusItem.forceActiveFocus()
+        }
 
         Label {
             width: 360

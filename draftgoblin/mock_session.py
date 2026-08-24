@@ -49,6 +49,9 @@ MockScenario: TypeAlias = Literal[
     "progress",
     "warning",
     "error",
+    "build_error",
+    "backtest_missing",
+    "backtest_error",
 ]
 MOCK_SCENARIOS: tuple[MockScenario, ...] = (
     "loading",
@@ -57,6 +60,9 @@ MOCK_SCENARIOS: tuple[MockScenario, ...] = (
     "progress",
     "warning",
     "error",
+    "build_error",
+    "backtest_missing",
+    "backtest_error",
 )
 
 
@@ -460,6 +466,52 @@ def _snapshot_for_scenario(*, scenario: MockScenario) -> LiveSessionSnapshot:
             if ready.build is not None
             else None,
         )
+    if scenario == "build_error":
+        return replace(
+            ready,
+            build=None,
+            errors=(
+                SessionError(
+                    error_id="mock-build-error",
+                    code="build_failed",
+                    message="The suggested deck could not be built. Retry after ratings recover.",
+                    recoverable=True,
+                    operation=OperationKind.BUILD,
+                ),
+            ),
+        )
+    if scenario == "backtest_missing":
+        missing_row = replace(
+            _backtest().rows[-1],
+            recommended=None,
+            actual=CARDS[4],
+            match=None,
+            skipped_reason="Every offered-card history record is unavailable.",
+        )
+        return replace(
+            ready,
+            backtest=replace(
+                _backtest(),
+                rows=(missing_row,),
+                match_count=0,
+                compared_count=0,
+                skipped_count=1,
+            ),
+        )
+    if scenario == "backtest_error":
+        return replace(
+            ready,
+            backtest=None,
+            errors=(
+                SessionError(
+                    error_id="mock-backtest-error",
+                    code="backtest_failed",
+                    message="The persisted pick history could not be compared.",
+                    recoverable=True,
+                    operation=OperationKind.BACKTEST,
+                ),
+            ),
+        )
     return replace(
         ready,
         errors=(
@@ -545,18 +597,42 @@ class MockLiveSession:
             self._scenario = "progress"
         elif isinstance(command, RequestBuild):
             ready = _ready_snapshot()
+            build = ready.build
+            if build is not None and command.pair_override is not None:
+                build = replace(
+                    build,
+                    selected_pair=command.pair_override,
+                    pair_options=tuple(
+                        replace(
+                            option,
+                            selected=option.pair == command.pair_override,
+                        )
+                        for option in build.pair_options
+                    ),
+                )
+            if build is not None:
+                build = replace(build, pair_override=command.pair_override)
             snapshot = replace(
                 snapshot,
-                build=replace(
-                    ready.build,
-                    pair_override=command.pair_override,
-                )
-                if ready.build is not None
-                else None,
+                build=build,
                 progress=None,
+                errors=tuple(
+                    error
+                    for error in snapshot.errors
+                    if error.operation != OperationKind.BUILD
+                ),
             )
         elif isinstance(command, RequestBacktest):
-            snapshot = replace(snapshot, backtest=_backtest(), progress=None)
+            snapshot = replace(
+                snapshot,
+                backtest=_backtest(),
+                progress=None,
+                errors=tuple(
+                    error
+                    for error in snapshot.errors
+                    if error.operation != OperationKind.BACKTEST
+                ),
+            )
         elif isinstance(command, DismissError):
             snapshot = replace(
                 snapshot,

@@ -7,7 +7,12 @@ pytest.importorskip("PySide6")
 from draftgoblin.mock_session import MOCK_SCENARIOS, MockLiveSession
 from draftgoblin.qt_adapter import _to_qml_value
 from draftgoblin.qt_mock import MockSessionAdapter
-from draftgoblin.session import LiveSessionSnapshot
+from draftgoblin.session import (
+    LiveSessionSnapshot,
+    OperationKind,
+    RequestBacktest,
+    RequestBuild,
+)
 
 
 def test_qt_translation_publishes_plain_values_without_domain_payloads() -> None:
@@ -50,6 +55,7 @@ def test_qt_mock_adapter_exposes_shared_provider_contract() -> None:
     adapter.requestBacktest()
     assert adapter.state["backtest"]["rows"]
 
+
 def test_qt_adapter_ignores_unknown_visual_scenario() -> None:
     adapter = MockSessionAdapter(session=MockLiveSession())
 
@@ -59,4 +65,33 @@ def test_qt_adapter_ignores_unknown_visual_scenario() -> None:
     assert isinstance(adapter.state, dict)
     assert isinstance(_to_qml_value(LiveSessionSnapshot()), dict)
 
+
+def test_qt_mock_exposes_build_and_backtest_failure_variants() -> None:
+    adapter = MockSessionAdapter(session=MockLiveSession())
+
+    adapter.selectScenario("build_error")
+    assert adapter.state["build"] is None
+    assert adapter.state["errors"][0]["operation"] == "build"
+    adapter.selectScenario("backtest_missing")
+    assert adapter.state["backtest"]["skipped_count"] == 1
+    assert adapter.state["backtest"]["rows"][0]["skipped_reason"]
+    adapter.selectScenario("backtest_error")
+    assert adapter.state["backtest"] is None
+    assert adapter.state["errors"][0]["operation"] == "backtest"
+
+
+def test_qt_mock_success_clears_only_its_operation_error() -> None:
+    session = MockLiveSession(scenario="backtest_error")
+
+    build = session.dispatch(command=RequestBuild())
+
+    assert build.build is not None
+    assert [error.operation for error in build.errors] == [OperationKind.BACKTEST]
+
+    session = MockLiveSession(scenario="build_error")
+
+    backtest = session.dispatch(command=RequestBacktest())
+
+    assert backtest.backtest is not None
+    assert [error.operation for error in backtest.errors] == [OperationKind.BUILD]
 

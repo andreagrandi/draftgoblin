@@ -8,11 +8,13 @@ FocusScope {
     required property var recommendation
     required property bool selected
     required property bool wide
+    required property bool secondaryStats
     signal chosen(int grpId)
 
     implicitHeight: wide ? 48 : 70
     Accessible.role: Accessible.ListItem
     Accessible.name: "Rank " + recommendation.rank + ", " + recommendation.card.name
+    Accessible.description: "Press Enter or Space to focus this recommendation."
     activeFocusOnTab: true
     Keys.onReturnPressed: chosen(recommendation.card.grp_id)
     Keys.onSpacePressed: chosen(recommendation.card.grp_id)
@@ -85,10 +87,11 @@ FocusScope {
                 text: (root.recommendation.card.colors.length > 0
                     ? root.recommendation.card.colors.join(" · ") : "Colorless")
                     + "   ·   " + root.recommendation.color_fit
-                    + "   ·   ALSA "
-                    + (root.recommendation.average_last_seen_at !== null
-                        && root.recommendation.average_last_seen_at !== undefined
-                        ? root.recommendation.average_last_seen_at.toFixed(2) : "—")
+                    + (root.secondaryStats
+                        ? "   ·   ALSA " + (root.recommendation.average_last_seen_at !== null
+                            && root.recommendation.average_last_seen_at !== undefined
+                            ? root.recommendation.average_last_seen_at.toFixed(2) : "—")
+                        : "")
                 color: Theme.textMuted
                 font.pixelSize: 11
                 elide: Text.ElideRight
@@ -116,6 +119,7 @@ FocusScope {
         }
 
         Label {
+            visible: root.secondaryStats
             Layout.preferredWidth: 58
             text: recommendation.win_rate !== null
                 ? (recommendation.win_rate * 100).toFixed(1) + "%" : "—"
@@ -123,7 +127,6 @@ FocusScope {
             font.family: "monospace"
             horizontalAlignment: Text.AlignRight
         }
-
         Label {
             Layout.preferredWidth: 34
             text: recommendation.letter_grade || "—"

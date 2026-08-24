@@ -17,6 +17,7 @@ ApplicationWindow {
     property string currentSurface: initialSurface
     readonly property bool narrow: width < Theme.narrowBreakpoint
     readonly property var sessionState: provider.state
+    readonly property var displayPreferences: guiPreferences
 
     header: AppBar {
         sessionState: window.sessionState
@@ -54,21 +55,25 @@ ApplicationWindow {
                 sessionState: window.sessionState
                 recommendationModel: window.provider.recommendationsModel
                 narrow: window.narrow
+                displayPreferences: window.displayPreferences
             }
 
             BuildView {
                 sessionState: window.sessionState
                 narrow: window.narrow
+                displayPreferences: window.displayPreferences
             }
 
             BacktestView {
                 sessionState: window.sessionState
                 narrow: window.narrow
+                displayPreferences: window.displayPreferences
             }
 
             SettingsView {
                 sessionState: window.sessionState
                 narrow: window.narrow
+                displayPreferences: window.displayPreferences
             }
         }
     }

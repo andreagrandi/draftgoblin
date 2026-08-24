@@ -10,6 +10,7 @@ Item {
     required property var sessionState
     required property var recommendationModel
     required property bool narrow
+    required property var displayPreferences
     readonly property bool hasRecommendations: sessionState.recommendations
         && sessionState.recommendations.cards
         && sessionState.recommendations.cards.length > 0
@@ -83,6 +84,7 @@ Item {
 
             ComboBox {
                 id: rankingSelector
+                objectName: "rankingSelector"
                 Layout.preferredWidth: root.narrow ? 130 : 166
                 model: [
                     { key: "score", label: "DG Score" },
@@ -208,7 +210,7 @@ Item {
                         Label { Layout.fillWidth: true; text: "CARD"; color: Theme.textMuted; font.pixelSize: 10 }
                         Label { Layout.preferredWidth: 64; text: "COLOR"; color: Theme.textMuted; font.pixelSize: 10 }
                         Label { Layout.preferredWidth: 52; text: "DG"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
-                        Label { Layout.preferredWidth: 58; text: "17L WR"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
+                        Label { visible: root.displayPreferences.secondaryStats; Layout.preferredWidth: 58; text: "17L WR"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
                         Label { Layout.preferredWidth: 34; text: "GRADE"; color: Theme.textMuted; font.pixelSize: 10 }
                         Label { Layout.preferredWidth: 84; text: "FIT"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
                     }
@@ -216,7 +218,7 @@ Item {
                     ListView {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        spacing: 5
+                        spacing: root.displayPreferences.compactDensity ? 3 : 5
                         clip: true
                         model: root.recommendationModel
                         Accessible.name: "Ranked recommendations"
@@ -228,6 +230,7 @@ Item {
                             recommendation: modelData
                             selected: root.sessionState.recommendations.selected_grp_id === modelData.card.grp_id
                             wide: true
+                            secondaryStats: root.displayPreferences.secondaryStats
                             onChosen: grpId => sessionProvider.chooseRecommendation(grpId)
                         }
                     }
@@ -235,6 +238,7 @@ Item {
             }
 
             CardPreview {
+                visible: root.displayPreferences.cardPreview
                 Layout.preferredWidth: 292
                 Layout.fillHeight: true
                 recommendation: root.selectedRecommendation
@@ -259,7 +263,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumHeight: 260
-                spacing: 6
+                spacing: root.displayPreferences.compactDensity ? 3 : 6
                 clip: true
                 model: root.recommendationModel
                 Accessible.name: "Ranked recommendations"
@@ -270,6 +274,7 @@ Item {
                     width: ListView.view.width
                     recommendation: modelData
                     selected: root.sessionState.recommendations.selected_grp_id === modelData.card.grp_id
+                    secondaryStats: root.displayPreferences.secondaryStats
                     wide: false
                     onChosen: grpId => sessionProvider.chooseRecommendation(grpId)
                 }
@@ -277,24 +282,45 @@ Item {
 
             TabBar {
                 id: detailTabs
+                objectName: "liveDetailTabs"
                 Layout.fillWidth: true
+                Component.onCompleted: {
+                    if (!root.displayPreferences.cardPreview)
+                        detailTabs.setCurrentIndex(1)
+                }
 
-                TabButton { text: "Card details" }
-                TabButton { text: "Pool" }
+                TabButton {
+                    visible: root.displayPreferences.cardPreview
+                    text: "Card details"
+                    Accessible.name: "Card details"
+                }
+                TabButton { text: "Pool"; Accessible.name: "Pool details" }
+            }
+
+            Connections {
+                target: root.displayPreferences
+
+                function onPreferencesChanged() {
+                    if (!root.displayPreferences.cardPreview)
+                        detailTabs.setCurrentIndex(1)
+                }
             }
 
             StackLayout {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 330
-                currentIndex: detailTabs.currentIndex
+                currentIndex: root.displayPreferences.cardPreview ? detailTabs.currentIndex : 1
 
                 CardPreview {
+                    objectName: "narrowLiveCardPreview"
+                    visible: root.displayPreferences.cardPreview
                     recommendation: root.selectedRecommendation
                     loading: root.sessionState.card_data.phase === "loading"
                     imageState: root.sessionState.card_image
                 }
 
                 PoolSummaryPanel {
+                    objectName: "narrowLivePoolDetails"
                     pool: root.sessionState.pool
                 }
             }

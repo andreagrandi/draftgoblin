@@ -89,6 +89,7 @@ Rectangle {
                     || root.sessionState.active_account.account_id
                 : "Choose Arena account"
             Accessible.name: "Arena account"
+            Accessible.description: "Choose the Arena account whose live draft is shown."
             onActivated: root.provider.chooseAccount(currentValue)
 
             delegate: ItemDelegate {
@@ -109,6 +110,7 @@ Rectangle {
                 ? Math.max(0, root.provider.scenarios.indexOf(root.provider.scenario))
                 : -1
             Accessible.name: "Representative state"
+            Accessible.description: "Choose deterministic visual-development data."
             onActivated: root.provider.selectScenario(currentText)
 
             background: Rectangle {
@@ -123,6 +125,7 @@ Rectangle {
             objectName: "settingsButton"
             text: "Settings"
             Accessible.name: "Open settings"
+            Accessible.description: "Open draft guidance, display, and accessibility settings."
             onClicked: root.settingsRequested()
         }
     }

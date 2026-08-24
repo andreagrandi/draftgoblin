@@ -7,8 +7,12 @@ import pytest
 
 import draftgoblin.preferences as preferences_module
 from draftgoblin.preferences import (
+    GuiDisplayPreferences,
     TuiVisibilityPreferences,
+    gui_preferences_path,
+    load_gui_preferences,
     load_tui_preferences,
+    save_gui_preferences,
     save_tui_preferences,
     tui_preferences_path,
 )
@@ -171,3 +175,59 @@ def test_tui_preferences_path_uses_default_application_directory(
     path = tui_preferences_path()
 
     assert path == tmp_path / "app" / "tui-preferences.json"
+
+
+def test_gui_preferences_round_trip_and_isolate_display_choices(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    expected = GuiDisplayPreferences(
+        compact_density=True,
+        secondary_stats=False,
+        card_preview=False,
+        detailed_build_context=False,
+    )
+
+    assert save_gui_preferences(preferences=expected, app_dir=app_dir) is None
+    actual, warning = load_gui_preferences(app_dir=app_dir)
+
+    assert actual == expected
+    assert warning is None
+    assert json.loads(gui_preferences_path(app_dir=app_dir).read_text()) == {
+        "display": {
+            "card_preview": False,
+            "compact_density": True,
+            "detailed_build_context": False,
+            "secondary_stats": False,
+        },
+        "version": 1,
+    }
+
+
+def test_gui_preferences_recover_from_invalid_schema_and_fields(
+    tmp_path: Path,
+) -> None:
+    path = gui_preferences_path(app_dir=tmp_path / "app")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "display": {
+                    "compact_density": "yes",
+                    "secondary_stats": False,
+                },
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    preferences, warning = load_gui_preferences(app_dir=path.parent)
+
+    assert preferences == GuiDisplayPreferences(secondary_stats=False)
+    assert warning is not None
+    assert "compact_density" in warning
+    path.write_text(json.dumps({"version": 2, "display": {}}), encoding="utf-8")
+    _, unsupported_warning = load_gui_preferences(app_dir=path.parent)
+    assert unsupported_warning is not None
+    assert "unsupported settings version" in unsupported_warning

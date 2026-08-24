@@ -5,8 +5,9 @@ Keep blocking session work in adapter-owned workers and QML values presentation-
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from enum import Enum
+from os import PathLike
 from typing import Any, cast
 
 from PySide6.QtCore import (
@@ -24,6 +25,11 @@ from PySide6.QtCore import (
     Slot,
 )
 
+from draftgoblin.preferences import (
+    GuiDisplayPreferences,
+    load_gui_preferences,
+    save_gui_preferences,
+)
 from draftgoblin.ranking import RankingMode
 from draftgoblin.session import (
     ChangeRanking,
@@ -108,6 +114,75 @@ class RecommendationListModel(QAbstractListModel):
         self.beginResetModel()
         self._rows = rows
         self.endResetModel()
+
+
+class GuiPreferencesAdapter(QObject):
+    """Expose persisted display-only GUI choices through narrow Qt properties.
+    Ranking and splash choices remain explicit commands on SessionAdapter.
+    """
+
+    preferencesChanged = Signal()
+    persistenceChanged = Signal()
+
+    def __init__(
+        self,
+        *,
+        app_dir: str | PathLike[str] | None = None,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._app_dir = app_dir
+        self._preferences, self._persistence_message = load_gui_preferences(
+            app_dir=app_dir,
+        )
+
+    @Property(bool, notify=preferencesChanged)
+    def compactDensity(self) -> bool:
+        return self._preferences.compact_density
+
+    @Property(bool, notify=preferencesChanged)
+    def secondaryStats(self) -> bool:
+        return self._preferences.secondary_stats
+
+    @Property(bool, notify=preferencesChanged)
+    def cardPreview(self) -> bool:
+        return self._preferences.card_preview
+
+    @Property(bool, notify=preferencesChanged)
+    def detailedBuildContext(self) -> bool:
+        return self._preferences.detailed_build_context
+
+    @Property(str, notify=persistenceChanged)
+    def persistenceMessage(self) -> str:
+        return self._persistence_message or "Saved"
+
+    @Slot(bool)
+    def setCompactDensity(self, enabled: bool) -> None:
+        self._replace_preferences(compact_density=enabled)
+
+    @Slot(bool)
+    def setSecondaryStats(self, enabled: bool) -> None:
+        self._replace_preferences(secondary_stats=enabled)
+
+    @Slot(bool)
+    def setCardPreview(self, enabled: bool) -> None:
+        self._replace_preferences(card_preview=enabled)
+
+    @Slot(bool)
+    def setDetailedBuildContext(self, enabled: bool) -> None:
+        self._replace_preferences(detailed_build_context=enabled)
+
+    def _replace_preferences(self, **changes: bool) -> None:
+        updated = replace(self._preferences, **changes)
+        if updated == self._preferences:
+            return
+        self._preferences = updated
+        self._persistence_message = save_gui_preferences(
+            preferences=updated,
+            app_dir=self._app_dir,
+        )
+        self.preferencesChanged.emit()
+        self.persistenceChanged.emit()
 
 
 class SessionAdapter(QObject):
