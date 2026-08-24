@@ -12,7 +12,7 @@ from time import monotonic
 from typing import Literal, cast
 
 from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QFontDatabase, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
@@ -55,6 +55,14 @@ def _configure_application_metadata(*, application: QGuiApplication) -> None:
     application.setApplicationDisplayName(APPLICATION_NAME)
     application.setApplicationVersion(__version__)
     application.setOrganizationName(APPLICATION_NAME)
+
+
+def _fixed_font_family() -> str:
+    if QGuiApplication.instance() is None:
+        raise RuntimeError(
+            "QGuiApplication must exist before resolving the fixed font."
+        )
+    return QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
 
 
 def _parser(*, forced_provider: ProviderName | None = None) -> argparse.ArgumentParser:
@@ -266,6 +274,7 @@ def run_gui(
     context.setContextProperty("sessionProvider", provider)
     context.setContextProperty("guiPreferences", preferences)
     context.setContextProperty("applicationTitle", APPLICATION_NAME)
+    context.setContextProperty("fixedFontFamily", _fixed_font_family())
     context.setContextProperty("applicationVersion", __version__)
     context.setContextProperty("initialSurface", args.surface)
     context.setContextProperty("initialWindowWidth", args.width)

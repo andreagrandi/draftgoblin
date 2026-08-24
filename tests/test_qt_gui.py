@@ -154,6 +154,7 @@ def test_production_gui_processes_representative_arena_log_offscreen(
     )
 
     assert completed.returncode == 0, completed.stderr
+    assert "Monospace" not in completed.stderr
     assert "Binding loop detected" not in completed.stderr
     assert "Unable to assign" not in completed.stderr
     assert "TypeError" not in completed.stderr
@@ -194,6 +195,7 @@ from draftgoblin import __version__
 from draftgoblin.carddb import build_card_database_from_bulk_file
 from draftgoblin.cardimages import CardImageService
 from draftgoblin.qt_adapter import GuiPreferencesAdapter, LiveSessionAdapter
+from draftgoblin.qt_gui import _fixed_font_family
 from draftgoblin.session import LiveSession
 
 
@@ -304,6 +306,7 @@ engine = QQmlApplicationEngine()
 qml_directory = project_root / "draftgoblin" / "qml"
 engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
+context.setContextProperty("fixedFontFamily", _fixed_font_family())
 context.setContextProperty("sessionProvider", provider)
 context.setContextProperty("applicationTitle", "Draftgoblin")
 context.setContextProperty("applicationVersion", __version__)
@@ -450,6 +453,9 @@ finally:
     )
 
     assert completed.returncode == 0, completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+    assert "TypeError" not in completed.stderr
 
 
 def test_qml_keyboard_controls_dispatch_account_and_ratings_commands_offscreen() -> None:
@@ -466,6 +472,7 @@ from PySide6.QtQuickControls2 import QQuickStyle
 from draftgoblin import __version__
 from draftgoblin.mock_session import MockLiveSession
 from draftgoblin.qt_adapter import GuiPreferencesAdapter
+from draftgoblin.qt_gui import _fixed_font_family
 from draftgoblin.qt_mock import MockSessionAdapter
 from draftgoblin.session import ChooseAccount, RequestRatingsDownload
 
@@ -489,6 +496,7 @@ engine = QQmlApplicationEngine()
 qml_directory = Path.cwd() / "draftgoblin" / "qml"
 engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
+context.setContextProperty("fixedFontFamily", _fixed_font_family())
 context.setContextProperty("sessionProvider", provider)
 context.setContextProperty("applicationTitle", "Draftgoblin")
 context.setContextProperty("applicationVersion", __version__)
@@ -583,6 +591,7 @@ from PySide6.QtTest import QTest
 from draftgoblin import __version__
 from draftgoblin.mock_session import MockLiveSession
 from draftgoblin.qt_adapter import GuiPreferencesAdapter
+from draftgoblin.qt_gui import _fixed_font_family
 from draftgoblin.qt_mock import MockSessionAdapter
 
 
@@ -659,6 +668,7 @@ engine = QQmlApplicationEngine()
 qml_directory = Path.cwd() / "draftgoblin" / "qml"
 engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
+context.setContextProperty("fixedFontFamily", _fixed_font_family())
 context.setContextProperty("sessionProvider", provider)
 context.setContextProperty("applicationTitle", "Draftgoblin")
 context.setContextProperty("applicationVersion", __version__)
@@ -731,9 +741,9 @@ from PySide6.QtQuickControls2 import QQuickStyle
 from draftgoblin import __version__
 from draftgoblin.mock_session import MockLiveSession
 from draftgoblin.qt_adapter import GuiPreferencesAdapter
+from draftgoblin.qt_gui import _fixed_font_family
 from draftgoblin.qt_mock import MockSessionAdapter
 from draftgoblin.session import FocusBuildCard, RequestBacktest, RequestBuild
-
 
 def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
     if item.objectName() == object_name:
@@ -791,6 +801,7 @@ engine = QQmlApplicationEngine()
 qml_directory = Path.cwd() / "draftgoblin" / "qml"
 engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
+context.setContextProperty("fixedFontFamily", _fixed_font_family())
 context.setContextProperty("sessionProvider", provider)
 context.setContextProperty("guiPreferences", preferences)
 context.setContextProperty("applicationTitle", "Draftgoblin")
@@ -933,16 +944,58 @@ assert narrow_preview.property("imageState")["grp_id"] == provider.state["build"
 QTest.qWait(20)
 assert_visible_active_focus(card_details_toggle)
 
+build_view.setProperty("contextExpanded", False)
 root.resize(1059, 900)
 application.processEvents()
 assert root.property("narrow") is False
 assert build_view.property("compactPresentation") is True
+assert build_view.property("contextExpanded") is False
+assert pair_selector.isVisible()
+assert rebuild.isVisible()
 compact_spell = find_visual_item(root.contentItem(), "buildSpellButton1")
 assert compact_spell is not None and compact_spell.isVisible()
+narrow_context = find_visual_item(root.contentItem(), "narrowBuildContext")
+narrow_context_toggle = find_visual_item(root.contentItem(), "narrowBuildContextToggle")
+narrow_context_details = find_visual_item(root.contentItem(), "narrowBuildContextDetails")
+assert narrow_context is not None and narrow_context.isVisible()
+assert narrow_context_toggle is not None and narrow_context_toggle.isVisible()
+assert narrow_context_details is not None and narrow_context_details.isVisible() is False
+assert narrow_context_toggle.property("text") == "Show why this pair"
+collapsed_narrow_context_height = narrow_context.height()
+accessible_narrow_context = QAccessible.queryAccessibleInterface(narrow_context_toggle)
+assert accessible_narrow_context is not None
+assert accessible_narrow_context.text(QAccessible.Text.Name) == "Show why this pair"
+assert accessible_narrow_context.text(QAccessible.Text.Description) == (
+    "The pair rationale is currently collapsed. Activating this button expands it."
+)
+narrow_context_toggle.forceActiveFocus()
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+QTest.qWait(20)
+assert build_view.property("contextExpanded") is True
+assert narrow_context_toggle.property("text") == "Hide why this pair"
+assert accessible_narrow_context.text(QAccessible.Text.Name) == "Hide why this pair"
+assert accessible_narrow_context.text(QAccessible.Text.Description) == (
+    "The pair rationale is currently expanded. Activating this button collapses it."
+)
+assert narrow_context_details.isVisible()
+narrow_reason = find_visual_item(root.contentItem(), "narrowPairOptionWG")
+assert narrow_reason is not None and narrow_reason.isVisible()
+assert narrow_context.height() > collapsed_narrow_context_height
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+QTest.qWait(20)
+assert build_view.property("contextExpanded") is False
+assert narrow_context_toggle.property("text") == "Show why this pair"
+assert narrow_context_details.isVisible() is False
+assert narrow_reason.isVisible() is False
+assert narrow_context.height() == collapsed_narrow_context_height
 
 root.resize(1060, 900)
 application.processEvents()
 assert build_view.property("compactPresentation") is False
+assert pair_selector.isVisible()
+assert rebuild.isVisible()
 
 wide_curve = find_visual_item(root.contentItem(), "wideBuildManaCurve")
 assert wide_curve is not None and wide_curve.isVisible()
@@ -955,10 +1008,44 @@ wide_spells = find_visual_item(root.contentItem(), "buildSpellGroups")
 assert wide_spells is not None and wide_spells.isVisible()
 assert wide_spells.x() >= 0
 assert wide_spells.x() + wide_spells.width() <= build_view.width()
+wide_context = find_visual_item(root.contentItem(), "wideBuildContext")
+wide_context_toggle = find_visual_item(root.contentItem(), "wideBuildContextToggle")
+wide_context_details = find_visual_item(root.contentItem(), "wideBuildContextDetails")
+assert wide_context is not None and wide_context.isVisible()
+assert wide_context_toggle is not None and wide_context_toggle.isVisible()
+assert wide_context_details is not None and wide_context_details.isVisible() is False
+assert wide_context_toggle.property("text") == "Show why this pair"
+collapsed_wide_context_height = wide_context.height()
+accessible_wide_context = QAccessible.queryAccessibleInterface(wide_context_toggle)
+assert accessible_wide_context is not None
+assert accessible_wide_context.text(QAccessible.Text.Name) == "Show why this pair"
+assert accessible_wide_context.text(QAccessible.Text.Description) == (
+    "The pair rationale is currently collapsed. Activating this button expands it."
+)
+wide_context_toggle.forceActiveFocus()
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+QTest.qWait(20)
+assert build_view.property("contextExpanded") is True
+assert wide_context_toggle.property("text") == "Hide why this pair"
+assert accessible_wide_context.text(QAccessible.Text.Name) == "Hide why this pair"
+assert accessible_wide_context.text(QAccessible.Text.Description) == (
+    "The pair rationale is currently expanded. Activating this button collapses it."
+)
+assert wide_context_details.isVisible()
 wide_reason = find_visual_item(root.contentItem(), "widePairOptionWG")
 assert wide_reason is not None and wide_reason.isVisible()
 assert "score 82.4" in wide_reason.property("text")
 assert "25 playables" in wide_reason.property("text")
+assert wide_context.height() > collapsed_wide_context_height
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+QTest.qWait(20)
+assert build_view.property("contextExpanded") is False
+assert wide_context_toggle.property("text") == "Show why this pair"
+assert wide_context_details.isVisible() is False
+assert wide_reason.isVisible() is False
+assert wide_context.height() == collapsed_wide_context_height
 
 build_view.setProperty("benchExpanded", False)
 application.processEvents()
@@ -1106,8 +1193,13 @@ QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
 assert provider.state["errors"] == []
 
+del engine
+
 """
     completed = _run_qml_probe(probe)
 
     assert completed.returncode == 0, completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+    assert "TypeError" not in completed.stderr
 

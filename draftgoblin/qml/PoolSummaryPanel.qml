@@ -36,7 +36,7 @@ Rectangle {
             Label {
                 text: root.pool.total_cards + " / 42 cards"
                 color: Theme.text
-                font.family: "monospace"
+                font.family: fixedFontFamily
                 font.bold: true
             }
         }
@@ -75,7 +75,7 @@ Rectangle {
             Label {
                 text: Math.round(root.pool.commitment * 100) + "% building"
                 color: Theme.warning
-                font.family: "monospace"
+                font.family: fixedFontFamily
             }
         }
 
@@ -114,7 +114,7 @@ Rectangle {
                 Label {
                     text: "×" + modelData.quantity
                     color: Theme.text
-                    font.family: "monospace"
+                    font.family: fixedFontFamily
                 }
             }
         }

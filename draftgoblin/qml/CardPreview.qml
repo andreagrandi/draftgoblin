@@ -173,7 +173,7 @@ Rectangle {
                 Label {
                     text: root.recommendation ? "DG " + root.recommendation.score : ""
                     color: Theme.primary
-                    font.family: "monospace"
+                    font.family: fixedFontFamily
                     font.bold: true
                 }
 
@@ -181,7 +181,7 @@ Rectangle {
                     text: root.recommendation && root.recommendation.win_rate !== null
                         ? "17L " + (root.recommendation.win_rate * 100).toFixed(1) + "%" : "17L —"
                     color: Theme.textMuted
-                    font.family: "monospace"
+                    font.family: fixedFontFamily
                 }
 
                 Label {

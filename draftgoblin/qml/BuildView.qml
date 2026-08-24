@@ -161,13 +161,13 @@ Item {
     }
 
     function spellsInBucket(bucket) {
-        const spellIndices = []
+        const spellEntries = []
         for (let index = 0; index < root.build.spells.length; index++) {
             const spell = root.build.spells[index]
             if (root.manaBucket(spell) === bucket)
-                spellIndices.push(index)
+                spellEntries.push({ cardEntry: spell, entryIndex: index })
         }
-        return spellIndices
+        return spellEntries
     }
 
     function landSummary(land) {
@@ -266,7 +266,7 @@ Item {
                             Layout.alignment: Qt.AlignHCenter
                             text: root.manaCount(modelData)
                             color: Theme.text
-                            font.family: "monospace"
+                            font.family: fixedFontFamily
                             font.bold: true
                             Accessible.name: root.manaCount(modelData) + " cards at " + root.manaBucketLabel(modelData)
                         }
@@ -329,7 +329,7 @@ Item {
                 Layout.preferredWidth: 24
                 text: "×" + cardEntry.quantity
                 color: Theme.textMuted
-                font.family: "monospace"
+                font.family: fixedFontFamily
                 horizontalAlignment: Text.AlignRight
             }
             ManaPips { colors: cardEntry.card.colors }
@@ -351,7 +351,7 @@ Item {
                 Layout.preferredWidth: 42
                 text: "DG " + scoreText
                 color: Theme.primary
-                font.family: "monospace"
+                font.family: fixedFontFamily
                 horizontalAlignment: Text.AlignRight
             }
         }
@@ -517,7 +517,7 @@ Item {
                                     Layout.fillWidth: true
                                     ManaPips { colors: modelData.source_colors }
                                     Label { Layout.fillWidth: true; text: modelData.name; color: Theme.text; elide: Text.ElideRight }
-                                    Label { text: modelData.quantity; color: Theme.text; font.family: "monospace" }
+                                    Label { text: modelData.quantity; color: Theme.text; font.family: fixedFontFamily }
                                 }
                             }
                         }
@@ -566,7 +566,7 @@ Item {
                             Layout.rightMargin: Theme.panelPadding
                             Label { text: "MAIN DECK SPELLS"; color: Theme.text; font.pixelSize: 12; font.bold: true; font.letterSpacing: 1 }
                             Item { Layout.fillWidth: true }
-                            Label { text: root.build.spell_count !== null ? root.build.spell_count + " cards" : ""; color: Theme.textMuted; font.family: "monospace" }
+                            Label { text: root.build.spell_count !== null ? root.build.spell_count + " cards" : ""; color: Theme.textMuted; font.family: fixedFontFamily }
                         }
                         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.outline }
                         ScrollView {
@@ -609,15 +609,15 @@ Item {
                                                 anchors.rightMargin: 10
                                                 text: root.manaCount(modelData)
                                                 color: Theme.textMuted
-                                                font.family: "monospace"
+                                                font.family: fixedFontFamily
                                             }
                                         }
                                         Repeater {
                                             model: root.spellsInBucket(bucket)
                                             delegate: BuildCardRow {
-                                                required property int modelData
-                                                cardEntry: root.build.spells[modelData]
-                                                entryIndex: modelData
+                                                required property var modelData
+                                                cardEntry: modelData.cardEntry
+                                                entryIndex: modelData.entryIndex
                                                 objectName: root.compactPresentation ? "" : "buildSpellButton" + entryIndex
                                             }
                                         }
@@ -655,6 +655,7 @@ Item {
                     }
                     ManaCurve { objectName: "wideBuildManaCurve" }
                     Rectangle {
+                        objectName: "wideBuildContext"
                         visible: root.displayPreferences.detailedBuildContext
                         Layout.fillWidth: true
                         Layout.preferredHeight: wideReasoning.implicitHeight + Theme.panelPadding * 2
@@ -667,22 +668,43 @@ Item {
                             anchors.fill: parent
                             anchors.margins: Theme.panelPadding
                             spacing: 4
-                            Label { text: "WHY THIS PAIR"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1 }
-                            Label { Layout.fillWidth: true; text: root.pairDescription; color: Theme.text; wrapMode: Text.WordWrap }
-                            Repeater {
-                                model: root.build.pair_options
-                                delegate: Label {
-                                    required property var modelData
-                                    objectName: "widePairOption" + modelData.pair
+                            Button {
+                                objectName: "wideBuildContextToggle"
+                                Layout.fillWidth: true
+                                text: (root.contextExpanded ? "Hide" : "Show") + " why this pair"
+                                Accessible.name: text
+                                Accessible.description: root.contextExpanded
+                                    ? "The pair rationale is currently expanded. Activating this button collapses it."
+                                    : "The pair rationale is currently collapsed. Activating this button expands it."
+                                onClicked: root.contextExpanded = !root.contextExpanded
+                            }
+                            ColumnLayout {
+                                objectName: "wideBuildContextDetails"
+                                visible: root.contextExpanded
+                                Layout.fillWidth: true
+                                spacing: 4
+                                Label { text: "WHY THIS PAIR"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1 }
+                                Label {
                                     Layout.fillWidth: true
-                                    text: modelData.pair + " · score " + modelData.score.toFixed(1)
-                                        + " · " + (modelData.playable_count !== null
-                                            ? modelData.playable_count + " playables"
-                                            : "playables unavailable")
-                                        + (modelData.automatic ? " · automatic" : "")
-                                    color: modelData.selected ? Theme.primary : Theme.textMuted
+                                    text: root.pairDescription
+                                    color: Theme.text
                                     wrapMode: Text.WordWrap
-                                    Accessible.name: text
+                                }
+                                Repeater {
+                                    model: root.build.pair_options
+                                    delegate: Label {
+                                        required property var modelData
+                                        objectName: "widePairOption" + modelData.pair
+                                        Layout.fillWidth: true
+                                        text: modelData.pair + " · score " + modelData.score.toFixed(1)
+                                            + " · " + (modelData.playable_count !== null
+                                                ? modelData.playable_count + " playables"
+                                                : "playables unavailable")
+                                            + (modelData.automatic ? " · automatic" : "")
+                                        color: modelData.selected ? Theme.primary : Theme.textMuted
+                                        wrapMode: Text.WordWrap
+                                        Accessible.name: text
+                                    }
                                 }
                             }
                         }
@@ -882,9 +904,9 @@ Item {
                                     Repeater {
                                         model: root.spellsInBucket(bucket)
                                         delegate: BuildCardRow {
-                                            required property int modelData
-                                            cardEntry: root.build.spells[modelData]
-                                            entryIndex: modelData
+                                            required property var modelData
+                                            cardEntry: modelData.cardEntry
+                                            entryIndex: modelData.entryIndex
                                             objectName: root.compactPresentation ? "buildSpellButton" + entryIndex : ""
                                         }
                                     }
@@ -954,8 +976,10 @@ Item {
                     }
 
                     Rectangle {
+                        objectName: "narrowBuildContext"
                         visible: root.displayPreferences.detailedBuildContext
                         Layout.fillWidth: true
+                        Layout.preferredHeight: contextContent.implicitHeight + Theme.panelPadding * 2
                         color: Theme.surfaceLow
                         border.color: Theme.outline
                         border.width: 1
@@ -966,29 +990,41 @@ Item {
                             anchors.margins: Theme.panelPadding
                             spacing: 6
                             Button {
-                                objectName: "buildContextToggle"
+                                objectName: "narrowBuildContextToggle"
                                 Layout.fillWidth: true
                                 text: (root.contextExpanded ? "Hide" : "Show") + " why this pair"
-                                Accessible.name: "Toggle build reasoning and warnings"
+                                Accessible.name: text
+                                Accessible.description: root.contextExpanded
+                                    ? "The pair rationale is currently expanded. Activating this button collapses it."
+                                    : "The pair rationale is currently collapsed. Activating this button expands it."
                                 onClicked: root.contextExpanded = !root.contextExpanded
                             }
-                            Label {
+                            ColumnLayout {
+                                objectName: "narrowBuildContextDetails"
                                 visible: root.contextExpanded
                                 Layout.fillWidth: true
-                                text: root.pairDescription
-                                color: Theme.text
-                                wrapMode: Text.WordWrap
-                            }
-                            Repeater {
-                                visible: root.contextExpanded
-                                model: root.build.pair_options
-                                delegate: Label {
-                                    required property var modelData
+                                spacing: 6
+                                Label {
                                     Layout.fillWidth: true
-                                    text: modelData.pair + " · score " + modelData.score.toFixed(1) + " · " + (modelData.playable_count !== null ? modelData.playable_count + " playables" : "playables unavailable") + (modelData.automatic ? " · automatic" : "")
-                                    color: modelData.selected ? Theme.primary : Theme.textMuted
+                                    text: root.pairDescription
+                                    color: Theme.text
                                     wrapMode: Text.WordWrap
-                                    Accessible.name: text
+                                }
+                                Repeater {
+                                    model: root.build.pair_options
+                                    delegate: Label {
+                                        required property var modelData
+                                        objectName: "narrowPairOption" + modelData.pair
+                                        Layout.fillWidth: true
+                                        text: modelData.pair + " · score " + modelData.score.toFixed(1)
+                                            + " · " + (modelData.playable_count !== null
+                                                ? modelData.playable_count + " playables"
+                                                : "playables unavailable")
+                                            + (modelData.automatic ? " · automatic" : "")
+                                        color: modelData.selected ? Theme.primary : Theme.textMuted
+                                        wrapMode: Text.WordWrap
+                                        Accessible.name: text
+                                    }
                                 }
                             }
                         }
