@@ -23,6 +23,45 @@ Rectangle {
         anchors.margins: 12
         spacing: 8
 
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: !root.compact
+            spacing: 6
+
+            Label {
+                Layout.fillWidth: true
+                text: "DRAFTGOBLIN"
+                color: Theme.primary
+                font.pixelSize: 14
+                font.bold: true
+                font.letterSpacing: 1.2
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Rectangle {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.preferredWidth: 144
+                Layout.preferredHeight: 144
+                color: Theme.background
+                border.color: Theme.outline
+                border.width: 1
+                radius: Theme.radius
+                clip: true
+
+                Image {
+                    objectName: "draftgoblinLogo"
+                    anchors.fill: parent
+                    source: "../assets/draftgoblin_logo.png"
+                    sourceSize.width: 288
+                    sourceSize.height: 288
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    mipmap: true
+                    Accessible.name: "Draftgoblin logo"
+                }
+            }
+        }
+
         Repeater {
             model: [
                 { key: "live", label: "Live Draft", shortLabel: "Draft" },

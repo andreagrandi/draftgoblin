@@ -3,14 +3,17 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("PySide6")
 
+from draftgoblin import __version__
 from draftgoblin.audit import load_draft_audit_records
 from draftgoblin.pool import load_draft_state
+from draftgoblin.qt_gui import APPLICATION_NAME, _configure_application_metadata
 
 
 FIXTURE_ACCOUNT_ID = "FIXTURECLIENTID1234567890"
@@ -38,6 +41,38 @@ def _run_qml_probe(
         timeout=timeout,
         check=False,
     )
+
+
+def test_gui_metadata_uses_canonical_version_and_logo_resource() -> None:
+    class RecordingApplication:
+        def __init__(self) -> None:
+            self.metadata: dict[str, str] = {}
+
+        def setApplicationName(self, value: str) -> None:
+            self.metadata["name"] = value
+
+        def setApplicationDisplayName(self, value: str) -> None:
+            self.metadata["display_name"] = value
+
+        def setApplicationVersion(self, value: str) -> None:
+            self.metadata["version"] = value
+
+        def setOrganizationName(self, value: str) -> None:
+            self.metadata["organization"] = value
+
+    application = RecordingApplication()
+    _configure_application_metadata(application=application)  # type: ignore[arg-type]
+
+    assert application.metadata == {
+        "name": APPLICATION_NAME,
+        "display_name": APPLICATION_NAME,
+        "version": __version__,
+        "organization": APPLICATION_NAME,
+    }
+    source_logo = PROJECT_ROOT / "docs" / "assets" / "draftgoblin_logo.png"
+    runtime_logo = files("draftgoblin").joinpath("assets/draftgoblin_logo.png")
+    assert runtime_logo.is_file()
+    assert runtime_logo.read_bytes() == source_logo.read_bytes()
 
 
 def test_production_gui_processes_representative_arena_log_offscreen(
@@ -106,6 +141,7 @@ from PySide6.QtQuick import QQuickItem
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
 
+from draftgoblin import __version__
 from draftgoblin.carddb import build_card_database_from_bulk_file
 from draftgoblin.qt_adapter import GuiPreferencesAdapter, LiveSessionAdapter
 from draftgoblin.session import LiveSession
@@ -159,6 +195,7 @@ engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
 context.setContextProperty("sessionProvider", provider)
 context.setContextProperty("applicationTitle", "Draftgoblin")
+context.setContextProperty("applicationVersion", __version__)
 context.setContextProperty("guiPreferences", preferences)
 context.setContextProperty("initialSurface", "live")
 context.setContextProperty("initialWindowWidth", 1440)
@@ -230,6 +267,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 from PySide6.QtQuickControls2 import QQuickStyle
 
+from draftgoblin import __version__
 from draftgoblin.mock_session import MockLiveSession
 from draftgoblin.qt_adapter import GuiPreferencesAdapter
 from draftgoblin.qt_mock import MockSessionAdapter
@@ -257,6 +295,7 @@ engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
 context.setContextProperty("sessionProvider", provider)
 context.setContextProperty("applicationTitle", "Draftgoblin")
+context.setContextProperty("applicationVersion", __version__)
 context.setContextProperty("guiPreferences", preferences)
 context.setContextProperty("initialSurface", "live")
 context.setContextProperty("initialWindowWidth", 1440)
@@ -345,6 +384,7 @@ from PySide6.QtQuick import QQuickItem
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
 
+from draftgoblin import __version__
 from draftgoblin.mock_session import MockLiveSession
 from draftgoblin.qt_adapter import GuiPreferencesAdapter
 from draftgoblin.qt_mock import MockSessionAdapter
@@ -425,6 +465,7 @@ engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
 context.setContextProperty("sessionProvider", provider)
 context.setContextProperty("applicationTitle", "Draftgoblin")
+context.setContextProperty("applicationVersion", __version__)
 context.setContextProperty("guiPreferences", preferences)
 context.setContextProperty("initialSurface", "live")
 context.setContextProperty("initialWindowWidth", 1440)
@@ -491,6 +532,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtQuickControls2 import QQuickStyle
 
+from draftgoblin import __version__
 from draftgoblin.mock_session import MockLiveSession
 from draftgoblin.qt_adapter import GuiPreferencesAdapter
 from draftgoblin.qt_mock import MockSessionAdapter
@@ -539,6 +581,7 @@ context = engine.rootContext()
 context.setContextProperty("sessionProvider", provider)
 context.setContextProperty("guiPreferences", preferences)
 context.setContextProperty("applicationTitle", "Draftgoblin")
+context.setContextProperty("applicationVersion", __version__)
 context.setContextProperty("initialSurface", "settings")
 context.setContextProperty("initialWindowWidth", 1440)
 context.setContextProperty("initialWindowHeight", 900)
@@ -546,6 +589,16 @@ engine.setInitialProperties({"provider": provider})
 engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
 root = engine.rootObjects()[0]
 application.processEvents()
+assert root.property("desktopApplicationVersion") == __version__
+version_label = root.findChild(QObject, "applicationVersionLabel")
+assert version_label is not None and version_label.property("text") == "v" + __version__
+logo = find_visual_item(root.contentItem(), "draftgoblinLogo")
+app_bar_title = root.findChild(QObject, "appBarBrandTitle")
+assert logo is not None and logo.isVisible()
+assert app_bar_title is not None and app_bar_title.isVisible() is False
+accessible_logo = QAccessible.queryAccessibleInterface(logo)
+assert accessible_logo is not None
+assert accessible_logo.text(QAccessible.Text.Name) == "Draftgoblin logo"
 
 preview_switch = root.findChild(QObject, "settingsCardPreviewSwitch")
 assert preview_switch is not None and preview_switch.property("checked") is False
@@ -567,6 +620,8 @@ narrow_live_pool = find_visual_item(root.contentItem(), "narrowLivePoolDetails")
 assert live_tabs is not None and live_tabs.property("currentIndex") == 1
 assert narrow_live_preview is not None and narrow_live_preview.property("visible") is False
 assert narrow_live_pool is not None and narrow_live_pool.isVisible()
+assert logo.isVisible() is False
+assert app_bar_title.isVisible()
 
 preferences.setCardPreview(True)
 application.processEvents()

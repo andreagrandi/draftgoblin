@@ -6,6 +6,7 @@ Rectangle {
     id: root
 
     required property var sessionState
+    required property string applicationVersion
 
     color: Theme.surfaceLow
     implicitHeight: 34
@@ -38,6 +39,14 @@ Rectangle {
             color: Theme.textMuted
             font.pixelSize: 11
             elide: Text.ElideRight
+        }
+
+        Label {
+            objectName: "applicationVersionLabel"
+            text: "v" + root.applicationVersion
+            color: Theme.textMuted
+            font.pixelSize: 11
+            Accessible.name: "Draftgoblin version " + root.applicationVersion
         }
 
         Label {

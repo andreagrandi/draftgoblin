@@ -59,7 +59,7 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["draftgoblin*"]
 [tool.setuptools.package-data]
-draftgoblin = ["qml/*.qml", "qml/qmldir"]
+draftgoblin = ["assets/*.png", "qml/*.qml", "qml/qmldir"]
 
 
 [tool.pytest.ini_options]
