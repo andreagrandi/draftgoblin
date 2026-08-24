@@ -43,6 +43,7 @@ Rectangle {
                 checked: root.currentSurface === navigationButton.modelData.key
                 ButtonGroup.group: navigationGroup
                 Accessible.name: navigationButton.modelData.label
+                Accessible.description: "Open the " + navigationButton.modelData.label + " surface."
                 onClicked: root.surfaceRequested(navigationButton.modelData.key)
 
                 background: Rectangle {

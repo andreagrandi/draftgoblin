@@ -1,4 +1,4 @@
-"""Persisted user settings for the Textual interface.
+"""Persisted user settings for Draftgoblin interfaces.
 Keep optional behavior and layout choices stable across app restarts.
 """
 
@@ -148,6 +148,133 @@ def save_tui_preferences(
         temporary_path.replace(path)
     except OSError as error:
         return f"Could not save TUI preferences: {error}"
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+
+    return None
+
+
+GUI_PREFERENCES_FILE_NAME = "gui-preferences.json"
+GUI_PREFERENCES_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class GuiDisplayPreferences:
+    """User-controlled desktop display choices independent from the live session.
+    Functional draft choices remain owned by explicit live-session commands.
+    """
+
+    compact_density: bool = False
+    secondary_stats: bool = True
+    card_preview: bool = True
+    detailed_build_context: bool = True
+
+
+def gui_preferences_path(*, app_dir: PathInput | None = None) -> Path:
+    """Return the path used for persisted desktop display preferences.
+    The file lives directly in Draftgoblin's per-user application directory.
+    """
+
+    root = Path(app_data_dir() if app_dir is None else app_dir).expanduser()
+    return root / GUI_PREFERENCES_FILE_NAME
+
+
+def load_gui_preferences(
+    *,
+    app_dir: PathInput | None = None,
+) -> tuple[GuiDisplayPreferences, str | None]:
+    """Load desktop display preferences, falling back safely to defaults.
+    A warning describes malformed or unsupported configuration without blocking startup.
+    """
+
+    try:
+        path = gui_preferences_path(app_dir=app_dir)
+        raw_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return GuiDisplayPreferences(), None
+    except (OSError, UnicodeDecodeError) as error:
+        return GuiDisplayPreferences(), f"Could not load GUI preferences: {error}"
+
+    try:
+        raw_data = json.loads(raw_text)
+    except json.JSONDecodeError as error:
+        return GuiDisplayPreferences(), f"Could not load GUI preferences: {error}"
+
+    if not isinstance(raw_data, dict):
+        return GuiDisplayPreferences(), "Could not load GUI preferences: expected an object."
+    if raw_data.get("version") != GUI_PREFERENCES_SCHEMA_VERSION:
+        return (
+            GuiDisplayPreferences(),
+            "Could not load GUI preferences: unsupported settings version.",
+        )
+
+    display = raw_data.get("display")
+    if not isinstance(display, dict):
+        return (
+            GuiDisplayPreferences(),
+            "Could not load GUI preferences: expected a display object.",
+        )
+
+    defaults = GuiDisplayPreferences()
+    values = asdict(defaults)
+    invalid_fields: list[str] = []
+    for field_name, default_value in values.items():
+        value = display.get(field_name, default_value)
+        if type(value) is not bool:
+            invalid_fields.append(field_name)
+            continue
+        values[field_name] = value
+
+    preferences = GuiDisplayPreferences(**values)
+    if not invalid_fields:
+        return preferences, None
+    return (
+        preferences,
+        "GUI preferences used defaults for invalid fields: "
+        + ", ".join(invalid_fields)
+        + ".",
+    )
+
+
+def save_gui_preferences(
+    *,
+    preferences: GuiDisplayPreferences,
+    app_dir: PathInput | None = None,
+) -> str | None:
+    """Atomically save desktop display preferences and return a non-fatal error.
+    The active GUI can continue using a changed preference when persistence fails.
+    """
+
+    path = gui_preferences_path(app_dir=app_dir)
+    temporary_path: Path | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            delete=False,
+        ) as temporary_file:
+            json.dump(
+                {
+                    "version": GUI_PREFERENCES_SCHEMA_VERSION,
+                    "display": asdict(preferences),
+                },
+                temporary_file,
+                indent=2,
+                sort_keys=True,
+            )
+            temporary_file.write("\n")
+            temporary_path = Path(temporary_file.name)
+        temporary_path.replace(path)
+    except OSError as error:
+        return f"Could not save GUI preferences: {error}"
     finally:
         if temporary_path is not None:
             try:

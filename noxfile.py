@@ -20,9 +20,11 @@ def gui(session: nox.Session) -> None:
         "uv",
         "run",
         "pytest",
+        "tests/test_session.py",
         "tests/test_qt_adapter.py",
         "tests/test_qt_mock.py",
-        external=True,
+        "tests/test_qt_gui.py",
+        "tests/test_preferences.py",
     )
     session.run(
         "uv",

@@ -9,12 +9,13 @@ Item {
 
     required property var sessionState
     required property bool narrow
+    required property var displayPreferences
 
     ScrollView {
         id: settingsScroll
-        contentWidth: availableWidth
         anchors.fill: parent
         clip: true
+        contentWidth: availableWidth
 
         ColumnLayout {
             width: settingsScroll.availableWidth
@@ -26,10 +27,9 @@ Item {
                 font.pixelSize: 22
                 font.bold: true
             }
-
             Label {
                 Layout.fillWidth: true
-                text: "Draft guidance and display preferences for the desktop application."
+                text: "Draft guidance uses the shared live session. Display choices are saved only for this desktop application."
                 color: Theme.textMuted
                 wrapMode: Text.WordWrap
             }
@@ -55,19 +55,23 @@ Item {
                         font.bold: true
                         font.letterSpacing: 1.1
                     }
-
                     RowLayout {
                         Layout.fillWidth: true
-
                         ColumnLayout {
                             Layout.fillWidth: true
                             Label { text: "Default ranking"; color: Theme.text; font.bold: true }
-                            Label { text: "Controls recommendation order and backtest comparison."; color: Theme.textMuted; font.pixelSize: 11 }
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Controls recommendation order and backtest comparison."
+                                color: Theme.textMuted
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                            }
                         }
-
                         ComboBox {
                             id: defaultRanking
-                            Layout.preferredWidth: 168
+                            objectName: "settingsRankingSelector"
+                            Layout.preferredWidth: root.narrow ? 140 : 168
                             model: [
                                 { key: "score", label: "DG Score" },
                                 { key: "win_rate", label: "17L WR" },
@@ -81,22 +85,29 @@ Item {
                                         return index
                                 return 0
                             }
+                            Accessible.name: "Default recommendation ranking"
+                            Accessible.description: "Changes the shared live-session recommendation ranking."
                             onActivated: sessionProvider.changeRanking(model[currentIndex].key)
                         }
                     }
-
                     RowLayout {
                         Layout.fillWidth: true
-
                         ColumnLayout {
                             Layout.fillWidth: true
                             Label { text: "Splash recommendations"; color: Theme.text; font.bold: true }
-                            Label { text: "Consider supported single-pip cards when fixing allows."; color: Theme.textMuted; font.pixelSize: 11 }
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Consider supported single-pip cards when fixing allows."
+                                color: Theme.textMuted
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                            }
                         }
-
                         Switch {
+                            objectName: "settingsSplashSwitch"
                             checked: root.sessionState.recommendations.splash_enabled
                             Accessible.name: "Splash recommendations"
+                            Accessible.description: "Changes the shared live-session splash preference."
                             onToggled: sessionProvider.setSplashEnabled(checked)
                         }
                     }
@@ -116,7 +127,6 @@ Item {
                     anchors.fill: parent
                     anchors.margins: 16
                     spacing: 12
-
                     Label {
                         text: "DISPLAY"
                         color: Theme.primary
@@ -124,29 +134,74 @@ Item {
                         font.bold: true
                         font.letterSpacing: 1.1
                     }
-
-                    Repeater {
-                        model: [
-                            { label: "Compact density", detail: "Reduce row spacing while retaining keyboard targets.", checked: false },
-                            { label: "Secondary statistics", detail: "Show ALSA, mana value, and source details.", checked: true },
-                            { label: "Card image preview", detail: "Keep the selected card image visible when space allows.", checked: true },
-                            { label: "Detailed build context", detail: "Show pair reasoning and durable build warnings.", checked: true }
-                        ]
-
-                        delegate: RowLayout {
-                            required property var modelData
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ColumnLayout {
                             Layout.fillWidth: true
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                Label { text: modelData.label; color: Theme.text; font.bold: true }
-                                Label { text: modelData.detail; color: Theme.textMuted; font.pixelSize: 11 }
-                            }
-                            Switch {
-                                checked: modelData.checked
-                                Accessible.name: modelData.label
-                            }
+                            Label { text: "Compact density"; color: Theme.text; font.bold: true }
+                            Label { Layout.fillWidth: true; text: "Reduce list spacing while retaining 40px targets."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
                         }
+                        Switch {
+                            objectName: "settingsCompactDensitySwitch"
+                            checked: root.displayPreferences.compactDensity
+                            Accessible.name: "Compact density"
+                            Accessible.description: "Saved desktop display preference."
+                            onToggled: root.displayPreferences.setCompactDensity(checked)
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Label { text: "Secondary statistics"; color: Theme.text; font.bold: true }
+                            Label { Layout.fillWidth: true; text: "Show ALSA, mana value, and source details."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                        }
+                        Switch {
+                            objectName: "settingsSecondaryStatsSwitch"
+                            checked: root.displayPreferences.secondaryStats
+                            Accessible.name: "Secondary statistics"
+                            Accessible.description: "Saved desktop display preference."
+                            onToggled: root.displayPreferences.setSecondaryStats(checked)
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Label { text: "Card image preview"; color: Theme.text; font.bold: true }
+                            Label { Layout.fillWidth: true; text: "Keep the selected card image visible when space allows."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                        }
+                        Switch {
+                            objectName: "settingsCardPreviewSwitch"
+                            checked: root.displayPreferences.cardPreview
+                            Accessible.name: "Card image preview"
+                            Accessible.description: "Saved desktop display preference."
+                            onToggled: root.displayPreferences.setCardPreview(checked)
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Label { text: "Detailed build context"; color: Theme.text; font.bold: true }
+                            Label { Layout.fillWidth: true; text: "Show pair reasoning and durable build warnings."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                        }
+                        Switch {
+                            objectName: "settingsDetailedBuildContextSwitch"
+                            checked: root.displayPreferences.detailedBuildContext
+                            Accessible.name: "Detailed build context"
+                            Accessible.description: "Saved desktop display preference."
+                            onToggled: root.displayPreferences.setDetailedBuildContext(checked)
+                        }
+                    }
+                    Label {
+                        objectName: "settingsPersistenceMessage"
+                        Layout.fillWidth: true
+                        text: root.displayPreferences.persistenceMessage
+                        color: root.displayPreferences.persistenceMessage === "Saved" ? Theme.primary : Theme.warning
+                        font.pixelSize: 11
+                        Accessible.name: text
+                        Accessible.description: "Display preference persistence status: " + text
                     }
                 }
             }
@@ -158,20 +213,12 @@ Item {
                 border.color: Theme.outline
                 border.width: 1
                 radius: Theme.radius
-
                 ColumnLayout {
                     id: accessibilityLayout
                     anchors.fill: parent
                     anchors.margins: 16
                     spacing: 8
-
-                    Label {
-                        text: "ACCESSIBILITY"
-                        color: Theme.primary
-                        font.pixelSize: 10
-                        font.bold: true
-                        font.letterSpacing: 1.1
-                    }
+                    Label { text: "ACCESSIBILITY"; color: Theme.primary; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1.1 }
                     Label { text: "System text scaling"; color: Theme.text; font.bold: true }
                     Label {
                         Layout.fillWidth: true
@@ -189,58 +236,52 @@ Item {
                 border.color: Theme.outline
                 border.width: 1
                 radius: Theme.radius
-
                 ColumnLayout {
                     id: dataLayout
                     anchors.fill: parent
                     anchors.margins: 16
                     spacing: 10
-
-                    Label {
-                        text: "DATA STATUS"
-                        color: Theme.primary
-                        font.pixelSize: 10
-                        font.bold: true
-                        font.letterSpacing: 1.1
-                    }
+                    Label { text: "DATA STATUS"; color: Theme.primary; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1.1 }
                     Label { text: "Card metadata · " + root.sessionState.card_data.message; color: Theme.text }
                     Label { text: "Ratings · " + root.sessionState.ratings.message; color: Theme.textMuted }
                     Label { text: "Statistics attribution · 17Lands"; color: Theme.textMuted }
                     Button {
+                        id: settingsRatingsDownloadButton
                         objectName: "settingsRatingsDownloadButton"
-                        enabled: root.sessionState.ratings.set_code !== null
-                            && root.sessionState.ratings.set_code !== undefined
-                            && root.sessionState.ratings.phase !== "loading"
+                        enabled: root.sessionState.ratings.set_code !== null && root.sessionState.ratings.set_code !== undefined && root.sessionState.ratings.phase !== "loading"
                         text: "Download or refresh ratings"
                         Accessible.name: "Download or refresh ratings"
-                        onClicked: ratingsDownloadDialog.open()
+                        Accessible.description: "Requests ratings through the shared live session."
+                        onClicked: {
+                            ratingsDownloadDialog.returnFocusItem = settingsRatingsDownloadButton
+                            ratingsDownloadDialog.open()
+                        }
                     }
                 }
             }
-
-            Item {
-                Layout.preferredHeight: 12
-            }
+            Item { Layout.preferredHeight: 12 }
         }
     }
 
     Dialog {
         id: ratingsDownloadDialog
         objectName: "settingsRatingsDownloadDialog"
+        property var returnFocusItem: null
         implicitWidth: 400
         modal: true
+        focus: true
         parent: Overlay.overlay
         title: "Download ratings?"
-
+        onClosed: {
+            if (returnFocusItem)
+                returnFocusItem.forceActiveFocus()
+        }
         Label {
             width: 360
-            text: "Download 17Lands ratings for "
-                + root.sessionState.ratings.set_code
-                + "? Neutral-prior recommendations remain available while it loads."
+            text: "Download 17Lands ratings for " + root.sessionState.ratings.set_code + "? Neutral-prior recommendations remain available while it loads."
             color: Theme.text
             wrapMode: Text.WordWrap
         }
-
         footer: DialogButtonBox {
             Button {
                 objectName: "settingsRatingsDownloadCancelButton"
@@ -248,7 +289,6 @@ Item {
                 Accessible.name: "Cancel ratings download"
                 onClicked: ratingsDownloadDialog.close()
             }
-
             Button {
                 objectName: "settingsRatingsDownloadConfirmButton"
                 text: "Download ratings"
@@ -261,4 +301,3 @@ Item {
         }
     }
 }
-

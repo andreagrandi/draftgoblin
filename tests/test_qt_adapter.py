@@ -14,7 +14,11 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QCoreApplication, QObject, QUrl, Slot
 
 from draftgoblin.mock_session import MockLiveSession
-from draftgoblin.qt_adapter import LiveSessionAdapter, SessionAdapter
+from draftgoblin.qt_adapter import (
+    GuiPreferencesAdapter,
+    LiveSessionAdapter,
+    SessionAdapter,
+)
 from draftgoblin.session import (
     ChangeRanking,
     ChangeSplashPreference,
@@ -402,3 +406,26 @@ def test_live_adapter_surfaces_and_dismisses_worker_initialization_errors(
         assert adapter.state["errors"] == []
     finally:
         adapter.shutdown()
+
+
+def test_gui_preferences_adapter_persists_display_choices_independently(
+    qcore_application: QCoreApplication,
+    tmp_path: Path,
+) -> None:
+    del qcore_application
+    adapter = GuiPreferencesAdapter(app_dir=tmp_path / "app")
+    changes: list[bool] = []
+    adapter.preferencesChanged.connect(lambda: changes.append(True))
+
+    adapter.setCompactDensity(True)
+    adapter.setSecondaryStats(False)
+    adapter.setCardPreview(False)
+    adapter.setDetailedBuildContext(False)
+    reloaded = GuiPreferencesAdapter(app_dir=tmp_path / "app")
+
+    assert changes == [True, True, True, True]
+    assert adapter.persistenceMessage == "Saved"
+    assert reloaded.compactDensity is True
+    assert reloaded.secondaryStats is False
+    assert reloaded.cardPreview is False
+    assert reloaded.detailedBuildContext is False

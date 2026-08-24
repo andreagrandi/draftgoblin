@@ -24,7 +24,12 @@ from draftgoblin.carddb import (
 from draftgoblin.cardimages import CardImageService, card_image_cache_dir
 from draftgoblin.mock_session import MOCK_SCENARIOS, MockLiveSession, MockScenario
 from draftgoblin.paths import resolve_player_log_path
-from draftgoblin.qt_adapter import LiveSessionAdapter, SessionAdapter, SessionFactory
+from draftgoblin.qt_adapter import (
+    GuiPreferencesAdapter,
+    LiveSessionAdapter,
+    SessionAdapter,
+    SessionFactory,
+)
 from draftgoblin.qt_mock import MockSessionAdapter
 from draftgoblin.session import LiveSession, SnapshotPublisher
 from draftgoblin.seventeen import (
@@ -233,11 +238,13 @@ def run_gui(
     application.setOrganizationName("Draftgoblin")
 
     provider = _build_provider(args=args)
+    preferences = GuiPreferencesAdapter(app_dir=args.app_dir, parent=application)
     engine = QQmlApplicationEngine()
     qml_directory = Path(__file__).with_name("qml")
     engine.addImportPath(str(qml_directory))
     context = engine.rootContext()
     context.setContextProperty("sessionProvider", provider)
+    context.setContextProperty("guiPreferences", preferences)
     context.setContextProperty("applicationTitle", "Draftgoblin")
     context.setContextProperty("initialSurface", args.surface)
     context.setContextProperty("initialWindowWidth", args.width)
