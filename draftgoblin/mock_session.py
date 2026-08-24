@@ -234,6 +234,17 @@ def _build() -> BuildResult:
             zip(CARDS[:6], (1, 2, 1, 2, 3, 1), strict=True)
         )
     )
+    spell_quantity_total = sum(entry.quantity for entry in spells)
+    weighted_mana_total = sum(
+        entry.quantity * entry.card.mana_value
+        for entry in spells
+        if entry.card.mana_value is not None
+    )
+    average_mana_value = (
+        weighted_mana_total / spell_quantity_total
+        if all(entry.card.mana_value is not None for entry in spells)
+        else None
+    )
     bench = (
         BuildCard(
             card=CARDS[6],
@@ -284,6 +295,7 @@ def _build() -> BuildResult:
         ),
         bench=bench,
         deck_size=40,
+        average_mana_value=average_mana_value,
         warnings=("Two flexible slots use lower-confidence ratings.",),
         spell_count=23,
         land_count=17,

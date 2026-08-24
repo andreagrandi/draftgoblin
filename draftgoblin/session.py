@@ -349,6 +349,7 @@ class BuildResult:
     lands: tuple[BuildLand, ...]
     bench: tuple[BuildCard, ...]
     deck_size: int
+    average_mana_value: float | None = None
     pair_override: str | None = None
     warnings: tuple[str, ...] = ()
     spell_count: int | None = None
@@ -1012,6 +1013,11 @@ class LiveSession:
         )
         spell_selection = build_sheet.spell_selection
         mana_base = build_sheet.mana_base
+        average_mana_value = (
+            None
+            if any(spell.card.mana_value is None for spell in spell_selection.spells)
+            else mana_base.average_mana_value
+        )
         return BuildResult(
             selected_pair=selection.chosen.pair,
             pair_options=tuple(
@@ -1055,6 +1061,7 @@ class LiveSession:
             ),
             bench=_build_cards(cards=spell_selection.bench),
             deck_size=mana_base.total_cards,
+            average_mana_value=average_mana_value,
             pair_override=selection.forced_pair,
             spell_count=len(spell_selection.spells),
             land_count=mana_base.total_cards - len(spell_selection.spells),

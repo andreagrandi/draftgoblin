@@ -20,6 +20,7 @@ Item {
         lands: [],
         bench: [],
         deck_size: 0,
+        average_mana_value: null,
         pair_override: null,
         warnings: [],
         spell_count: null,
@@ -121,6 +122,13 @@ Item {
         return spell.card.mana_value
     }
 
+    function averageManaValueText() {
+        const average = root.build.average_mana_value
+        if (average === null || average === undefined)
+            return "Average mana value: —"
+        return "Average mana value: " + Number(average).toFixed(2)
+    }
+
     function manaBucket(spell) {
         const manaValue = root.spellManaValue(spell)
         if (manaValue === null)
@@ -215,17 +223,29 @@ Item {
             anchors.fill: parent
             anchors.margins: Theme.panelPadding
             spacing: 8
-            RowLayout {
+            ColumnLayout {
                 Layout.fillWidth: true
-                Label {
-                    text: "MANA CURVE"
-                    color: Theme.textMuted
-                    font.pixelSize: 10
-                    font.bold: true
-                    font.letterSpacing: 1
+                spacing: 2
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label {
+                        text: "MANA CURVE"
+                        color: Theme.textMuted
+                        font.pixelSize: 10
+                        font.bold: true
+                        font.letterSpacing: 1
+                    }
+                    Item { Layout.fillWidth: true }
+                    Label {
+                        objectName: "manaCurveAverage"
+                        text: root.averageManaValueText()
+                        color: Theme.textMuted
+                        font.pixelSize: 11
+                        Accessible.name: text
+                    }
                 }
-                Item { Layout.fillWidth: true }
                 Label {
+                    Layout.fillWidth: true
                     text: "spells by mana value"
                     color: Theme.textMuted
                     font.pixelSize: 11

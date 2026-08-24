@@ -1047,6 +1047,11 @@ def test_live_session_build_request_publishes_structured_ordered_result(
     assert snapshot.build is not None
     assert snapshot.build.selected_pair == "WU"
     assert snapshot.build.pair_override == "WU"
+    assert snapshot.build.domain_mana_base is not None
+    assert (
+        snapshot.build.average_mana_value
+        == snapshot.build.domain_mana_base.average_mana_value
+    )
     assert sum(card.quantity for card in snapshot.build.spells) == len(database.cards)
     assert all(card.score is not None for card in snapshot.build.spells)
     assert [
@@ -1065,6 +1070,45 @@ def test_live_session_build_request_publishes_structured_ordered_result(
         option.pair == "WU" and option.selected and option.automatic
         for option in snapshot.build.pair_options
     )
+
+
+def test_live_session_build_average_is_unavailable_for_unknown_spell_mana(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    database = _fixture_card_database()
+    unknown_grp_id = next(iter(database.cards))
+    unknown_card = database.cards[unknown_grp_id]
+    database = replace(
+        database,
+        cards={
+            **database.cards,
+            unknown_grp_id: replace(unknown_card, mana_value=None),
+        },
+    )
+    save_draft_state(
+        state=_draft_state(
+            account_id="account-1",
+            screen_name="Player",
+            draft_id="draft-unknown-mana",
+            updated_at="2026-08-23T10:00:00+00:00",
+            pool_grp_ids=tuple(database.cards),
+        ),
+        app_dir=app_dir,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=database,
+    )
+    session.dispatch(command=ChooseAccount(account_id="account-1"))
+
+    snapshot = session.dispatch(command=RequestBuild())
+
+    assert snapshot.build is not None
+    assert snapshot.build.domain_mana_base is not None
+    assert snapshot.build.domain_mana_base.average_mana_value > 0
+    assert snapshot.build.average_mana_value is None
 
 
 def test_live_session_build_request_reports_empty_and_invalid_builds(
