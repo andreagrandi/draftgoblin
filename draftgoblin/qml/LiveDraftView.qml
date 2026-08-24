@@ -11,16 +11,23 @@ Item {
     required property var recommendationModel
     required property bool narrow
     required property var displayPreferences
+
     readonly property bool hasRecommendations: sessionState.recommendations
         && sessionState.recommendations.cards
         && sessionState.recommendations.cards.length > 0
+    readonly property string confidenceSummary: {
+        const recommendations = sessionState.recommendations
+        return recommendations && recommendations.confidence_summary
+            ? String(recommendations.confidence_summary) : ""
+    }
+
     readonly property string draftHeading: {
         const draft = sessionState.draft
         if (!draft)
             return sessionState.status.message
         if (draft.completed)
             return "Draft complete"
-        if (draft.pack_number === null)
+        if (draft.pack_number === null || draft.pick_number === null)
             return draft.event_name
         return "Pack " + (draft.pack_number + 1)
             + " · Pick " + (draft.pick_number + 1)
@@ -32,7 +39,6 @@ Item {
             return "Loading live draft data"
         return "Ready for your next Quick Draft"
     }
-
     readonly property var selectedRecommendation: {
         const recommendations = sessionState.recommendations
         if (!recommendations || !recommendations.cards)
@@ -43,7 +49,7 @@ Item {
             if (recommendation.card.grp_id === recommendations.selected_grp_id)
                 return recommendation
         }
-        return null
+        return cards.length > 0 ? cards[0] : null
     }
 
     property bool recommendationFocusPublishedWhileVisible: false
@@ -71,7 +77,7 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 12
+            spacing: 16
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -87,24 +93,38 @@ Item {
                 Label {
                     text: root.hasRecommendations
                         ? root.sessionState.recommendations.cards.length
-                            + " cards available · Choose a recommendation"
+                            + " cards available"
                         : root.sessionState.status.message
                     color: Theme.textMuted
                 }
             }
 
-            Label {
-                visible: !root.narrow
-                text: "RANK BY"
-                color: Theme.textMuted
-                font.pixelSize: 10
-                font.bold: true
+            ColumnLayout {
+                visible: root.hasRecommendations
+                Layout.alignment: Qt.AlignVCenter
+                spacing: 2
+
+                Label {
+                    objectName: "recommendationConfidenceSummary"
+                    visible: root.confidenceSummary.length > 0
+                    text: root.confidenceSummary
+                    color: Theme.text
+                    font.pixelSize: 11
+                    font.bold: true
+                    wrapMode: Text.WordWrap
+                }
+
+                Label {
+                    text: root.sessionState.status.message
+                    color: Theme.textMuted
+                    font.pixelSize: 11
+                }
             }
 
             ComboBox {
                 id: rankingSelector
                 objectName: "rankingSelector"
-                Layout.preferredWidth: root.narrow ? 130 : 166
+                Layout.preferredWidth: root.narrow ? 138 : 166
                 model: [
                     { key: "score", label: "DG Score" },
                     { key: "win_rate", label: "17L WR" },
@@ -113,12 +133,16 @@ Item {
                 ]
                 textRole: "label"
                 currentIndex: {
+                    const recommendations = root.sessionState.recommendations
+                    if (!recommendations)
+                        return 0
                     for (let index = 0; index < model.length; index++)
-                        if (model[index].key === root.sessionState.recommendations.ranking_mode)
+                        if (model[index].key === recommendations.ranking_mode)
                             return index
                     return 0
                 }
                 Accessible.name: "Recommendation ranking"
+                Accessible.description: "Choose DG Score, 17L WR, ALSA, or mana value."
                 onActivated: sessionProvider.changeRanking(model[currentIndex].key)
             }
         }
@@ -213,7 +237,7 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumWidth: 430
+                Layout.minimumWidth: 500
                 color: "transparent"
 
                 ColumnLayout {
@@ -225,125 +249,134 @@ Item {
                         Layout.leftMargin: 12
                         Layout.rightMargin: 12
 
-                        Label { Layout.preferredWidth: 26; text: "#"; color: Theme.textMuted; font.pixelSize: 10 }
+                        Label { Layout.preferredWidth: 30; text: "#"; color: Theme.textMuted; font.pixelSize: 10 }
                         Label { Layout.fillWidth: true; text: "CARD"; color: Theme.textMuted; font.pixelSize: 10 }
-                        Label { Layout.preferredWidth: 64; text: "COLOR"; color: Theme.textMuted; font.pixelSize: 10 }
-                        Label { Layout.preferredWidth: 52; text: "DG"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
-                        Label { visible: root.displayPreferences.secondaryStats; Layout.preferredWidth: 58; text: "17L WR"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
-                        Label { Layout.preferredWidth: 34; text: "GRADE"; color: Theme.textMuted; font.pixelSize: 10 }
-                        Label { Layout.preferredWidth: 84; text: "FIT"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
+                        Label { Layout.preferredWidth: 70; text: "COLORS"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter }
+                        Label { Layout.preferredWidth: 58; text: "DG"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
+                        Label { Layout.preferredWidth: 68; text: "17L WR"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
+                        Label { Layout.preferredWidth: 44; text: "GRADE"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter }
+                        Label { Layout.preferredWidth: 82; text: "FIT"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
                     }
 
                     ListView {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        spacing: root.displayPreferences.compactDensity ? 3 : 5
-                        clip: true
-                        model: root.recommendationModel
-                        Accessible.name: "Ranked recommendations"
-
                         delegate: RecommendationRow {
                             required property var modelData
+                            objectName: "wideRecommendationRow" + modelData.rank
 
                             width: ListView.view.width
                             recommendation: modelData
-                            selected: root.sessionState.recommendations.selected_grp_id === modelData.card.grp_id
+                            selected: root.sessionState.recommendations.selected_grp_id
+                                === modelData.card.grp_id
                             wide: true
                             secondaryStats: root.displayPreferences.secondaryStats
                             onChosen: grpId => sessionProvider.chooseRecommendation(grpId)
                         }
+                        clip: true
+                        model: root.recommendationModel
+                        Accessible.name: "Ranked recommendations"
+
                     }
                 }
             }
 
-            CardPreview {
-                visible: root.displayPreferences.cardPreview
-                Layout.preferredWidth: 292
+            ColumnLayout {
+                Layout.preferredWidth: 410
                 Layout.fillHeight: true
-                recommendation: root.selectedRecommendation
-                loading: root.sessionState.card_data.phase === "loading"
-                imageState: root.sessionState.card_image
-            }
-
-            PoolSummaryPanel {
-                Layout.preferredWidth: 252
-                Layout.fillHeight: true
-                pool: root.sessionState.pool
-            }
-        }
-
-        ColumnLayout {
-            visible: root.narrow && root.hasRecommendations
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 8
-
-            ListView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.minimumHeight: 260
-                spacing: root.displayPreferences.compactDensity ? 3 : 6
-                clip: true
-                model: root.recommendationModel
-                Accessible.name: "Ranked recommendations"
-
-                delegate: RecommendationRow {
-                    required property var modelData
-
-                    width: ListView.view.width
-                    recommendation: modelData
-                    selected: root.sessionState.recommendations.selected_grp_id === modelData.card.grp_id
-                    secondaryStats: root.displayPreferences.secondaryStats
-                    wide: false
-                    onChosen: grpId => sessionProvider.chooseRecommendation(grpId)
-                }
-            }
-
-            TabBar {
-                id: detailTabs
-                objectName: "liveDetailTabs"
-                Layout.fillWidth: true
-                Component.onCompleted: {
-                    if (!root.displayPreferences.cardPreview)
-                        detailTabs.setCurrentIndex(1)
-                }
-
-                TabButton {
-                    visible: root.displayPreferences.cardPreview
-                    text: "Card details"
-                    Accessible.name: "Card details"
-                }
-                TabButton { text: "Pool"; Accessible.name: "Pool details" }
-            }
-
-            Connections {
-                target: root.displayPreferences
-
-                function onPreferencesChanged() {
-                    if (!root.displayPreferences.cardPreview)
-                        detailTabs.setCurrentIndex(1)
-                }
-            }
-
-            StackLayout {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 330
-                currentIndex: root.displayPreferences.cardPreview ? detailTabs.currentIndex : 1
+                Layout.minimumWidth: 350
+                spacing: Theme.gutter
 
                 CardPreview {
-                    objectName: "narrowLiveCardPreview"
-                    visible: root.displayPreferences.cardPreview
+                    objectName: "wideLiveCardPreview"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 340
+                    Layout.minimumHeight: 320
                     recommendation: root.selectedRecommendation
+                    detailedIntel: true
                     loading: root.sessionState.card_data.phase === "loading"
                     imageState: root.sessionState.card_image
+                    constrainImageFrameToHeight: true
                 }
 
                 PoolSummaryPanel {
-                    objectName: "narrowLivePoolDetails"
+                    objectName: "wideLivePoolDetails"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 180
                     pool: root.sessionState.pool
                 }
             }
         }
+
+    ColumnLayout {
+        visible: root.narrow && root.hasRecommendations
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        spacing: 8
+
+        ListView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: 220
+            spacing: root.displayPreferences.compactDensity ? 3 : 6
+            clip: true
+            model: root.recommendationModel
+            Accessible.name: "Ranked recommendations"
+
+            delegate: RecommendationRow {
+                required property var modelData
+                objectName: "narrowRecommendationRow" + modelData.rank
+
+                width: ListView.view.width
+                recommendation: modelData
+                selected: root.sessionState.recommendations.selected_grp_id
+                    === modelData.card.grp_id
+                secondaryStats: root.displayPreferences.secondaryStats
+                wide: false
+                onChosen: grpId => sessionProvider.chooseRecommendation(grpId)
+            }
+        }
+
+        TabBar {
+            id: detailTabs
+            objectName: "liveDetailTabs"
+            Layout.fillWidth: true
+            currentIndex: 0
+            Accessible.name: "Live draft details"
+
+            TabButton {
+                objectName: "liveCardDetailsTab"
+                text: "Card details"
+                Accessible.name: "Card details"
+            }
+            TabButton {
+                objectName: "livePoolTab"
+                text: "Pool"
+                Accessible.name: "Pool details"
+            }
+        }
+
+        StackLayout {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 300
+            currentIndex: detailTabs.currentIndex
+
+            CardPreview {
+                objectName: "narrowLiveCardPreview"
+                recommendation: root.selectedRecommendation
+                detailedIntel: true
+                loading: root.sessionState.card_data.phase === "loading"
+                imageState: root.sessionState.card_image
+                constrainImageFrameToHeight: true
+            }
+
+            PoolSummaryPanel {
+                objectName: "narrowLivePoolDetails"
+                pool: root.sessionState.pool
+            }
+        }
+    }
     }
 }
 

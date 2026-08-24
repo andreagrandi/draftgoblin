@@ -51,7 +51,11 @@ from draftgoblin.events import (
     PickMadeEvent,
     QuickDraftDetectedEvent,
 )
-from draftgoblin.pickengine import ScoredCard, ScoredPack
+from draftgoblin.pickengine import (
+    ScoredCard,
+    ScoredPack,
+    recommendation_confidence_summary,
+)
 from draftgoblin.preferences import (
     TuiVisibilityPreferences,
     load_tui_preferences,
@@ -134,8 +138,6 @@ UNKNOWN_COLOR_KEY = "?"
 CURVE_BUCKET_LABELS = ("0", "1", "2", "3", "4", "5", "6+")
 SPARKLINE_GLYPHS = "▁▂▃▄▅▆▇█"
 CARD_IMAGE_PREVIEW_ENV = "DRAFTGOBLIN_CARD_IMAGES"
-CLOSE_DG_SCORE_THRESHOLD = 3.0
-CLOSE_WIN_RATE_THRESHOLD = 0.01
 MANA_ICON_GLYPHS = {
     "W": "\ue600",
     "U": "\ue601",
@@ -2413,7 +2415,7 @@ class DraftgoblinTuiApp(App[None]):
         if self._view_mode != "pack" or self._current_pack is None:
             return None
 
-        return _recommendation_confidence_label(
+        return recommendation_confidence_summary(
             cards=self._sorted_cards(),
             ranking_mode=self.sort_mode,
             phase=self._current_pack.commitment.phase,
@@ -3682,49 +3684,6 @@ def run_tui_watch(
     return 0
 
 
-def _recommendation_confidence_label(
-    *,
-    cards: tuple[ScoredCard, ...],
-    ranking_mode: str,
-    phase: str,
-) -> str | None:
-    close_label = _close_pick_label(cards=cards, ranking_mode=ranking_mode)
-    if phase == "open":
-        if close_label is not None:
-            return f"early/open {close_label}; stay flexible"
-
-        return "early/open pick — stay flexible"
-
-    return close_label
-
-
-def _close_pick_label(
-    *,
-    cards: tuple[ScoredCard, ...],
-    ranking_mode: str,
-) -> str | None:
-    if len(cards) < 2:
-        return None
-
-    top_card, second_card = cards[:2]
-    if ranking_mode == "score":
-        score_delta = max(0.0, top_card.raw_score - second_card.raw_score)
-        if score_delta <= CLOSE_DG_SCORE_THRESHOLD:
-            return f"close pick — top two within {score_delta:.1f} DG points"
-
-        return None
-
-    if ranking_mode == "win_rate":
-        top_win_rate = top_card.rating.gih_win_rate
-        second_win_rate = second_card.rating.gih_win_rate
-        if top_win_rate is None or second_win_rate is None:
-            return None
-
-        win_rate_delta = max(0.0, top_win_rate - second_win_rate)
-        if win_rate_delta <= CLOSE_WIN_RATE_THRESHOLD:
-            return f"close pick — top two within {win_rate_delta * 100:.1f}pp WR"
-
-    return None
 
 
 def _row_cells(

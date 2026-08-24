@@ -50,7 +50,13 @@ from draftgoblin.pool import (
     list_account_profiles,
     list_draft_states,
 )
-from draftgoblin.pickengine import PickEngine, ScoredCard, ScoredPack
+from draftgoblin.pickengine import (
+    PickEngine,
+    ScoredCard,
+    ScoredPack,
+    recommendation_confidence_summary,
+    recommendation_explanation,
+)
 from draftgoblin.ranking import (
     DEFAULT_RANKING_MODE,
     RANKING_MODES,
@@ -199,6 +205,7 @@ class RecommendationState:
     cards: tuple[Recommendation, ...] = ()
     selected_grp_id: int | None = None
     source_summary: str | None = None
+    confidence_summary: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,9 +270,13 @@ class PoolState:
     """
 
     cards: tuple[PoolCard, ...] = ()
+    recent_picks: tuple[PoolCard, ...] = ()
     total_cards: int = 0
     inferred_pair: str | None = None
     commitment: float = 0.0
+    color_distribution: tuple[tuple[str, int], ...] = ()
+    mana_curve: tuple[int, ...] = ()
+    target_cards: int = 42
 
 
 @dataclass(frozen=True, slots=True)
@@ -1777,11 +1788,20 @@ class LiveSession:
             ranking_mode=self._ranking_mode,
             splash_enabled=self._splash_enabled,
             cards=tuple(
-                self._recommendation(rank=rank, scored_card=scored_card)
+                self._recommendation(
+                    rank=rank,
+                    scored_card=scored_card,
+                    inferred_pair=scored_pack.commitment.inferred_pair,
+                )
                 for rank, scored_card in enumerate(ranked_cards, start=1)
             ),
             selected_grp_id=selected_grp_id,
             source_summary=scored_pack.source_summary,
+            confidence_summary=recommendation_confidence_summary(
+                cards=ranked_cards,
+                ranking_mode=self._ranking_mode,
+                phase=scored_pack.commitment.phase,
+            ),
         )
 
     def _recommendation(
@@ -1789,6 +1809,7 @@ class LiveSession:
         *,
         rank: int,
         scored_card: ScoredCard,
+        inferred_pair: str | None = None,
     ) -> Recommendation:
         return Recommendation(
             rank=rank,
@@ -1800,6 +1821,10 @@ class LiveSession:
             color_fit=scored_card.color_fit,
             no_data=scored_card.no_data,
             letter_grade=scored_card.rating.letter_grade,
+            explanation=recommendation_explanation(
+                scored_card=scored_card,
+                inferred_pair=inferred_pair,
+            ),
         )
 
     def _card_view(self, *, card: CardInfo) -> CardView:
@@ -2197,6 +2222,31 @@ class LiveSession:
 
         return self._pool_state(pool_grp_ids=state.pool_grp_ids)
 
+    @staticmethod
+    def _pool_aggregates(
+        *,
+        cards: tuple[PoolCard, ...],
+    ) -> tuple[tuple[tuple[str, int], ...], tuple[int, ...]]:
+        """Return authoritative color counts and spell mana-value buckets.
+        Lands do not contribute to the spell curve.
+        """
+
+        color_counts = {color: 0 for color in ("W", "U", "B", "R", "G", "C")}
+        mana_curve = [0] * 7
+        for pool_card in cards:
+            quantity = pool_card.quantity
+            colors = pool_card.card.colors or ("C",)
+            for color in colors:
+                color_counts[color if color in color_counts else "C"] += quantity
+            mana_value = pool_card.card.mana_value
+            if (
+                mana_value is not None
+                and not any("Land" in type_line for type_line in pool_card.card.types)
+            ):
+                bucket = min(6, max(0, int(mana_value)))
+                mana_curve[bucket] += quantity
+        return tuple(color_counts.items()), tuple(mana_curve)
+
     def _pool_state(
         self,
         *,
@@ -2205,7 +2255,7 @@ class LiveSession:
     ) -> PoolState:
         database = self._card_database
         if database is None:
-            return PoolState(total_cards=len(pool_grp_ids))
+            return PoolState(total_cards=len(pool_grp_ids), target_cards=42)
 
         counts = Counter(pool_grp_ids)
         cards = tuple(
@@ -2215,9 +2265,19 @@ class LiveSession:
             )
             for grp_id in dict.fromkeys(pool_grp_ids)
         )
+        recent_picks = tuple(
+            PoolCard(
+                card=self._card_view(card=database.lookup(grp_id=grp_id)),
+                quantity=1,
+            )
+            for grp_id in pool_grp_ids[-5:]
+        )
+        color_distribution, mana_curve = self._pool_aggregates(cards=cards)
         return PoolState(
             cards=cards,
+            recent_picks=recent_picks,
             total_cards=len(pool_grp_ids),
+            target_cards=42,
             inferred_pair=(
                 None
                 if scored_pack is None
@@ -2226,6 +2286,8 @@ class LiveSession:
             commitment=(
                 0.0 if scored_pack is None else scored_pack.commitment.level
             ),
+            color_distribution=color_distribution,
+            mana_curve=mana_curve,
         )
 
     def _select_recovered_state(self, *, state: DraftState) -> None:
