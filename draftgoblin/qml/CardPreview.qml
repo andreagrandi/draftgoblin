@@ -8,8 +8,7 @@ Rectangle {
     property var recommendation: null
     property bool loading: false
     property var imageState: null
-    // Keep the compact preview's established sizing; only the wide build panel
-    // opts into using the available panel height as an additional constraint.
+    property bool detailedIntel: false
     property bool constrainImageFrameToHeight: false
 
     readonly property bool imageCurrent: Boolean(
@@ -25,44 +24,96 @@ Rectangle {
             && imageState.image_path
             && imageState.phase === "ready"
     )
+    readonly property string colorsText: {
+        if (!recommendation)
+            return "—"
+        if (recommendation.card.colors.length === 0)
+            return "Colorless"
+        return recommendation.card.colors.join(" · ")
+    }
+    readonly property string manaValueText: recommendation
+        && recommendation.card.mana_value !== null
+        && recommendation.card.mana_value !== undefined
+        ? Number(recommendation.card.mana_value).toFixed(0) : "—"
+    readonly property string alsaText: recommendation
+        && recommendation.average_last_seen_at !== null
+        && recommendation.average_last_seen_at !== undefined
+        ? Number(recommendation.average_last_seen_at).toFixed(2) : "—"
+    readonly property string winRateText: recommendation
+        && recommendation.win_rate !== null
+        && recommendation.win_rate !== undefined
+        ? (Number(recommendation.win_rate) * 100).toFixed(1) + "%" : "—"
 
     color: Theme.surfaceLow
     border.color: Theme.outline
     border.width: 1
     radius: Theme.radius
     Accessible.role: Accessible.Pane
-    Accessible.name: recommendation ? "Selected card, " + recommendation.card.name : "Card details"
+    Accessible.name: {
+        if (recommendation) {
+            const prefix = root.detailedIntel
+                ? "Focused card intel, "
+                : "Selected card, "
+            return prefix + recommendation.card.name
+        }
+        return root.detailedIntel ? "Focused card intel" : "Card details"
+    }
 
     readonly property real imageFrameAvailableHeight: Math.max(
         0,
         root.height - Theme.panelPadding * 2
             - previewHeading.implicitHeight
             - (previewDetails.visible ? previewDetails.implicitHeight : 0)
-            - previewLayout.spacing * (previewDetails.visible ? 3 : 2)
+            - previewLayout.rowSpacing * (previewDetails.visible ? 3 : 2)
     )
-    readonly property real imageFrameWidth: root.constrainImageFrameToHeight
-        ? Math.max(
-            0,
-            Math.min(
-                240,
-                root.width - Theme.panelPadding * 2,
-                root.imageFrameAvailableHeight / 1.4
-            )
+    readonly property real detailedImageFrameAvailableHeight: Math.max(
+        0,
+        root.height - Theme.panelPadding * 2
+            - previewHeading.implicitHeight
+            - previewLayout.rowSpacing * 2
+    )
+    readonly property real detailedImageFrameWidth: Math.max(
+        120,
+        Math.min(
+            180,
+            (root.width - Theme.panelPadding * 2 - previewLayout.columnSpacing) * 0.46,
+            root.detailedImageFrameAvailableHeight / 1.4
         )
-        : Math.max(0, Math.min(240, root.width - Theme.panelPadding * 2))
+    )
+    readonly property real imageFrameWidth: {
+        if (root.detailedIntel)
+            return root.detailedImageFrameWidth
+        if (root.constrainImageFrameToHeight) {
+            return Math.max(
+                0,
+                Math.min(
+                    240,
+                    root.width - Theme.panelPadding * 2,
+                    root.imageFrameAvailableHeight / 1.4
+                )
+            )
+        }
+        return Math.max(0, Math.min(
+            240,
+            root.width - Theme.panelPadding * 2
+        ))
+    }
     readonly property real imageFrameHeight: root.imageFrameWidth * 1.4
 
-    ColumnLayout {
+    GridLayout {
         id: previewLayout
         anchors.fill: parent
         anchors.margins: Theme.panelPadding
-        spacing: 12
+        columns: root.detailedIntel ? 2 : 1
+        rowSpacing: root.detailedIntel ? 10 : 12
+        columnSpacing: 12
 
         Label {
             id: previewHeading
             objectName: "cardPreviewHeading"
-            text: "SELECTED CARD"
-            color: Theme.textMuted
+            Layout.columnSpan: root.detailedIntel ? 2 : 1
+            text: root.detailedIntel ? "FOCUSED INTEL" : "SELECTED CARD"
+            color: root.detailedIntel ? Theme.primary : Theme.textMuted
             font.pixelSize: 10
             font.bold: true
             font.letterSpacing: 1.2
@@ -71,7 +122,7 @@ Rectangle {
         Rectangle {
             id: imageFrame
             objectName: "cardPreviewImageFrame"
-            Layout.alignment: Qt.AlignHCenter
+            Layout.alignment: root.detailedIntel ? Qt.AlignTop : Qt.AlignHCenter
             Layout.preferredWidth: root.imageFrameWidth
             Layout.preferredHeight: root.imageFrameHeight
             color: "#171817"
@@ -103,8 +154,10 @@ Rectangle {
                     Layout.preferredWidth: 48
                     Layout.preferredHeight: 48
                     radius: 24
-                    color: root.recommendation && root.recommendation.card.colors.length > 0
-                        ? Theme.colorForMana(root.recommendation.card.colors[0]) : Theme.surfaceHigh
+                    color: root.recommendation
+                        && root.recommendation.card.colors.length > 0
+                        ? Theme.colorForMana(root.recommendation.card.colors[0])
+                        : Theme.surfaceHigh
                     opacity: 0.85
                 }
 
@@ -145,10 +198,12 @@ Rectangle {
             id: previewDetails
             objectName: "cardPreviewDetails"
             visible: root.recommendation !== null
+            Layout.alignment: root.detailedIntel ? Qt.AlignTop : Qt.AlignLeft
             Layout.fillWidth: true
             spacing: 6
 
             Label {
+                objectName: "cardPreviewName"
                 Layout.fillWidth: true
                 text: root.recommendation ? root.recommendation.card.name : ""
                 color: Theme.text
@@ -158,16 +213,81 @@ Rectangle {
             }
 
             Label {
+                objectName: "cardPreviewFacts"
                 Layout.fillWidth: true
-                text: root.recommendation
-                    ? root.recommendation.card.types.join(" · ")
+                text: {
+                    if (!root.recommendation)
+                        return ""
+                    if (root.detailedIntel)
+                        return root.colorsText + "  ·  "
+                            + root.recommendation.card.types.join(" · ")
+                            + "  ·  MV " + root.manaValueText
+                    return root.recommendation.card.types.join(" · ")
                         + "   ·   MV " + root.recommendation.card.mana_value
-                    : ""
+                }
                 color: Theme.textMuted
                 wrapMode: Text.WordWrap
             }
 
+            GridLayout {
+                visible: root.detailedIntel
+                objectName: "cardPreviewScores"
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: 12
+                rowSpacing: 4
+
+                Label { text: "DG Score"; color: Theme.textMuted }
+                Label {
+                    text: root.recommendation ? root.recommendation.score : "—"
+                    color: Theme.primary
+                    font.family: fixedFontFamily
+                    font.bold: true
+                }
+
+                Label { text: "17L WR"; color: Theme.textMuted }
+                Label {
+                    text: root.winRateText
+                    color: Theme.text
+                    font.family: fixedFontFamily
+                }
+
+                Label { text: "Grade"; color: Theme.textMuted }
+                Label {
+                    text: root.recommendation
+                        ? root.recommendation.letter_grade || "—" : "—"
+                    color: Theme.warning
+                    font.bold: true
+                }
+
+                Label { text: "ALSA"; color: Theme.textMuted }
+                Label {
+                    text: root.alsaText
+                    color: Theme.text
+                    font.family: fixedFontFamily
+                }
+
+                Label { text: "Fit"; color: Theme.textMuted }
+                Label {
+                    Layout.fillWidth: true
+                    text: root.recommendation
+                        ? root.recommendation.color_fit || "Open" : "—"
+                    color: Theme.text
+                    elide: Text.ElideRight
+                }
+
+                Label { text: "Source"; color: Theme.textMuted }
+                Label {
+                    Layout.fillWidth: true
+                    text: root.recommendation
+                        ? root.recommendation.source_label || "Unavailable" : "—"
+                    color: Theme.text
+                    elide: Text.ElideRight
+                }
+            }
+
             RowLayout {
+                visible: !root.detailedIntel
                 Layout.fillWidth: true
 
                 Label {
@@ -179,27 +299,39 @@ Rectangle {
 
                 Label {
                     text: root.recommendation && root.recommendation.win_rate !== null
-                        ? "17L " + (root.recommendation.win_rate * 100).toFixed(1) + "%" : "17L —"
+                        ? "17L " + (root.recommendation.win_rate * 100).toFixed(1) + "%"
+                        : "17L —"
                     color: Theme.textMuted
                     font.family: fixedFontFamily
                 }
 
                 Label {
-                    text: root.recommendation ? root.recommendation.letter_grade || "—" : ""
+                    text: root.recommendation
+                        ? root.recommendation.letter_grade || "—" : ""
                     color: Theme.warning
                     font.bold: true
                 }
             }
 
             Label {
+                objectName: "cardPreviewExplanation"
                 Layout.fillWidth: true
-                text: root.recommendation ? root.recommendation.explanation || "" : ""
+                text: {
+                    if (!root.recommendation)
+                        return ""
+                    if (root.detailedIntel) {
+                        return root.recommendation.explanation
+                            || "Explanation unavailable."
+                    }
+                    return root.recommendation.explanation || ""
+                }
                 color: Theme.textMuted
                 wrapMode: Text.WordWrap
             }
         }
 
         Item {
+            Layout.columnSpan: root.detailedIntel ? 2 : 1
             Layout.fillHeight: true
         }
     }

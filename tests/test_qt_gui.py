@@ -184,7 +184,7 @@ import urllib.parse
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QUrl
+from PySide6.QtCore import QObject, QPointF, Qt, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickItem
@@ -581,8 +581,8 @@ def test_qml_tab_and_shift_tab_traversal_stays_on_surfaces_and_dialogs_offscreen
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from PySide6.QtCore import QObject, Qt, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QObject, QPointF, Qt, QUrl
+from PySide6.QtGui import QAccessible, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtQuickControls2 import QQuickStyle
@@ -684,6 +684,109 @@ application.processEvents()
 ranking = root.findChild(QObject, "rankingSelector")
 assert ranking is not None
 assert_surface_round_trip(root, ranking)
+wide_preview = find_visual_item(root.contentItem(), "wideLiveCardPreview")
+wide_pool = find_visual_item(root.contentItem(), "wideLivePoolDetails")
+wide_row = find_visual_item(root.contentItem(), "wideRecommendationRow1")
+second_row = find_visual_item(root.contentItem(), "wideRecommendationRow2")
+third_row = find_visual_item(root.contentItem(), "wideRecommendationRow3")
+assert wide_preview is not None and wide_preview.isVisible()
+assert wide_pool is not None and wide_pool.isVisible()
+assert wide_row is not None and wide_row.isVisible()
+assert second_row is not None and second_row.isVisible()
+assert third_row is not None and third_row.isVisible()
+assert wide_preview.mapToItem(root.contentItem(), QPointF(0, wide_preview.height())).y() \
+    <= wide_pool.mapToItem(root.contentItem(), QPointF(0, 0)).y()
+assert wide_preview.property("imageFrameHeight") > 0
+assert wide_preview.findChild(QObject, "cardPreviewFacts") is not None
+assert wide_preview.findChild(QObject, "cardPreviewScores") is not None
+assert wide_preview.findChild(QObject, "cardPreviewExplanation") is not None
+confidence = root.findChild(QObject, "recommendationConfidenceSummary")
+assert confidence is not None
+state_without_confidence = dict(provider.state)
+recommendations_without_confidence = dict(state_without_confidence["recommendations"])
+recommendations_without_confidence["confidence_summary"] = None
+state_without_confidence["recommendations"] = recommendations_without_confidence
+provider._replace_state(state=state_without_confidence)
+application.processEvents()
+assert confidence.isVisible() is False
+state_with_confidence = dict(provider.state)
+recommendations_with_confidence = dict(state_with_confidence["recommendations"])
+recommendations_with_confidence["confidence_summary"] = "Current pool confidence: 64%"
+state_with_confidence["recommendations"] = recommendations_with_confidence
+provider._replace_state(state=state_with_confidence)
+application.processEvents()
+assert confidence.isVisible()
+assert confidence.property("text") == "Current pool confidence: 64%"
+wide_row = find_visual_item(root.contentItem(), "wideRecommendationRow1")
+second_row = find_visual_item(root.contentItem(), "wideRecommendationRow2")
+third_row = find_visual_item(root.contentItem(), "wideRecommendationRow3")
+assert wide_row is not None and second_row is not None and third_row is not None
+assert wide_pool.findChild(QObject, "poolCount") is not None
+pool_count = wide_pool.findChild(QObject, "poolCount")
+assert pool_count is not None
+pool_state = provider.state["pool"]
+assert pool_count.property("text") == (
+    f'{pool_state["total_cards"]} / {pool_state["target_cards"]} cards'
+)
+pool_flickable = wide_pool.findChild(QObject, "poolSummaryFlickable")
+pool_scrollbar = wide_pool.findChild(QObject, "poolSummaryScrollBar")
+assert pool_flickable is not None and pool_flickable.property("activeFocusOnTab") is True
+assert pool_scrollbar is not None and pool_scrollbar.isVisible()
+accessible_pool = QAccessible.queryAccessibleInterface(pool_flickable)
+assert accessible_pool is not None
+assert "Page Up" in accessible_pool.text(QAccessible.Text.Description)
+pool_flickable.forceActiveFocus()
+assert pool_flickable.property("activeFocus") is True
+max_pool_scroll = max(
+    0.0,
+    float(pool_flickable.property("contentHeight"))
+    - float(pool_flickable.property("height")),
+)
+assert max_pool_scroll > 0
+QTest.keyClick(root, Qt.Key_Down)
+application.processEvents()
+assert pool_flickable.property("contentY") > 0
+QTest.keyClick(root, Qt.Key_Up)
+application.processEvents()
+assert pool_flickable.property("contentY") == 0
+QTest.keyClick(root, Qt.Key_PageDown)
+application.processEvents()
+assert pool_flickable.property("contentY") > 0
+QTest.keyClick(root, Qt.Key_PageUp)
+application.processEvents()
+assert pool_flickable.property("contentY") == 0
+QTest.keyClick(root, Qt.Key_End)
+application.processEvents()
+assert abs(float(pool_flickable.property("contentY")) - max_pool_scroll) < 1
+QTest.keyClick(root, Qt.Key_Home)
+application.processEvents()
+assert pool_flickable.property("contentY") == 0
+name = wide_row.findChild(QObject, "recommendationName")
+assert name is not None
+assert name.property("text") == provider.state["recommendations"]["cards"][0]["card"]["name"]
+assert name.property("truncated") is False
+assert name.property("paintedWidth") <= name.property("width") + 1
+second_row.forceActiveFocus()
+QTest.keyClick(root, Qt.Key_Return)
+application.processEvents()
+assert provider.state["recommendations"]["selected_grp_id"] == (
+    provider.state["recommendations"]["cards"][1]["card"]["grp_id"]
+)
+third_row.forceActiveFocus()
+application.processEvents()
+assert wide_row.property("stateText") == "Recommended"
+assert second_row.property("stateText") == "Selected"
+assert third_row.property("stateText") == "Keyboard focused"
+provider.selectScenario("empty")
+application.processEvents()
+assert confidence.isVisible() is False
+provider.selectScenario("ready")
+application.processEvents()
+assert confidence.isVisible() is False
+assert len(provider.state["pool"]["mana_curve"]) == 7
+assert pool_state["color_distribution"]
+provider.selectScenario("warning")
+application.processEvents()
 download = root.findChild(QObject, "ratingsDownloadButton")
 assert download is not None
 assert_modal_cycle(
@@ -841,15 +944,27 @@ application.processEvents()
 live_tabs = root.findChild(QObject, "liveDetailTabs")
 narrow_live_preview = find_visual_item(root.contentItem(), "narrowLiveCardPreview")
 narrow_live_pool = find_visual_item(root.contentItem(), "narrowLivePoolDetails")
-assert live_tabs is not None and live_tabs.property("currentIndex") == 1
-assert narrow_live_preview is not None and narrow_live_preview.property("visible") is False
-assert narrow_live_pool is not None and narrow_live_pool.isVisible()
+narrow_row = find_visual_item(root.contentItem(), "narrowRecommendationRow1")
+assert live_tabs is not None and live_tabs.property("currentIndex") == 0
+assert narrow_live_preview is not None and narrow_live_preview.isVisible()
+assert narrow_live_pool is not None and narrow_live_pool.isVisible() is False
+assert narrow_row is not None and narrow_row.height() >= 100
+assert narrow_row.width() == live_tabs.width()
+assert narrow_live_preview.width() == live_tabs.width()
+assert narrow_row.width() > root.width() / 2
 assert logo.isVisible() is False
 assert app_bar_title.isVisible()
 
+live_tabs.setProperty("currentIndex", 1)
+application.processEvents()
+assert narrow_live_preview.isVisible() is False
+assert narrow_live_pool.isVisible()
+
+live_tabs.setProperty("currentIndex", 0)
+application.processEvents()
+assert narrow_live_preview.isVisible()
 preferences.setCardPreview(True)
 application.processEvents()
-
 
 root.setProperty("currentSurface", "build")
 application.processEvents()

@@ -27,6 +27,95 @@ from draftgoblin.splash import (
     card_is_castable_in_pair,
     infer_splash_state,
 )
+CLOSE_DG_SCORE_THRESHOLD = 3.0
+CLOSE_WIN_RATE_THRESHOLD = 0.01
+
+
+def recommendation_confidence_summary(
+    *,
+    cards: tuple[ScoredCard, ...],
+    ranking_mode: str,
+    phase: str,
+) -> str | None:
+    """Summarize how decisive the current recommendation evidence is.
+    The input cards must already be ordered by ``ranking_mode``.
+    """
+
+    close_label = _close_pick_label(cards=cards, ranking_mode=ranking_mode)
+    if phase == "open":
+        if close_label is not None:
+            return f"early/open {close_label}; stay flexible"
+
+        return "early/open pick — stay flexible"
+
+    return close_label
+
+
+def recommendation_explanation(
+    *,
+    scored_card: ScoredCard,
+    inferred_pair: str | None,
+) -> str:
+    """Describe one recommendation using only scoring and pool evidence.
+    Wording describes supporting evidence rather than promising an outcome.
+    """
+
+    fit = scored_card.color_fit.replace("-", " ")
+    pool_context = (
+        f"the inferred {inferred_pair} pool"
+        if inferred_pair is not None
+        else "an open-color pool"
+    )
+    gih_win_rate = scored_card.rating.gih_win_rate
+    alsa = scored_card.rating.average_last_seen_at
+    if gih_win_rate is not None:
+        rating_evidence = (
+            f"{scored_card.source_label} GIH win rate "
+            f"{gih_win_rate:.1%}"
+        )
+    elif scored_card.no_data and alsa is not None:
+        rating_evidence = (
+            f"neutral-prior estimate adjusted by ALSA "
+            f"{alsa:.2f}"
+        )
+    elif scored_card.no_data:
+        rating_evidence = "neutral-prior estimate with no GIH data"
+    else:
+        rating_evidence = f"{scored_card.source_label} rating data"
+
+    return (
+        f"{fit.capitalize()} fit supports a {scored_card.score} DG-point "
+        f"candidate for {pool_context}; {rating_evidence} informs the score."
+    )
+
+
+def _close_pick_label(
+    *,
+    cards: tuple[ScoredCard, ...],
+    ranking_mode: str,
+) -> str | None:
+    if len(cards) < 2:
+        return None
+
+    top_card, second_card = cards[:2]
+    if ranking_mode == "score":
+        score_delta = max(0.0, top_card.raw_score - second_card.raw_score)
+        if score_delta <= CLOSE_DG_SCORE_THRESHOLD:
+            return f"close pick — top two within {score_delta:.1f} DG points"
+
+        return None
+
+    if ranking_mode == "win_rate":
+        top_win_rate = top_card.rating.gih_win_rate
+        second_win_rate = second_card.rating.gih_win_rate
+        if top_win_rate is None or second_win_rate is None:
+            return None
+
+        win_rate_delta = max(0.0, top_win_rate - second_win_rate)
+        if win_rate_delta <= CLOSE_WIN_RATE_THRESHOLD:
+            return f"close pick — top two within {win_rate_delta * 100:.1f}pp WR"
+
+    return None
 
 
 @dataclass(frozen=True, slots=True)

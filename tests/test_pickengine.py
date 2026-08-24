@@ -4,7 +4,10 @@ from datetime import UTC, datetime
 
 from draftgoblin.carddb import CardDatabase, CardInfo
 from draftgoblin.events import PackOfferedEvent
-from draftgoblin.pickengine import PickEngine
+from draftgoblin.pickengine import (
+    PickEngine,
+    recommendation_confidence_summary,
+)
 from draftgoblin.ranking import rank_scored_cards
 from draftgoblin.replay import format_pack_offered_event
 from draftgoblin.seventeen import (
@@ -89,6 +92,24 @@ def test_missing_ratings_data_still_scores_every_card_with_marked_prior() -> Non
     assert [card.score for card in scored_pack.cards] == [50, 50, 50]
     assert all(card.source_label == "Prior*" for card in scored_pack.cards)
     assert scored_pack.source_summary == "neutral prior"
+
+
+def test_recommendation_confidence_summary_uses_shared_open_pick_copy() -> None:
+    scored_pack = PickEngine().score_pack(
+        offered_grp_ids=(1,),
+        card_database=_card_database(),
+    )
+
+    assert recommendation_confidence_summary(
+        cards=scored_pack.cards,
+        ranking_mode="score",
+        phase="open",
+    ) == "early/open pick — stay flexible"
+    assert recommendation_confidence_summary(
+        cards=scored_pack.cards,
+        ranking_mode="score",
+        phase="building",
+    ) is None
 
 
 def test_commitment_ramp_changes_same_card_score_by_pick_index() -> None:

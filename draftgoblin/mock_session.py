@@ -212,9 +212,16 @@ def _pool() -> PoolState:
     )
     return PoolState(
         cards=pool_cards,
-        total_cards=18,
+        recent_picks=tuple(
+            PoolCard(card=pool_card.card, quantity=1)
+            for pool_card in pool_cards[-5:]
+        ),
+        total_cards=sum(pool_card.quantity for pool_card in pool_cards),
+        target_cards=42,
         inferred_pair="White · Green",
         commitment=0.64,
+        color_distribution=(("W", 0), ("U", 0), ("B", 1), ("R", 0), ("G", 9), ("C", 0)),
+        mana_curve=(0, 0, 3, 7, 0, 0, 0),
     )
 
 
@@ -398,6 +405,7 @@ def _ready_snapshot() -> LiveSessionSnapshot:
             cards=_recommendations(),
             selected_grp_id=CARDS[0].grp_id,
             source_summary="Quick Draft · 17Lands",
+            confidence_summary=None,
         ),
         pool=_pool(),
         build=_build(),

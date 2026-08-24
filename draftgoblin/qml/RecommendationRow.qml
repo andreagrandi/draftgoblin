@@ -11,23 +11,70 @@ FocusScope {
     required property bool secondaryStats
     signal chosen(int grpId)
 
-    implicitHeight: wide ? 48 : 70
+    readonly property bool recommended: recommendation.rank === 1
+    readonly property bool keyboardFocused: activeFocus
+    readonly property string colorsText: recommendation.card.colors.length > 0
+        ? recommendation.card.colors.join(" · ") : "Colorless"
+    readonly property string alsaText: recommendation.average_last_seen_at !== null
+        && recommendation.average_last_seen_at !== undefined
+        ? Number(recommendation.average_last_seen_at).toFixed(2) : "—"
+    readonly property string manaValueText: recommendation.card.mana_value !== null
+        && recommendation.card.mana_value !== undefined
+        ? Number(recommendation.card.mana_value).toFixed(0) : "—"
+    readonly property string winRateText: recommendation.win_rate !== null
+        && recommendation.win_rate !== undefined
+        ? (Number(recommendation.win_rate) * 100).toFixed(1) + "%" : "—"
+    readonly property string stateText: {
+        if (keyboardFocused)
+            return "Keyboard focused"
+        if (selected)
+            return "Selected"
+        if (recommended)
+            return "Recommended"
+        return ""
+    }
+    readonly property color stateColor: {
+        if (keyboardFocused)
+            return Theme.focus
+        if (selected)
+            return Theme.warning
+        if (recommended)
+            return Theme.primary
+        return Theme.outline
+    }
+
+    implicitHeight: wide ? 84 : 112
+
     Accessible.role: Accessible.ListItem
-    Accessible.name: "Rank " + recommendation.rank + ", " + recommendation.card.name
-    Accessible.description: "Press Enter or Space to focus this recommendation."
+    Accessible.name: "Rank " + recommendation.rank + ", "
+        + recommendation.card.name + ", DG score " + recommendation.score
+    Accessible.description: stateText + ". Press Enter or Space to choose this card."
     activeFocusOnTab: true
+
     Keys.onReturnPressed: chosen(recommendation.card.grp_id)
     Keys.onSpacePressed: chosen(recommendation.card.grp_id)
 
     Rectangle {
         anchors.fill: parent
-        color: root.selected
-            ? Theme.surfaceHighest
-            : root.recommendation.rank === 1 ? "#26300f" : Theme.surface
-        border.color: root.activeFocus
-            ? Theme.focus
-            : root.recommendation.rank === 1 ? Theme.primary : Theme.outline
-        border.width: root.activeFocus || root.recommendation.rank === 1 ? 2 : 1
+        color: {
+            if (root.selected)
+                return Theme.surfaceHighest
+            if (root.recommended)
+                return Theme.primaryDark
+            return Theme.surface
+        }
+        border.color: root.stateColor
+        border.width: root.keyboardFocused || root.selected || root.recommended ? 2 : 1
+        radius: Theme.radius
+    }
+
+    Rectangle {
+        visible: root.recommended || root.selected || root.keyboardFocused
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: 3
+        color: root.stateColor
         radius: Theme.radius
     }
 
@@ -40,108 +87,221 @@ FocusScope {
         }
     }
 
-    RowLayout {
+    ColumnLayout {
         anchors.fill: parent
-        anchors.leftMargin: 12
+        anchors.leftMargin: 14
         anchors.rightMargin: 12
-        spacing: 10
+        anchors.topMargin: 8
+        anchors.bottomMargin: 8
+        spacing: root.wide ? 2 : 4
 
-        Label {
-            Layout.preferredWidth: 26
-            text: recommendation.rank
-            color: recommendation.rank === 1 ? Theme.primary : Theme.textMuted
-            font.family: fixedFontFamily
-            font.bold: true
-            horizontalAlignment: Text.AlignHCenter
+        RowLayout {
+            visible: root.wide
+            Layout.fillWidth: true
+            spacing: 8
+
+            Label {
+                Layout.preferredWidth: 28
+                text: ("0" + String(root.recommendation.rank)).slice(-2)
+                color: root.recommended ? Theme.primary : Theme.textMuted
+                font.family: fixedFontFamily
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 1
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Label {
+                        objectName: "recommendationName"
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        text: root.recommendation.card.name
+                        color: Theme.text
+                        font.bold: root.recommended || root.selected
+                        wrapMode: Text.WordWrap
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        objectName: "recommendationStateBadge"
+                        visible: root.stateText.length > 0
+                        Layout.alignment: Qt.AlignVCenter
+                        Layout.preferredWidth: 102
+                        Layout.minimumWidth: 102
+                        Layout.maximumWidth: 102
+                        text: root.stateText
+                        color: root.stateColor
+                        font.pixelSize: 9
+                        font.bold: true
+                        font.letterSpacing: 0.8
+                        horizontalAlignment: Text.AlignRight
+                    }
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.recommendation.card.types.join(" · ")
+                        + " · ALSA " + root.alsaText
+                        + " · MV " + root.manaValueText
+                        + " · " + (root.recommendation.source_label || "Source unavailable")
+                    color: Theme.textMuted
+                    font.pixelSize: 10
+                    elide: Text.ElideRight
+                }
+            }
+
+            Label {
+                Layout.preferredWidth: 70
+                text: root.colorsText
+                color: root.recommendation.card.colors.length > 0
+                    ? Theme.colorForMana(root.recommendation.card.colors[0])
+                    : Theme.textMuted
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+            }
+
+            Label {
+                Layout.preferredWidth: 58
+                text: root.recommendation.score
+                color: root.recommended ? Theme.primary : Theme.text
+                font.family: fixedFontFamily
+                font.bold: true
+                horizontalAlignment: Text.AlignRight
+            }
+
+            Label {
+                Layout.preferredWidth: 68
+                text: root.winRateText
+                color: Theme.text
+                font.family: fixedFontFamily
+                horizontalAlignment: Text.AlignRight
+            }
+
+            Label {
+                Layout.preferredWidth: 44
+                text: root.recommendation.letter_grade || "—"
+                color: Theme.warning
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Label {
+                Layout.preferredWidth: 82
+                text: root.recommendation.color_fit || "Open"
+                color: root.recommendation.color_fit === "Off color"
+                    ? Theme.warning : Theme.textMuted
+                horizontalAlignment: Text.AlignRight
+                elide: Text.ElideRight
+            }
         }
 
         ColumnLayout {
+            visible: !root.wide
             Layout.fillWidth: true
-            spacing: 2
+            spacing: 4
 
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
 
                 Label {
+                    Layout.preferredWidth: 28
+                    text: ("0" + String(root.recommendation.rank)).slice(-2)
+                    color: root.recommended ? Theme.primary : Theme.textMuted
+                    font.family: fixedFontFamily
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                Label {
+                    objectName: "recommendationName"
                     Layout.fillWidth: true
-                    text: recommendation.card.name
+                    Layout.minimumWidth: 0
+                    text: root.recommendation.card.name
                     color: Theme.text
-                    font.bold: recommendation.rank === 1
+                    font.bold: root.recommended || root.selected
+                    wrapMode: Text.WrapAnywhere
+                    elide: Text.ElideNone
+                }
+
+                Label {
+                    objectName: "recommendationStateBadge"
+                    visible: root.stateText.length > 0
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.preferredWidth: 102
+                    Layout.minimumWidth: 102
+                    Layout.maximumWidth: 102
+                    text: root.stateText
+                    color: root.stateColor
+                    font.pixelSize: 9
+                    font.bold: true
+                    font.letterSpacing: 0.8
+                    horizontalAlignment: Text.AlignRight
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.colorsText
+                    color: root.recommendation.card.colors.length > 0
+                        ? Theme.colorForMana(root.recommendation.card.colors[0])
+                        : Theme.textMuted
                     elide: Text.ElideRight
                 }
 
                 Label {
-                    visible: recommendation.rank === 1
-                    text: "RECOMMENDED"
-                    color: Theme.primary
-                    font.pixelSize: 9
-                    font.bold: true
-                    font.letterSpacing: 0.8
+                    text: root.recommendation.color_fit || "Open"
+                    color: root.recommendation.color_fit === "Off color"
+                        ? Theme.warning : Theme.textMuted
+                    horizontalAlignment: Text.AlignRight
                 }
             }
 
-            Label {
-                visible: !root.wide
+            RowLayout {
                 Layout.fillWidth: true
-                text: (root.recommendation.card.colors.length > 0
-                    ? root.recommendation.card.colors.join(" · ") : "Colorless")
-                    + "   ·   " + root.recommendation.color_fit
-                    + (root.secondaryStats
-                        ? "   ·   ALSA " + (root.recommendation.average_last_seen_at !== null
-                            && root.recommendation.average_last_seen_at !== undefined
-                            ? root.recommendation.average_last_seen_at.toFixed(2) : "—")
-                        : "")
-                color: Theme.textMuted
-                font.pixelSize: 11
-                elide: Text.ElideRight
+                spacing: 12
+
+                Label {
+                    text: "DG " + root.recommendation.score
+                    color: root.recommended ? Theme.primary : Theme.text
+                    font.family: fixedFontFamily
+                    font.bold: true
+                }
+
+                Label {
+                    text: "17L " + root.winRateText
+                    color: Theme.text
+                    font.family: fixedFontFamily
+                }
+
+                Label {
+                    text: "Grade " + (root.recommendation.letter_grade || "—")
+                    color: Theme.warning
+                    font.bold: true
+                }
+
+                Label {
+                    visible: root.secondaryStats
+                    Layout.fillWidth: true
+                    text: "ALSA " + root.alsaText
+                        + " · MV " + root.manaValueText
+                        + " · " + (root.recommendation.source_label || "Source unavailable")
+                    color: Theme.textMuted
+                    font.pixelSize: 10
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideRight
+                }
             }
-        }
-
-        Label {
-            visible: root.wide
-            Layout.preferredWidth: 64
-            text: recommendation.card.colors.length > 0
-                ? recommendation.card.colors.join(" · ") : "—"
-            color: recommendation.card.colors.length > 0
-                ? Theme.colorForMana(recommendation.card.colors[0]) : Theme.textMuted
-            horizontalAlignment: Text.AlignHCenter
-        }
-
-        Label {
-            Layout.preferredWidth: 52
-            text: recommendation.score
-            color: Theme.text
-            font.family: fixedFontFamily
-            font.pixelSize: 16
-            font.bold: true
-            horizontalAlignment: Text.AlignRight
-        }
-
-        Label {
-            visible: root.secondaryStats
-            Layout.preferredWidth: 58
-            text: recommendation.win_rate !== null
-                ? (recommendation.win_rate * 100).toFixed(1) + "%" : "—"
-            color: Theme.textMuted
-            font.family: fixedFontFamily
-            horizontalAlignment: Text.AlignRight
-        }
-        Label {
-            Layout.preferredWidth: 34
-            text: recommendation.letter_grade || "—"
-            color: Theme.warning
-            font.bold: true
-            horizontalAlignment: Text.AlignHCenter
-        }
-
-        Label {
-            visible: root.wide
-            Layout.preferredWidth: 84
-            text: recommendation.color_fit
-            color: recommendation.color_fit === "Off color" ? Theme.warning : Theme.textMuted
-            horizontalAlignment: Text.AlignRight
         }
     }
 }
-

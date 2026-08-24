@@ -104,6 +104,36 @@ def test_default_live_session_snapshot_has_neutral_initial_state() -> None:
     assert snapshot.backtest is None
 
 
+def test_pool_aggregates_apply_card_quantities_and_skip_lands() -> None:
+    colorless_card = replace(_card(), grp_id=124, colors=(), mana_value=None)
+    blue_card = replace(_card(), grp_id=125, colors=("U",), mana_value=7.0)
+    land_card = replace(
+        _card(),
+        grp_id=126,
+        types=("Basic Land",),
+        mana_cost=None,
+        mana_value=0.0,
+    )
+    cards = (
+        PoolCard(card=_card(), quantity=2),
+        PoolCard(card=colorless_card, quantity=3),
+        PoolCard(card=blue_card, quantity=1),
+        PoolCard(card=land_card, quantity=4),
+    )
+
+    color_distribution, mana_curve = LiveSession._pool_aggregates(cards=cards)
+
+    assert color_distribution == (
+        ("W", 6),
+        ("U", 1),
+        ("B", 0),
+        ("R", 0),
+        ("G", 0),
+        ("C", 3),
+    )
+    assert mana_curve == (0, 0, 2, 0, 0, 0, 1)
+
+
 def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> None:
     card = _card()
     account = AccountIdentity(account_id="account-1", screen_name="Player#12345")
@@ -190,6 +220,7 @@ def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> Non
         pool=PoolState(
             cards=(pool_card,),
             total_cards=2,
+            target_cards=42,
             inferred_pair="WU",
             commitment=0.5,
         ),
@@ -216,6 +247,7 @@ def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> Non
     assert snapshot.draft == draft
     assert snapshot.recommendations.cards == (recommendation,)
     assert snapshot.pool.cards == (pool_card,)
+    assert snapshot.pool.target_cards == 42
     assert snapshot.progress is not None
     assert snapshot.progress.completed == 1
     assert snapshot.errors[0].recoverable is True
@@ -627,6 +659,19 @@ def test_live_session_loads_cached_ratings_scores_all_ranking_modes_and_audits_c
         "Prior*",
         "Quick",
     }
+    recommendations = session.snapshot.recommendations.cards
+    explanations = tuple(
+        recommendation.explanation for recommendation in recommendations
+    )
+    assert all(
+        explanation is not None and "DG-point candidate" in explanation
+        for explanation in explanations
+    )
+    top_recommendation = recommendations[0]
+    assert str(top_recommendation.score) in (top_recommendation.explanation or "")
+    assert top_recommendation.source_label in (
+        top_recommendation.explanation or ""
+    )
 
     top_cards_by_mode: dict[str, int] = {}
     supported_modes = session.snapshot.recommendations.supported_ranking_modes

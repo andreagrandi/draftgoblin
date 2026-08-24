@@ -26,7 +26,24 @@ def test_ready_mock_snapshot_covers_every_desktop_data_surface() -> None:
     assert snapshot.recommendations.selected_grp_id is not None
     assert snapshot.recommendations.cards[0].letter_grade == "A-"
     assert snapshot.recommendations.cards[0].explanation
-    assert snapshot.pool.total_cards == 18
+    assert snapshot.recommendations.confidence_summary is None
+    assert snapshot.pool.total_cards == 10
+    assert snapshot.pool.target_cards == 42
+    assert sum(
+        pool_card.quantity for pool_card in snapshot.pool.cards
+    ) == snapshot.pool.total_cards
+    assert all(
+        pool_card.quantity == 1 for pool_card in snapshot.pool.recent_picks
+    )
+    assert snapshot.pool.color_distribution == (
+        ("W", 0),
+        ("U", 0),
+        ("B", 1),
+        ("R", 0),
+        ("G", 9),
+        ("C", 0),
+    )
+    assert sum(snapshot.pool.mana_curve) == snapshot.pool.total_cards
     assert snapshot.build is not None
     assert snapshot.build.deck_size == 40
     assert snapshot.build.spell_count == 23
@@ -131,5 +148,3 @@ def test_mock_provider_rejects_unknown_scenario() -> None:
 
     with pytest.raises(ValueError, match="Unsupported mock scenario"):
         session.select_scenario(scenario="unknown")  # type: ignore[arg-type]
-
-
