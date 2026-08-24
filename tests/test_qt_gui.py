@@ -764,7 +764,8 @@ assert pool_flickable.property("contentY") == 0
 name = wide_row.findChild(QObject, "recommendationName")
 assert name is not None
 assert name.property("text") == provider.state["recommendations"]["cards"][0]["card"]["name"]
-assert name.property("width") >= name.property("implicitWidth")
+assert name.property("truncated") is False
+assert name.property("paintedWidth") <= name.property("width") + 1
 second_row.forceActiveFocus()
 QTest.keyClick(root, Qt.Key_Return)
 application.processEvents()
