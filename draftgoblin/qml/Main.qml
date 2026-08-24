@@ -18,6 +18,31 @@ ApplicationWindow {
     readonly property bool narrow: width < Theme.narrowBreakpoint
     readonly property var sessionState: provider.state
     readonly property var displayPreferences: guiPreferences
+    property string automaticBuildContext: ""
+
+    function requestCompletedDraftBuild() {
+        if (window.currentSurface !== "build")
+            return
+
+        const draft = window.sessionState ? window.sessionState.draft : null
+        const pool = window.sessionState ? window.sessionState.pool : null
+        const cardData = window.sessionState ? window.sessionState.card_data : null
+        if (!draft || !draft.completed || !pool || pool.total_cards <= 0
+                || !cardData || cardData.phase !== "ready"
+                || window.sessionState.build)
+            return
+
+        const context = draft.account_id + ":" + draft.draft_id
+        if (window.automaticBuildContext === context)
+            return
+
+        window.automaticBuildContext = context
+        window.provider.requestBuild("")
+    }
+
+    onCurrentSurfaceChanged: requestCompletedDraftBuild()
+    onSessionStateChanged: requestCompletedDraftBuild()
+    Component.onCompleted: requestCompletedDraftBuild()
 
     header: AppBar {
         sessionState: window.sessionState
