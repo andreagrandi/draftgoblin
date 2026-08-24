@@ -175,14 +175,9 @@ try:
     assert root.property("currentSurface") == "live"
 
     root.setProperty("currentSurface", "build")
-    application.processEvents()
-    build_request = root.findChild(QObject, "buildRequestButton")
-    assert build_request is not None and build_request.property("visible") is True
-    build_request.forceActiveFocus()
-    QTest.keyClick(root, Qt.Key_Space)
     wait_until(
         lambda: provider.state.get("build") is not None,
-        "the published production build",
+        "the automatically published production build",
     )
     assert provider.state["build"]["spells"]
     build_spell = find_visual_item(root.contentItem(), "buildSpellButton0")
@@ -624,6 +619,13 @@ application.processEvents()
 build_request = root.findChild(QObject, "buildRequestButton")
 assert build_request is not None
 assert provider.state["errors"][0]["operation"] == "build"
+build_request.forceActiveFocus()
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+assert any(
+    isinstance(command, RequestBuild) and command.pair_override is None
+    for command in provider.commands
+)
 
 root.setProperty("currentSurface", "backtest")
 application.processEvents()
