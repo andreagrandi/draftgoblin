@@ -109,7 +109,7 @@ Item {
                     ColumnLayout {
                         anchors.centerIn: parent
                         spacing: 3
-                        Label { Layout.alignment: Qt.AlignHCenter; text: modelData.value; color: modelData.label === "MATCHED" ? Theme.primary : Theme.text; font.family: "monospace"; font.pixelSize: root.narrow ? 16 : 20; font.bold: true }
+                        Label { Layout.alignment: Qt.AlignHCenter; text: modelData.value; color: modelData.label === "MATCHED" ? Theme.primary : Theme.text; font.family: fixedFontFamily; font.pixelSize: root.narrow ? 16 : 20; font.bold: true }
                         Label { Layout.alignment: Qt.AlignHCenter; text: modelData.label; color: Theme.textMuted; font.pixelSize: 9; font.bold: true; font.letterSpacing: 0.8 }
                     }
                 }
@@ -220,7 +220,7 @@ Item {
                             anchors.leftMargin: 10
                             anchors.rightMargin: 10
                             spacing: 10
-                            Label { Layout.preferredWidth: 74; text: "P" + (modelData.pack_number + 1) + " · P" + (modelData.pick_number + 1); color: Theme.textMuted; font.family: "monospace" }
+                            Label { Layout.preferredWidth: 74; text: "P" + (modelData.pack_number + 1) + " · P" + (modelData.pick_number + 1); color: Theme.textMuted; font.family: fixedFontFamily }
                             Label {
                                 objectName: "backtestRecommended" + index
                                 Layout.fillWidth: true
@@ -247,7 +247,7 @@ Item {
                                 Layout.preferredWidth: 70
                                 text: modelData.recommended_score !== null && modelData.recommended_score !== undefined ? modelData.recommended_score : "—"
                                 color: Theme.text
-                                font.family: "monospace"
+                                font.family: fixedFontFamily
                             }
                             Label {
                                 objectName: "backtestWinRate" + index
@@ -256,7 +256,7 @@ Item {
                                 text: modelData.recommended_win_rate !== null && modelData.recommended_win_rate !== undefined
                                     ? (modelData.recommended_win_rate * 100).toFixed(1) + "%" : "—"
                                 color: Theme.textMuted
-                                font.family: "monospace"
+                                font.family: fixedFontFamily
                             }
                             Label {
                                 objectName: "backtestSource" + index
@@ -274,7 +274,7 @@ Item {
                             spacing: 2
                             RowLayout {
                                 Layout.fillWidth: true
-                                Label { text: "P" + (modelData.pack_number + 1) + " · P" + (modelData.pick_number + 1); color: Theme.textMuted; font.family: "monospace" }
+                                Label { text: "P" + (modelData.pack_number + 1) + " · P" + (modelData.pick_number + 1); color: Theme.textMuted; font.family: fixedFontFamily }
                                 Label { Layout.fillWidth: true; text: backtestRow.resultText; color: modelData.match ? Theme.primary : Theme.warning; horizontalAlignment: Text.AlignRight }
                             }
                             Label { Layout.fillWidth: true; text: backtestRow.comparisonText; color: Theme.text; elide: Text.ElideRight }

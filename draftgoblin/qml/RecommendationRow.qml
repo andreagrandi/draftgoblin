@@ -50,7 +50,7 @@ FocusScope {
             Layout.preferredWidth: 26
             text: recommendation.rank
             color: recommendation.rank === 1 ? Theme.primary : Theme.textMuted
-            font.family: "monospace"
+            font.family: fixedFontFamily
             font.bold: true
             horizontalAlignment: Text.AlignHCenter
         }
@@ -112,7 +112,7 @@ FocusScope {
             Layout.preferredWidth: 52
             text: recommendation.score
             color: Theme.text
-            font.family: "monospace"
+            font.family: fixedFontFamily
             font.pixelSize: 16
             font.bold: true
             horizontalAlignment: Text.AlignRight
@@ -124,7 +124,7 @@ FocusScope {
             text: recommendation.win_rate !== null
                 ? (recommendation.win_rate * 100).toFixed(1) + "%" : "—"
             color: Theme.textMuted
-            font.family: "monospace"
+            font.family: fixedFontFamily
             horizontalAlignment: Text.AlignRight
         }
         Label {
