@@ -859,6 +859,29 @@ assert sum(
     isinstance(command, FocusBuildCard) for command in provider.commands
 ) == focus_command_count + 1
 
+narrow_curve = find_visual_item(root.contentItem(), "narrowBuildManaCurve")
+assert narrow_curve is not None and narrow_curve.isVisible()
+narrow_average = find_visual_item(narrow_curve, "manaCurveAverage")
+assert narrow_average is not None and narrow_average.isVisible()
+assert narrow_average.width() >= narrow_average.property("implicitWidth")
+formatted_state = dict(provider.state)
+formatted_build = dict(formatted_state["build"])
+formatted_build["average_mana_value"] = 2.956
+formatted_state["build"] = formatted_build
+provider._replace_state(state=formatted_state)
+application.processEvents()
+assert narrow_average.property("text") == "Average mana value: 2.96"
+unavailable_state = dict(provider.state)
+unavailable_build = dict(unavailable_state["build"])
+unavailable_build["average_mana_value"] = None
+unavailable_state["build"] = unavailable_build
+provider._replace_state(state=unavailable_state)
+application.processEvents()
+assert narrow_average.property("text") == "Average mana value: —"
+provider.selectScenario("ready")
+application.processEvents()
+assert narrow_average.property("text") == "Average mana value: 2.70"
+
 pair_selector = root.findChild(QObject, "buildPairSelector")
 rebuild = root.findChild(QObject, "buildRebuildButton")
 assert pair_selector is not None and rebuild is not None
@@ -920,6 +943,14 @@ assert compact_spell is not None and compact_spell.isVisible()
 root.resize(1060, 900)
 application.processEvents()
 assert build_view.property("compactPresentation") is False
+
+wide_curve = find_visual_item(root.contentItem(), "wideBuildManaCurve")
+assert wide_curve is not None and wide_curve.isVisible()
+wide_average = find_visual_item(wide_curve, "manaCurveAverage")
+assert wide_average is not None and wide_average.isVisible()
+assert wide_average.property("text") == "Average mana value: 2.70"
+assert wide_average.width() <= wide_curve.width()
+assert wide_average.width() >= wide_average.property("implicitWidth")
 wide_spells = find_visual_item(root.contentItem(), "buildSpellGroups")
 assert wide_spells is not None and wide_spells.isVisible()
 assert wide_spells.x() >= 0

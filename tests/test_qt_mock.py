@@ -16,10 +16,19 @@ from draftgoblin.session import (
 
 
 def test_qt_translation_publishes_plain_values_without_domain_payloads() -> None:
-    values = _to_qml_value(MockLiveSession().snapshot)
+    snapshot = MockLiveSession().snapshot
+    values = _to_qml_value(snapshot)
+    build = snapshot.build
 
+    assert build is not None
+    expected_average = sum(
+        entry.quantity * entry.card.mana_value
+        for entry in build.spells
+        if entry.card.mana_value is not None
+    ) / sum(entry.quantity for entry in build.spells)
     assert values["status"]["phase"] == "drafting"
     assert values["recommendations"]["cards"][0]["card"]["name"]
+    assert values["build"]["average_mana_value"] == pytest.approx(expected_average)
     assert "domain_pool" not in values["build"]
     assert "domain_selection" not in values["build"]
 
@@ -49,8 +58,10 @@ def test_qt_mock_adapter_exposes_shared_provider_contract() -> None:
     adapter.setSplashEnabled(False)
     assert adapter.state["recommendations"]["splash_enabled"] is False
 
+    initial_average = adapter.state["build"]["average_mana_value"]
     adapter.requestBuild("BG")
     assert adapter.state["build"]["pair_override"] == "BG"
+    assert adapter.state["build"]["average_mana_value"] == initial_average
 
     adapter.requestBacktest()
     assert adapter.state["backtest"]["rows"]
