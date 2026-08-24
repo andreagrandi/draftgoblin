@@ -12,8 +12,13 @@ pytest.importorskip("PySide6")
 
 from draftgoblin import __version__
 from draftgoblin.audit import load_draft_audit_records
+from draftgoblin.carddb import CardDatabase
 from draftgoblin.pool import load_draft_state
-from draftgoblin.qt_gui import APPLICATION_NAME, _configure_application_metadata
+from draftgoblin.qt_gui import (
+    APPLICATION_NAME,
+    _configure_application_metadata,
+    _live_session_factory,
+)
 
 
 FIXTURE_ACCOUNT_ID = "FIXTURECLIENTID1234567890"
@@ -75,6 +80,47 @@ def test_gui_metadata_uses_canonical_version_and_logo_resource() -> None:
     assert runtime_logo.read_bytes() == source_logo.read_bytes()
 
 
+def test_live_gui_uses_shared_metadata_augmenting_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = CardDatabase(cards={})
+    factory_calls: list[tuple[CardDatabase, Path | None, bool]] = []
+
+    monkeypatch.setattr(
+        "draftgoblin.qt_gui.load_or_refresh_card_database",
+        lambda *, app_dir: database,
+    )
+
+    def shared_loader_factory(
+        *,
+        database: CardDatabase,
+        load_ratings: object,
+        app_dir: Path | None,
+        persist_database: bool,
+    ) -> object:
+        del load_ratings
+        factory_calls.append((database, app_dir, persist_database))
+        return lambda set_code, progress_callback: None
+
+    monkeypatch.setattr(
+        "draftgoblin.qt_gui.metadata_augmenting_ratings_progress_loader",
+        shared_loader_factory,
+    )
+    app_dir = tmp_path / "app"
+    session_factory = _live_session_factory(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        bulk_file=None,
+        poll_interval=0.01,
+    )
+    session = session_factory(lambda snapshot: None)
+
+    session.load_card_data()
+
+    assert factory_calls == [(database, app_dir, True)]
+
+
 def test_production_gui_processes_representative_arena_log_offscreen(
     tmp_path: Path,
 ) -> None:
@@ -130,8 +176,11 @@ def test_production_adapter_renders_build_backtest_and_persisted_preferences_off
 ) -> None:
     app_dir = tmp_path / "app"
     probe = """
+import json
 import os
 import time
+import urllib.parse
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QUrl
@@ -143,6 +192,7 @@ from PySide6.QtTest import QTest
 
 from draftgoblin import __version__
 from draftgoblin.carddb import build_card_database_from_bulk_file
+from draftgoblin.cardimages import CardImageService
 from draftgoblin.qt_adapter import GuiPreferencesAdapter, LiveSessionAdapter
 from draftgoblin.session import LiveSession
 
@@ -156,6 +206,10 @@ def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
             return found
     return None
 
+def image_source(image: QObject) -> str:
+    source = image.property("source")
+    return source.toString() if isinstance(source, QUrl) else str(source)
+
 
 def wait_until(predicate, description: str) -> None:
     deadline = time.monotonic() + 8
@@ -167,20 +221,77 @@ def wait_until(predicate, description: str) -> None:
     application.processEvents()
 
 
+class _Response:
+    def __init__(self, payload: bytes):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return None
+
+    def read(self, maximum: int) -> bytes:
+        return self.payload[:maximum]
+
+
+def metadata_opener(request, timeout):
+    del timeout
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
+    exact_name = query["exact"][0]
+    image_uri = (
+        "https://images.example/"
+        + urllib.parse.quote(exact_name, safe="")
+        + ".png"
+    )
+    return _Response(
+        json.dumps({"image_uris": {"normal": image_uri}}).encode("utf-8")
+    )
+
+
+def image_opener(request, timeout):
+    del request, timeout
+    return _Response(
+        (project_root / "draftgoblin" / "assets" / "draftgoblin_logo.png").read_bytes()
+    )
+
+
+def load_image_database():
+    database = build_card_database_from_bulk_file(path=bulk_file)
+    return replace(
+        database,
+        cards={
+            grp_id: replace(card, image_uri=None)
+            for grp_id, card in database.cards.items()
+        },
+        image_uris_by_name={},
+    )
+
+
 project_root = Path.cwd()
 app_dir = Path(os.environ["DRAFTGOBLIN_E2E_APP_DIR"])
-log_path = project_root / "tests" / "fixtures" / "quick-draft-msh-player.log"
+fixture_log_path = project_root / "tests" / "fixtures" / "quick-draft-msh-player.log"
+fixture_log_lines = fixture_log_path.read_text(encoding="utf-8").splitlines(keepends=True)
+log_path = app_dir / "Player.log"
+log_path.parent.mkdir(parents=True, exist_ok=True)
+log_path.write_text("".join(fixture_log_lines[:22]), encoding="utf-8")
 bulk_file = project_root / "tests" / "fixtures" / "scryfall-default-cards-sample.jsonl"
 
 
 def factory(publish):
     return LiveSession(
         log_path=log_path,
-        card_database_loader=lambda: build_card_database_from_bulk_file(path=bulk_file),
+        card_database_loader=load_image_database,
         app_dir=app_dir,
         poll_interval=0.01,
         snapshot_publisher=publish,
-        card_image_service=None,
+        card_image_service=CardImageService(
+            cache_dir=app_dir / "card-images",
+            opener=image_opener,
+            metadata_opener=metadata_opener,
+            monotonic_clock=lambda: 0.0,
+            sleep=lambda seconds: None,
+        ),
         ratings_cache_checker=lambda _set_code: False,
     )
 
@@ -205,20 +316,105 @@ engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
 root = engine.rootObjects()[0]
 provider.start()
 try:
+    assert root.property("currentSurface") == "live"
+    root.resize(760, 900)
+    application.processEvents()
+    live_preview = root.findChild(QObject, "narrowLiveCardPreview")
+    assert live_preview is not None
+    live_image = live_preview.findChild(QObject, "cardPreviewImage")
+    assert live_image is not None
+    wait_until(
+        lambda: provider.state["card_image"]["phase"] == "ready"
+        and live_preview.property("imageCurrent") is True
+        and live_image.isVisible(),
+        "the visible selected recommendation image",
+    )
+    first_recommendation_source = image_source(live_image)
+    first_recommendation_grp_id = provider.state["card_image"]["grp_id"]
+    next_recommendation_grp_id = next(
+        card["card"]["grp_id"]
+        for card in provider.state["recommendations"]["cards"]
+        if card["card"]["grp_id"] != first_recommendation_grp_id
+    )
+    provider.chooseRecommendation(next_recommendation_grp_id)
+    wait_until(
+        lambda: provider.state["card_image"]["grp_id"] == next_recommendation_grp_id
+        and provider.state["card_image"]["phase"] == "ready"
+        and live_preview.property("imageCurrent") is True
+        and live_image.isVisible()
+        and image_source(live_image) != first_recommendation_source,
+        "the visible changed recommendation image",
+    )
+    next_recommendation_source = image_source(live_image)
+    assert next_recommendation_source
+    provider.requestBuild("")
+    wait_until(
+        lambda: provider.state.get("build") is not None,
+        "the published active-draft build",
+    )
+
+
+    root.setProperty("currentSurface", "build")
+    assert provider.state["build"]["spells"]
+    build_spell = find_visual_item(root.contentItem(), "buildSpellButton1")
+    assert build_spell is not None and build_spell.isVisible()
+    build_spell.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    build_preview = root.findChild(QObject, "narrowBuildCardPreview")
+    assert build_preview is not None
+    build_image = build_preview.findChild(QObject, "cardPreviewImage")
+    assert build_image is not None
+    first_build_grp_id = provider.state["build"]["spells"][1]["card"]["grp_id"]
+    wait_until(
+        lambda: provider.state["card_image"]["grp_id"] == first_build_grp_id
+        and provider.state["card_image"]["phase"] == "ready"
+        and build_preview.property("imageCurrent") is True
+        and build_image.isVisible(),
+        "the visible focused build image",
+    )
+    first_build_source = image_source(build_image)
+    next_build_spell = find_visual_item(root.contentItem(), "buildSpellButton2")
+    assert next_build_spell is not None and next_build_spell.isVisible()
+    next_build_spell.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    next_build_grp_id = provider.state["build"]["spells"][2]["card"]["grp_id"]
+    wait_until(
+        lambda: provider.state["card_image"]["grp_id"] == next_build_grp_id
+        and provider.state["card_image"]["phase"] == "ready"
+        and build_preview.property("imageCurrent") is True
+        and build_image.isVisible()
+        and image_source(build_image) != first_build_source,
+        "the visible changed build image",
+    )
+    next_build_source = image_source(build_image)
+    assert next_build_source
+
+    root.setProperty("currentSurface", "live")
+    wait_until(
+        lambda: provider.state["card_image"]["grp_id"] == next_recommendation_grp_id
+        and provider.state["card_image"]["phase"] == "ready"
+        and live_preview.property("imageCurrent") is True
+        and live_image.isVisible()
+        and image_source(live_image) == next_recommendation_source,
+        "the restored visible recommendation image",
+    )
+
+    root.setProperty("currentSurface", "build")
+    wait_until(
+        lambda: provider.state["card_image"]["grp_id"] == next_build_grp_id
+        and provider.state["card_image"]["phase"] == "ready"
+        and build_preview.property("imageCurrent") is True
+        and build_image.isVisible()
+        and image_source(build_image) == next_build_source,
+        "the restored visible build image",
+    )
+    with log_path.open(mode="a", encoding="utf-8") as log_file:
+        log_file.writelines(fixture_log_lines[22:])
     wait_until(
         lambda: (provider.state.get("draft") or {}).get("completed") is True,
         "the completed representative draft",
     )
-    assert root.property("currentSurface") == "live"
 
-    root.setProperty("currentSurface", "build")
-    wait_until(
-        lambda: provider.state.get("build") is not None,
-        "the automatically published production build",
-    )
-    assert provider.state["build"]["spells"]
-    build_spell = find_visual_item(root.contentItem(), "buildSpellButton0")
-    assert build_spell is not None and build_spell.isVisible()
 
     root.setProperty("currentSurface", "backtest")
     application.processEvents()
@@ -536,7 +732,7 @@ from draftgoblin import __version__
 from draftgoblin.mock_session import MockLiveSession
 from draftgoblin.qt_adapter import GuiPreferencesAdapter
 from draftgoblin.qt_mock import MockSessionAdapter
-from draftgoblin.session import RequestBacktest, RequestBuild
+from draftgoblin.session import FocusBuildCard, RequestBacktest, RequestBuild
 
 
 def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
@@ -629,6 +825,23 @@ application.processEvents()
 
 root.setProperty("currentSurface", "build")
 application.processEvents()
+build_view = root.findChild(QObject, "buildView")
+assert build_view is not None
+initial_focus_key = build_view.property("publishedBuildFocusKey")
+assert initial_focus_key
+focus_command_count = sum(
+    isinstance(command, FocusBuildCard) for command in provider.commands
+)
+provider.selectScenario("empty")
+application.processEvents()
+assert build_view.property("publishedBuildFocusKey") == ""
+provider.selectScenario("ready")
+application.processEvents()
+assert build_view.property("publishedBuildFocusKey") == initial_focus_key
+assert sum(
+    isinstance(command, FocusBuildCard) for command in provider.commands
+) == focus_command_count + 1
+
 pair_selector = root.findChild(QObject, "buildPairSelector")
 rebuild = root.findChild(QObject, "buildRebuildButton")
 assert pair_selector is not None and rebuild is not None
@@ -637,7 +850,6 @@ rebuild.forceActiveFocus()
 QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
 assert any(isinstance(command, RequestBuild) and command.pair_override == "BG" for command in provider.commands)
-build_view = root.findChild(QObject, "buildView")
 spell_button = find_visual_item(root.contentItem(), "buildSpellButton1")
 assert build_view is not None and spell_button is not None
 spell_button.forceActiveFocus()
@@ -672,6 +884,12 @@ bench_button.forceActiveFocus()
 QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
 assert narrow_preview.property("recommendation")["card"]["name"] == provider.state["build"]["bench"][0]["card"]["name"]
+assert any(
+    isinstance(command, FocusBuildCard)
+    and command.grp_id == provider.state["build"]["bench"][0]["card"]["grp_id"]
+    for command in provider.commands
+)
+assert narrow_preview.property("imageState")["grp_id"] == provider.state["build"]["bench"][0]["card"]["grp_id"]
 QTest.qWait(20)
 assert_visible_active_focus(card_details_toggle)
 

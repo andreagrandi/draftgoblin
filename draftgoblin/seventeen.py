@@ -24,7 +24,14 @@ from statistics import median
 from typing import Any, TypeAlias
 
 from draftgoblin import __version__
-from draftgoblin.carddb import CardDatabase, CardInfo
+from draftgoblin.carddb import (
+    CardDatabase,
+    CardDatabaseError,
+    CardInfo,
+    CardMetadataSeed,
+    augment_card_database_with_mtgjson_set,
+    save_card_database,
+)
 from draftgoblin.config import (
     COLOR_PAIRS,
     DECK_BUILDER,
@@ -817,6 +824,129 @@ class SeventeenLandsData:
 
         self.pair_card_ratings[pair] = pair_data
         return pair_data
+
+
+def metadata_augmenting_ratings_loader(
+    *,
+    database: CardDatabase,
+    load_ratings: Callable[[str], SeventeenLandsData],
+    app_dir: PathInput | None = None,
+    persist_database: bool = True,
+) -> Callable[[str], SeventeenLandsData]:
+    """Wrap ratings loading with the shared current-set metadata recovery.
+    Terminal and desktop frontends must use this same database lifecycle.
+    """
+
+    def load_and_augment(set_code: str) -> SeventeenLandsData:
+        ratings_data = load_ratings(set_code)
+        augment_card_database_from_ratings(
+            database=database,
+            set_code=set_code,
+            ratings_data=ratings_data,
+            app_dir=app_dir,
+            persist_database=persist_database,
+        )
+        return ratings_data
+
+    return load_and_augment
+
+
+def metadata_augmenting_ratings_progress_loader(
+    *,
+    database: CardDatabase,
+    load_ratings: Callable[
+        [str, DownloadProgressCallback],
+        SeventeenLandsData,
+    ],
+    app_dir: PathInput | None = None,
+    persist_database: bool = True,
+) -> Callable[[str, DownloadProgressCallback], SeventeenLandsData]:
+    """Wrap progress-aware ratings loading with current-set metadata recovery.
+    The returned loader preserves the frontend-neutral progress contract.
+    """
+
+    def load_and_augment(
+        set_code: str,
+        progress_callback: DownloadProgressCallback,
+    ) -> SeventeenLandsData:
+        ratings_data = load_ratings(set_code, progress_callback)
+        augment_card_database_from_ratings(
+            database=database,
+            set_code=set_code,
+            ratings_data=ratings_data,
+            app_dir=app_dir,
+            persist_database=persist_database,
+        )
+        return ratings_data
+
+    return load_and_augment
+
+
+def augment_card_database_from_ratings(
+    *,
+    database: CardDatabase,
+    set_code: str,
+    ratings_data: SeventeenLandsData,
+    app_dir: PathInput | None = None,
+    persist_database: bool = True,
+) -> None:
+    """Recover current Arena grpIds from ratings and MTGJSON metadata.
+    Successful recovery updates the shared in-memory database and cache.
+    """
+
+    seeds = _metadata_seeds_from_ratings(ratings=ratings_data.ratings.values())
+    if not seeds:
+        return
+
+    if not database.unresolved_grp_ids(
+        grp_ids=tuple(seed.grp_id for seed in seeds),
+    ):
+        return
+
+    try:
+        augmented = augment_card_database_with_mtgjson_set(
+            database,
+            set_code=set_code,
+            seeds=seeds,
+        )
+    except CardDatabaseError:
+        return
+
+    database.cards.clear()
+    database.cards.update(augmented.cards)
+    if not persist_database:
+        return
+
+    try:
+        save_card_database(database, app_dir=app_dir)
+    except OSError:
+        return
+
+
+def _metadata_seeds_from_ratings(
+    *,
+    ratings: Iterable[ResolvedCardRating],
+) -> tuple[CardMetadataSeed, ...]:
+    seeds: dict[int, CardMetadataSeed] = {}
+    for rating in ratings:
+        if rating.name.startswith("Unknown card "):
+            continue
+
+        seeds[rating.grp_id] = CardMetadataSeed(
+            grp_id=rating.grp_id,
+            name=rating.name,
+            colors=_rating_colors(color=rating.color),
+            rarity=rating.rarity or "unknown",
+        )
+
+    return tuple(seeds.values())
+
+
+def _rating_colors(*, color: str | None) -> tuple[str, ...]:
+    if color is None:
+        return ()
+
+    return tuple(symbol for symbol in "WUBRG" if symbol in color)
 
 
 def seventeen_lands_cache_path(

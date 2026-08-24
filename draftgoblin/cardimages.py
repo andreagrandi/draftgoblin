@@ -4,15 +4,19 @@ Network and filesystem behavior stay behind a UI-neutral Python service.
 
 from __future__ import annotations
 
+import http.client
 import hashlib
+import json
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from os import PathLike
 from pathlib import Path
+from threading import RLock
 from typing import Any, TypeAlias
 
 from draftgoblin.carddb import SCRYFALL_USER_AGENT, CardDatabase, CardInfo
@@ -20,12 +24,18 @@ from draftgoblin.paths import app_data_dir
 
 PathInput: TypeAlias = str | PathLike[str]
 ImageUrlOpener: TypeAlias = Callable[..., Any]
+MetadataUrlOpener: TypeAlias = Callable[..., Any]
+MonotonicClock: TypeAlias = Callable[[], float]
+SleepFunction: TypeAlias = Callable[[float], None]
 
 CARD_IMAGE_CACHE_DIR_NAME = "card-images"
 CARD_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 CARD_IMAGE_TIMEOUT_SECONDS = 10.0
 CARD_IMAGE_MAX_ATTEMPTS = 2
 CARD_IMAGE_FILE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+SCRYFALL_NAMED_CARD_URL = "https://api.scryfall.com/cards/named"
+SCRYFALL_NAMED_CARD_MAX_BYTES = 1024 * 1024
+SCRYFALL_NAMED_CARD_MIN_INTERVAL_SECONDS = 0.5
 
 
 class CardImageError(RuntimeError):
@@ -49,6 +59,36 @@ class CardImageService:
         repr=False,
         compare=False,
     )
+    metadata_opener: MetadataUrlOpener = field(
+        default=urllib.request.urlopen,
+        repr=False,
+        compare=False,
+    )
+    metadata_max_bytes: int = SCRYFALL_NAMED_CARD_MAX_BYTES
+    monotonic_clock: MonotonicClock = field(
+        default=time.monotonic,
+        repr=False,
+        compare=False,
+    )
+    sleep: SleepFunction = field(default=time.sleep, repr=False, compare=False)
+    _metadata_uris_by_name: dict[str, str] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _metadata_rate_state: dict[str, float] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _metadata_rate_lock: RLock = field(
+        default_factory=RLock,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if self.max_bytes <= 0:
@@ -57,6 +97,8 @@ class CardImageService:
             raise ValueError("Card-image timeout must be positive.")
         if self.max_attempts <= 0:
             raise ValueError("Card-image attempt limit must be positive.")
+        if self.metadata_max_bytes <= 0:
+            raise ValueError("Card metadata byte limit must be positive.")
 
     def resolve_image_uri(
         self,
@@ -74,6 +116,82 @@ class CardImageService:
             return None
 
         return card_database.image_uri_for_name(name=card.name)
+
+    def resolve_focused_image_uri(
+        self,
+        *,
+        card: CardInfo,
+        card_database: CardDatabase,
+    ) -> str | None:
+        """Resolve a selected known card, using one exact Scryfall lookup if needed.
+
+        Projection callers must use :meth:`resolve_image_uri`, which deliberately
+        stays local-only. Successful named lookups are retained in memory.
+        """
+
+        image_uri = self.resolve_image_uri(card=card, card_database=card_database)
+        if image_uri is not None or card.unknown:
+            return image_uri
+
+        name_key = _normalized_card_name(name=card.name)
+        cached_uri = self._metadata_uris_by_name.get(name_key)
+        if cached_uri is not None:
+            return cached_uri
+
+        request = urllib.request.Request(
+            f"{SCRYFALL_NAMED_CARD_URL}?exact="
+            f"{urllib.parse.quote(card.name, safe='')}",
+            headers={
+                "Accept": "application/json;q=0.9,*/*;q=0.8",
+                "User-Agent": SCRYFALL_USER_AGENT,
+            },
+        )
+        try:
+            self._wait_for_metadata_request_slot()
+            with self.metadata_opener(
+                request,
+                timeout=self.timeout_seconds,
+            ) as response:
+                payload = response.read(self.metadata_max_bytes + 1)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise CardImageError(f"Card metadata lookup failed: {error}") from error
+        except (http.client.HTTPException, OSError, urllib.error.URLError) as error:
+            raise CardImageError(f"Card metadata lookup failed: {error}") from error
+
+        if not isinstance(payload, bytes):
+            raise CardImageError("Card metadata lookup returned malformed response.")
+        if len(payload) > self.metadata_max_bytes:
+            raise CardImageError("Card metadata lookup failed: response too large.")
+        try:
+            card_object = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise CardImageError(
+                f"Card metadata lookup returned malformed JSON: {error}"
+            ) from error
+        if not isinstance(card_object, dict):
+            raise CardImageError("Card metadata lookup returned malformed JSON object.")
+
+        image_uri = _scryfall_card_image_uri(card=card_object)
+        if image_uri is not None:
+            self._metadata_uris_by_name[name_key] = image_uri
+        return image_uri
+
+    def _wait_for_metadata_request_slot(self) -> None:
+        """Respect Scryfall's two-requests-per-second named-endpoint limit."""
+
+        with self._metadata_rate_lock:
+            now = self.monotonic_clock()
+            last_request_at = self._metadata_rate_state.get("last_request_at")
+            if last_request_at is not None:
+                next_request_at = (
+                    last_request_at + SCRYFALL_NAMED_CARD_MIN_INTERVAL_SECONDS
+                )
+                if now < next_request_at:
+                    self.sleep(next_request_at - now)
+                    now = max(self.monotonic_clock(), next_request_at)
+            self._metadata_rate_state["last_request_at"] = now
 
     def cached_path(self, *, image_uri: str) -> Path:
         """Return the deterministic cache path for one image URL.
@@ -160,4 +278,36 @@ def _card_image_extension(*, image_uri: str) -> str:
         return extension
 
     return ".jpg"
+
+
+def _normalized_card_name(*, name: str) -> str:
+    return " ".join(name.casefold().replace("’", "'").split())
+
+
+def _scryfall_card_image_uri(*, card: Mapping[str, Any]) -> str | None:
+    image_uri = _scryfall_image_uri(value=card.get("image_uris"))
+    if image_uri is not None:
+        return image_uri
+
+    faces = card.get("card_faces")
+    if not isinstance(faces, list):
+        return None
+    for face in faces:
+        if isinstance(face, Mapping):
+            image_uri = _scryfall_image_uri(value=face.get("image_uris"))
+            if image_uri is not None:
+                return image_uri
+
+    return None
+
+
+def _scryfall_image_uri(*, value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    for key in ("normal", "large", "small", "png", "border_crop", "art_crop"):
+        image_uri = value.get(key)
+        if isinstance(image_uri, str) and image_uri:
+            return image_uri
+
+    return None
 

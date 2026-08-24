@@ -37,6 +37,7 @@ from draftgoblin.session import (
     ChooseAccount,
     ChooseRecommendation,
     DismissError,
+    FocusBuildCard,
     LiveSession,
     LiveSessionCommand,
     LiveSessionSnapshot,
@@ -236,6 +237,10 @@ class SessionAdapter(QObject):
     @Slot(int)
     def chooseRecommendation(self, grp_id: int) -> None:
         self._dispatch(command=ChooseRecommendation(grp_id=grp_id))
+
+    @Slot(int)
+    def focusBuildCard(self, grp_id: int) -> None:
+        self._dispatch(command=FocusBuildCard(grp_id=grp_id))
 
     @Slot(str)
     def changeRanking(self, ranking_mode: str) -> None:

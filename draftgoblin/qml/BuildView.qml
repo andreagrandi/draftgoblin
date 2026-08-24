@@ -40,16 +40,60 @@ Item {
         const automaticPairName = root.automaticPair ? root.automaticPair.pair : "another pair"
         return root.build.selected_pair + " was explicitly requested. Automatic evaluation preferred " + automaticPairName + "."
     }
-    property var focusedCard: root.hasBuild && root.build.spells.length > 0 ? root.build.spells[0] : null
+    readonly property string buildIdentity: {
+        if (!root.hasBuild)
+            return ""
+        return root.build.selected_pair + ":"
+            + root.build.spells.map(entry => entry.card.grp_id).join(",") + ":"
+            + root.build.bench.map(entry => entry.card.grp_id).join(",")
+    }
+    property var focusedCard: null
+    property string publishedBuildFocusKey: ""
     property bool spellsExpanded: true
     property bool landsExpanded: false
     property bool benchExpanded: false
     property bool contextExpanded: false
     property bool cardDetailsExpanded: false
 
-    onBuildChanged: {
+    property bool buildFocusPublishedWhileVisible: false
+
+    onVisibleChanged: {
+        if (!root.visible) {
+            root.buildFocusPublishedWhileVisible = false
+            return
+        }
+        Qt.callLater(function() {
+            if (!root.visible || root.buildFocusPublishedWhileVisible
+                    || !root.focusedCard) {
+                return
+            }
+            root.buildFocusPublishedWhileVisible = true
+            root.publishBuildFocus(root.focusedCard, true)
+        })
+    }
+
+    onBuildIdentityChanged: {
         root.focusedCard = root.hasBuild && root.build.spells.length > 0 ? root.build.spells[0] : null
         root.cardDetailsExpanded = false
+        if (!root.focusedCard) {
+            root.publishedBuildFocusKey = ""
+            return
+        }
+        if (!root.visible)
+            return
+        Qt.callLater(function() {
+            root.publishBuildFocus(root.focusedCard, false)
+        })
+    }
+
+    function publishBuildFocus(card, force) {
+        if (!card)
+            return
+        const focusKey = root.buildIdentity + ":" + card.card.grp_id
+        if (!force && focusKey === root.publishedBuildFocusKey)
+            return
+        root.publishedBuildFocusKey = focusKey
+        sessionProvider.focusBuildCard(card.card.grp_id)
     }
 
     function focusCardDetailsToggle() {
@@ -61,6 +105,7 @@ Item {
 
     function focusCard(card) {
         root.focusedCard = card
+        root.publishBuildFocus(card, true)
         if (root.compactPresentation && root.displayPreferences.cardPreview) {
             root.cardDetailsExpanded = true
             narrowBuildScroll.ScrollBar.vertical.position = 0
@@ -585,6 +630,7 @@ Item {
                         Layout.fillHeight: true
                         Layout.minimumHeight: 300
                         recommendation: root.focusedCard
+                        imageState: root.sessionState.card_image
                     }
                     ManaCurve { objectName: "wideBuildManaCurve" }
                     Rectangle {
@@ -774,6 +820,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 250
                         recommendation: root.focusedCard
+                        imageState: root.sessionState.card_image
                     }
 
                     Rectangle {

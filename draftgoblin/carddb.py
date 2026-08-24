@@ -47,7 +47,7 @@ ARENA_RARITY_ID_MAP = {
     4: "rare",
     5: "mythic",
 }
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 
 
 class CardDatabaseError(RuntimeError):
@@ -341,14 +341,19 @@ def refresh_card_database(
     cache_path: PathInput | None = None,
     bulk_file: PathInput | None = None,
     arena_data_dir: PathInput | None = None,
+    allow_arena_fallback: bool = True,
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
 ) -> CardDatabase:
-    """Build and cache the grpId map from Scryfall and Arena local data.
+    """Build a grpId map from Scryfall and Arena local data.
+    Successful Scryfall refreshes atomically replace the canonical cache. Runtime
+    callers may use an Arena-only fallback without overwriting it; cache-building
+    callers can reject that non-cacheable result.
     Passing bulk_file keeps tests and local fixtures completely offline.
     """
 
+    cacheable = True
     if bulk_file is None:
-        database = _download_or_arena_card_database(
+        database, cacheable = _download_or_arena_card_database(
             arena_data_dir=arena_data_dir,
             timeout_seconds=timeout_seconds,
         )
@@ -360,7 +365,12 @@ def refresh_card_database(
                 arena_data_dir=arena_data_dir,
             )
 
-    save_card_database(database, app_dir=app_dir, cache_path=cache_path)
+    if not cacheable and not allow_arena_fallback:
+        raise CardDatabaseError(
+            "Scryfall refresh did not produce a cacheable card metadata result."
+        )
+    if cacheable:
+        save_card_database(database, app_dir=app_dir, cache_path=cache_path)
     return database
 
 
@@ -373,7 +383,8 @@ def load_or_refresh_card_database(
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
 ) -> CardDatabase:
     """Load cached card data, refreshing only when explicitly requested.
-    A missing cache triggers the same refresh path used by refresh-data.
+    A missing cache triggers a runtime refresh, which may use uncached local
+    Arena metadata when Scryfall is unavailable.
     """
 
     if refresh:
@@ -971,7 +982,9 @@ def _download_or_arena_card_database(
     *,
     arena_data_dir: PathInput | None,
     timeout_seconds: int,
-) -> CardDatabase:
+) -> tuple[CardDatabase, bool]:
+    """Return the current-run database and whether it is safe to cache canonically."""
+
     try:
         database = download_scryfall_card_database(timeout_seconds=timeout_seconds)
     except CardDatabaseError:
@@ -981,11 +994,14 @@ def _download_or_arena_card_database(
         if arena_database is None:
             raise
 
-        return arena_database
+        return arena_database, False
 
-    return augment_card_database_with_arena_data(
-        database,
-        arena_data_dir=arena_data_dir,
+    return (
+        augment_card_database_with_arena_data(
+            database,
+            arena_data_dir=arena_data_dir,
+        ),
+        True,
     )
 
 

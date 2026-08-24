@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from draftgoblin.carddb import CardDatabase, CardInfo
+import pytest
+
+from draftgoblin.carddb import (
+    CardDatabase,
+    CardInfo,
+    CardMetadataSeed,
+    load_card_database,
+)
 from draftgoblin.config import COLOR_PAIRS, PICK_ENGINE
 from draftgoblin.seventeen import (
     NEUTRAL_PRIOR_SOURCE,
@@ -20,6 +28,7 @@ from draftgoblin.seventeen import (
     load_cached_17lands_data,
     load_or_refresh_17lands_data,
     load_or_refresh_17lands_format_data,
+    metadata_augmenting_ratings_progress_loader,
     save_17lands_structure_targets,
     seventeen_lands_cache_path,
     seventeen_lands_pair_card_cache_path,
@@ -266,6 +275,59 @@ def test_cached_17lands_data_uses_empty_primary_when_cache_is_missing(
     assert data.set_reliability.tier == "Very low"
     assert rating.neutral_prior is True
     assert rating.metadata.source == NEUTRAL_PRIOR_SOURCE
+
+
+def test_progress_loader_recovers_and_persists_current_set_card_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ratings_data = load_or_refresh_17lands_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path / "ratings",
+        clock=FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC)),
+        fetch_json=RecordingFetcher(),
+        thin_sample_minimum=500,
+    )
+    database = CardDatabase(cards={})
+    recovered_card = CardInfo(
+        grp_id=1001,
+        name="Fixture Quick Bomb",
+        colors=("W",),
+        mana_value=2.0,
+        rarity="rare",
+        types=("Creature",),
+    )
+    captured_seeds: list[tuple[int, str]] = []
+
+    def recover_metadata(
+        base: CardDatabase,
+        *,
+        set_code: str,
+        seeds: Iterable[CardMetadataSeed],
+    ) -> CardDatabase:
+        assert base is database
+        assert set_code == "TST"
+        captured_seeds.extend((seed.grp_id, seed.name) for seed in seeds)
+        return CardDatabase(cards={recovered_card.grp_id: recovered_card})
+
+    monkeypatch.setattr(
+        "draftgoblin.seventeen.augment_card_database_with_mtgjson_set",
+        recover_metadata,
+    )
+    app_dir = tmp_path / "app"
+    loader = metadata_augmenting_ratings_progress_loader(
+        database=database,
+        load_ratings=lambda set_code, progress_callback: ratings_data,
+        app_dir=app_dir,
+    )
+
+    loaded = loader("TST", lambda progress: None)
+
+    assert loaded is ratings_data
+    assert (1001, "Fixture Quick Bomb") in captured_seeds
+    assert database.lookup(grp_id=1001) == recovered_card
+    assert load_card_database(app_dir=app_dir).lookup(grp_id=1001) == recovered_card
 
 
 def test_pair_win_rates_are_available_for_all_ten_pairs(tmp_path: Path) -> None:

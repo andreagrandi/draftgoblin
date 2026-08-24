@@ -38,6 +38,7 @@ from draftgoblin.seventeen import (
     SeventeenLandsData,
     has_cached_17lands_data,
     load_or_refresh_17lands_data,
+    metadata_augmenting_ratings_progress_loader,
 )
 
 
@@ -143,7 +144,14 @@ def _live_session_factory(
             app_dir=app_dir,
             poll_interval=poll_interval,
             snapshot_publisher=publish,
-            ratings_progress_loader=load_ratings,
+            ratings_progress_loader_factory=lambda database: (
+                metadata_augmenting_ratings_progress_loader(
+                    database=database,
+                    load_ratings=load_ratings,
+                    app_dir=app_dir,
+                    persist_database=bulk_file is None,
+                )
+            ),
             card_image_service=CardImageService(
                 cache_dir=card_image_cache_dir(app_dir=app_dir),
                 timeout_seconds=2.0,
