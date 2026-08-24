@@ -625,6 +625,7 @@ Item {
                     spacing: Theme.gutter
                     CardPreview {
                         objectName: "wideBuildCardPreview"
+                        constrainImageFrameToHeight: true
                         visible: root.displayPreferences.cardPreview
                         Layout.fillWidth: true
                         Layout.fillHeight: true

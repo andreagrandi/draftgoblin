@@ -8,6 +8,10 @@ Rectangle {
     property var recommendation: null
     property bool loading: false
     property var imageState: null
+    // Keep the compact preview's established sizing; only the wide build panel
+    // opts into using the available panel height as an additional constraint.
+    property bool constrainImageFrameToHeight: false
+
     readonly property bool imageCurrent: Boolean(
         recommendation
             && imageState
@@ -29,12 +33,34 @@ Rectangle {
     Accessible.role: Accessible.Pane
     Accessible.name: recommendation ? "Selected card, " + recommendation.card.name : "Card details"
 
+    readonly property real imageFrameAvailableHeight: Math.max(
+        0,
+        root.height - Theme.panelPadding * 2
+            - previewHeading.implicitHeight
+            - (previewDetails.visible ? previewDetails.implicitHeight : 0)
+            - previewLayout.spacing * (previewDetails.visible ? 3 : 2)
+    )
+    readonly property real imageFrameWidth: root.constrainImageFrameToHeight
+        ? Math.max(
+            0,
+            Math.min(
+                240,
+                root.width - Theme.panelPadding * 2,
+                root.imageFrameAvailableHeight / 1.4
+            )
+        )
+        : Math.max(0, Math.min(240, root.width - Theme.panelPadding * 2))
+    readonly property real imageFrameHeight: root.imageFrameWidth * 1.4
+
     ColumnLayout {
+        id: previewLayout
         anchors.fill: parent
         anchors.margins: Theme.panelPadding
         spacing: 12
 
         Label {
+            id: previewHeading
+            objectName: "cardPreviewHeading"
             text: "SELECTED CARD"
             color: Theme.textMuted
             font.pixelSize: 10
@@ -43,9 +69,11 @@ Rectangle {
         }
 
         Rectangle {
+            id: imageFrame
+            objectName: "cardPreviewImageFrame"
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: Math.min(240, root.width - 32)
-            Layout.preferredHeight: Layout.preferredWidth * 1.4
+            Layout.preferredWidth: root.imageFrameWidth
+            Layout.preferredHeight: root.imageFrameHeight
             color: "#171817"
             border.color: root.imageLoading ? Theme.warning : Theme.outline
             border.width: 2
@@ -63,6 +91,8 @@ Rectangle {
             }
 
             ColumnLayout {
+                id: previewFallback
+                objectName: "cardPreviewFallback"
                 anchors.centerIn: parent
                 width: parent.width - 32
                 spacing: 10
@@ -112,6 +142,8 @@ Rectangle {
         }
 
         ColumnLayout {
+            id: previewDetails
+            objectName: "cardPreviewDetails"
             visible: root.recommendation !== null
             Layout.fillWidth: true
             spacing: 6

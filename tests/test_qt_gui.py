@@ -754,6 +754,23 @@ def assert_visible_active_focus(item: QQuickItem) -> None:
     assert bottom_right.y() <= root.height()
 
 
+def assert_visual_item_inside(parent: QQuickItem, child: QQuickItem) -> None:
+    parent_top_left = parent.mapToScene(QPointF(0, 0))
+    parent_bottom_right = parent.mapToScene(QPointF(parent.width(), parent.height()))
+    child_top_left = child.mapToScene(QPointF(0, 0))
+    child_bottom_right = child.mapToScene(QPointF(child.width(), child.height()))
+    assert child_top_left.x() >= parent_top_left.x()
+    assert child_top_left.y() >= parent_top_left.y()
+    assert child_bottom_right.x() <= parent_bottom_right.x()
+    assert child_bottom_right.y() <= parent_bottom_right.y()
+
+
+def assert_visual_item_precedes(first: QQuickItem, second: QQuickItem) -> None:
+    first_bottom = first.mapToScene(QPointF(0, first.height())).y()
+    second_top = second.mapToScene(QPointF(0, 0)).y()
+    assert first_bottom <= second_top
+
+
 class RecordingProvider(MockSessionAdapter):
     def __init__(self):
         self.commands = []
@@ -925,6 +942,31 @@ assert wide_bench is not None and wide_bench.isVisible()
 wide_bench.forceActiveFocus()
 application.processEvents()
 assert wide_bench.property("activeFocus") is True
+
+root.resize(1440, 900)
+application.processEvents()
+wide_preview = find_visual_item(root.contentItem(), "wideBuildCardPreview")
+wide_curve = find_visual_item(root.contentItem(), "wideBuildManaCurve")
+assert wide_preview is not None and wide_preview.isVisible()
+assert wide_curve is not None and wide_curve.isVisible()
+assert_visual_item_inside(build_view, wide_preview)
+wide_heading = find_visual_item(wide_preview, "cardPreviewHeading")
+wide_frame = find_visual_item(wide_preview, "cardPreviewImageFrame")
+wide_fallback = find_visual_item(wide_preview, "cardPreviewFallback")
+wide_details = find_visual_item(wide_preview, "cardPreviewDetails")
+assert wide_heading is not None and wide_heading.isVisible()
+assert wide_frame is not None and wide_frame.isVisible()
+assert abs(wide_frame.height() - wide_frame.width() * 1.4) <= 0.1
+assert wide_fallback is not None and wide_fallback.isVisible()
+assert wide_details is not None and wide_details.isVisible()
+for item in (wide_heading, wide_frame, wide_fallback, wide_details):
+    assert_visual_item_inside(wide_preview, item)
+assert_visual_item_precedes(wide_preview, wide_curve)
+accessible_preview = QAccessible.queryAccessibleInterface(wide_preview)
+assert accessible_preview is not None
+assert accessible_preview.text(QAccessible.Text.Name) == (
+    "Selected card, " + provider.state["build"]["bench"][0]["card"]["name"]
+)
 
 
 provider.selectScenario("build_error")
