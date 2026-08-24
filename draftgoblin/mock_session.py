@@ -18,6 +18,7 @@ from draftgoblin.session import (
     BuildPairOption,
     BuildResult,
     CardDataState,
+    CardImageState,
     CardView,
     ChangeRanking,
     ChangeSplashPreference,
@@ -26,6 +27,7 @@ from draftgoblin.session import (
     DataLoadPhase,
     DismissError,
     DraftIdentity,
+    FocusBuildCard,
     LiveSessionCommand,
     LiveSessionSnapshot,
     OperationKind,
@@ -564,7 +566,30 @@ class MockLiveSession:
                         snapshot.recommendations,
                         selected_grp_id=command.grp_id,
                     ),
+                    card_image=CardImageState(
+                        grp_id=command.grp_id,
+                        message="Mock card images are unavailable.",
+                    ),
                 )
+        elif isinstance(command, FocusBuildCard):
+            build = snapshot.build
+            known_ids = (
+                set()
+                if build is None
+                else {
+                    entry.card.grp_id
+                    for entry in (*build.spells, *build.bench)
+                }
+            )
+            if command.grp_id not in known_ids:
+                raise ValueError(f"Card {command.grp_id} is not in the current build.")
+            snapshot = replace(
+                snapshot,
+                card_image=CardImageState(
+                    grp_id=command.grp_id,
+                    message="Mock card images are unavailable.",
+                ),
+            )
         elif isinstance(command, ChangeRanking):
             snapshot = replace(
                 snapshot,

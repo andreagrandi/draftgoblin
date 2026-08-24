@@ -29,6 +29,7 @@ from draftgoblin.session import (
     CardView,
     DataLoadPhase,
     DismissError,
+    FocusBuildCard,
     LiveSession,
     LiveSessionCommand,
     LiveSessionSnapshot,
@@ -119,6 +120,7 @@ class _ImageFakeSession(_FakeSession):
             self.snapshot,
             card_image=CardImageState(
                 grp_id=request.grp_id,
+                image_path=str(image_path),
                 phase=DataLoadPhase.READY,
                 message="Card image ready.",
             ),
@@ -161,6 +163,12 @@ def test_session_adapter_converts_local_image_path_to_file_url(
 ) -> None:
     image_path = tmp_path / "card images" / "Fixture Card.jpg"
     snapshot = LiveSessionSnapshot(
+        card_image=CardImageState(
+            grp_id=1,
+            image_path=str(image_path),
+            phase=DataLoadPhase.READY,
+            message="Card image ready.",
+        ),
         recommendations=RecommendationState(
             cards=(
                 Recommendation(
@@ -184,12 +192,15 @@ def test_session_adapter_converts_local_image_path_to_file_url(
                 ),
             ),
             selected_grp_id=1,
-        )
+        ),
     )
 
     adapter = SessionAdapter(snapshot=snapshot)
 
     assert adapter.state["recommendations"]["cards"][0]["card"]["image_path"] == (
+        QUrl.fromLocalFile(str(image_path)).toString()
+    )
+    assert adapter.state["card_image"]["image_path"] == (
         QUrl.fromLocalFile(str(image_path)).toString()
     )
 
@@ -308,12 +319,14 @@ def test_live_adapter_queues_explicit_commands_and_shutdown_is_safe(
         adapter.setSplashEnabled(False)
         adapter.requestRatings()
         adapter.requestBuild("BG")
+        build_grp_id = adapter.state["build"]["spells"][0]["card"]["grp_id"]
+        adapter.focusBuildCard(build_grp_id)
         adapter.requestBacktest()
         adapter.dismissError("missing-error")
         adapter.retryError("missing-error")
         _process_until(
             application=qcore_application,
-            predicate=lambda: len(session.commands) == 9,
+            predicate=lambda: len(session.commands) == 10,
             description="all queued live session commands",
         )
 
@@ -324,6 +337,7 @@ def test_live_adapter_queues_explicit_commands_and_shutdown_is_safe(
             ChangeSplashPreference,
             RequestRatingsDownload,
             RequestBuild,
+            FocusBuildCard,
             RequestBacktest,
             DismissError,
             RetryError,
@@ -364,6 +378,9 @@ def test_live_adapter_fetches_card_images_on_worker_and_publishes_on_gui_thread(
             description="the worker-fetched card image snapshot",
         )
         session = sessions[0]
+        assert adapter.state["card_image"]["image_path"] == (
+            QUrl.fromLocalFile(str(session.completions[-1])).toString()
+        )
         assert session.fetch_thread_ids
         assert session.result_thread_ids
         assert set(session.fetch_thread_ids) == set(session.result_thread_ids)

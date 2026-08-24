@@ -9,6 +9,7 @@ import pytest
 from draftgoblin.carddb import (
     CardDatabase,
     CardDatabaseCacheMissingError,
+    CardDatabaseError,
     CardMetadataSeed,
     augment_card_database_with_mtgjson_set,
     build_card_database_from_arena_data_dir,
@@ -17,6 +18,7 @@ from draftgoblin.carddb import (
     load_card_database,
     load_or_refresh_card_database,
     refresh_card_database,
+    save_card_database,
 )
 from draftgoblin.cli import main
 from draftgoblin.events import DraftCompletedEvent, PackOfferedEvent, PickMadeEvent, parse_events
@@ -234,13 +236,14 @@ def test_load_without_cache_raises_actionable_error(tmp_path: Path) -> None:
     assert "Run refresh-data first" in str(error.value)
 
 
-def test_load_or_refresh_rebuilds_stale_image_index_cache(
+def test_load_or_refresh_rebuilds_schema_2_image_index_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache_path = card_database_cache_path(app_dir=tmp_path)
     cache_path.write_text(
-        '{"schema_version":1,"source":"old","generated_at":"old","cards":{}}\n',
+        '{"schema_version":2,"source":"old","generated_at":"old","cards":{},'
+        '"image_uris_by_name":{}}\n',
         encoding="utf-8",
     )
     refreshed = CardDatabase(
@@ -257,6 +260,60 @@ def test_load_or_refresh_rebuilds_stale_image_index_cache(
     )
 
     assert load_or_refresh_card_database(app_dir=tmp_path) is refreshed
+
+
+def test_failed_scryfall_refresh_keeps_existing_canonical_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = card_database_cache_path(app_dir=tmp_path)
+    existing = CardDatabase(
+        cards={},
+        image_uris_by_name={"known card": "https://cards.example/known.jpg"},
+    )
+    save_card_database(existing, cache_path=cache_path)
+
+    cache_before = cache_path.read_text(encoding="utf-8")
+    arena_data_dir = _write_arena_data_dir(directory=tmp_path)
+
+    def failed_download(*, timeout_seconds: int) -> CardDatabase:
+        raise CardDatabaseError("Scryfall is temporarily unavailable.")
+
+    monkeypatch.setattr(
+        "draftgoblin.carddb.download_scryfall_card_database",
+        failed_download,
+    )
+
+    fallback = refresh_card_database(
+        cache_path=cache_path,
+        arena_data_dir=arena_data_dir,
+    )
+
+    assert fallback.lookup(grp_id=105097).name == "Arena Spider"
+    assert cache_path.read_text(encoding="utf-8") == cache_before
+
+
+def test_load_or_refresh_preserves_runtime_arena_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arena_data_dir = _write_arena_data_dir(directory=tmp_path)
+
+    def failed_download(*, timeout_seconds: int) -> CardDatabase:
+        raise CardDatabaseError("Scryfall is temporarily unavailable.")
+
+    monkeypatch.setattr(
+        "draftgoblin.carddb.download_scryfall_card_database",
+        failed_download,
+    )
+
+    fallback = load_or_refresh_card_database(
+        app_dir=tmp_path / "runtime-app",
+        arena_data_dir=arena_data_dir,
+    )
+
+    assert fallback.lookup(grp_id=105097).name == "Arena Spider"
+    assert not card_database_cache_path(app_dir=tmp_path / "runtime-app").exists()
 
 
 def test_refresh_data_cli_builds_cache_from_vendored_bulk_sample(
@@ -279,6 +336,37 @@ def test_refresh_data_cli_builds_cache_from_vendored_bulk_sample(
     assert "refreshed 137 card records" in captured.out
     assert str(card_database_cache_path(app_dir=tmp_path)) in captured.out
     assert captured.err == ""
+
+
+def test_refresh_data_cli_rejects_uncacheable_arena_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fallback = CardDatabase(cards={})
+
+    def arena_fallback(**_kwargs: object) -> tuple[CardDatabase, bool]:
+        return fallback, False
+
+    monkeypatch.setattr(
+        "draftgoblin.carddb._download_or_arena_card_database",
+        arena_fallback,
+    )
+
+    exit_code = main(
+        argv=[
+            "refresh-data",
+            "--app-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "refresh-data failed:" in captured.err
+    assert "cacheable" in captured.err
+    assert not card_database_cache_path(app_dir=tmp_path).exists()
 
 
 def test_scryfall_gzipped_jsonl_bulk_files_are_supported(tmp_path: Path) -> None:

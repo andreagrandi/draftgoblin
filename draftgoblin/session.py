@@ -20,7 +20,7 @@ from draftgoblin.backtest import (
     load_persisted_backtest_state,
 )
 from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.cardimages import CardImageService
+from draftgoblin.cardimages import CardImageError, CardImageService
 from draftgoblin.config import POLL_INTERVAL_SECONDS, SPLASH
 from draftgoblin.deckbuilder import (
     BuildPool,
@@ -226,11 +226,12 @@ class RatingsState:
 
 @dataclass(frozen=True, slots=True)
 class CardImageState:
-    """Describe selected-card image availability for presentation adapters.
-    Fetching stays in Python while frontends render paths and readiness only.
+    """Describe focused-card image availability for presentation adapters.
+    Fetching stays in Python while frontends render the atomically published path.
     """
 
     grp_id: int | None = None
+    image_path: str | None = None
     phase: DataLoadPhase = DataLoadPhase.UNAVAILABLE
     message: str = "No selected card image is available."
 
@@ -449,6 +450,12 @@ class ChooseRecommendation:
 
     grp_id: int
 
+@dataclass(frozen=True, slots=True)
+class FocusBuildCard:
+    """Request that one current build spell or bench card receive image focus."""
+
+    grp_id: int
+
 
 @dataclass(frozen=True, slots=True)
 class ChangeRanking:
@@ -518,6 +525,7 @@ class RetryError:
 LiveSessionCommand: TypeAlias = (
     ChooseAccount
     | ChooseRecommendation
+    | FocusBuildCard
     | ChangeRanking
     | ChangeSplashPreference
     | RequestRatingsDownload
@@ -614,6 +622,8 @@ class LiveSession:
         self._card_image_service = card_image_service
         self._card_image_paths_by_uri: dict[str, Path] = {}
         self._card_image_generation = 0
+        self._deferred_focused_card_image_lookup_grp_id: int | None = None
+        self._defer_focused_card_image_metadata = False
         self._configure_ratings_loader_for_card_database()
         if card_database is not None:
             card_data = CardDataState(
@@ -789,28 +799,44 @@ class LiveSession:
         Parser and account context remain incremental across repeated batches.
         """
 
-        for line in lines:
-            events = tuple(self.parser.parse_lines(lines=(line,)))
-            self._discard_previous_login_account_context()
-            for parsed_event in events:
-                if (
-                    isinstance(parsed_event, QuickDraftDetectedEvent)
-                    and not include_pre_draft_detection
-                ):
-                    continue
+        self._deferred_focused_card_image_lookup_grp_id = None
+        self._defer_focused_card_image_metadata = True
+        try:
+            for line in lines:
+                events = tuple(self.parser.parse_lines(lines=(line,)))
+                self._discard_previous_login_account_context()
+                for parsed_event in events:
+                    if (
+                        isinstance(parsed_event, QuickDraftDetectedEvent)
+                        and not include_pre_draft_detection
+                    ):
+                        continue
 
-                event = self._event_with_log_account(event=parsed_event)
-                state = self._consume_store_event(event=event)
-                if state is not None:
-                    self._remember_state(state=state)
-                    self._log_account_id = state.account_id
-                    if _event_is_missing_account(event=event):
-                        event = replace(event, account_id=state.account_id)
-                self._consume_event(event=event, state=state)
-                self._publish_event(event=event)
-            self._persist_pending_login_name_for_observed_course()
-        self._start_selected_card_image_load()
+                    event = self._event_with_log_account(event=parsed_event)
+                    state = self._consume_store_event(event=event)
+                    if state is not None:
+                        self._remember_state(state=state)
+                        self._log_account_id = state.account_id
+                        if _event_is_missing_account(event=event):
+                            event = replace(event, account_id=state.account_id)
+                    self._consume_event(event=event, state=state)
+                    self._publish_event(event=event)
+                self._persist_pending_login_name_for_observed_course()
+        finally:
+            self._defer_focused_card_image_metadata = False
+            deferred_grp_id = self._deferred_focused_card_image_lookup_grp_id
+            self._deferred_focused_card_image_lookup_grp_id = None
 
+        selected_grp_id = self.snapshot.recommendations.selected_grp_id
+        if (
+            deferred_grp_id is not None
+            and deferred_grp_id == selected_grp_id
+            and not self._card_image_focuses_current_build(
+                card_image=self.snapshot.card_image,
+                build=self.snapshot.build,
+            )
+        ):
+            self._start_focused_card_image_load(grp_id=deferred_grp_id)
         return self.snapshot
 
     def dispatch(self, *, command: LiveSessionCommand) -> LiveSessionSnapshot:
@@ -828,6 +854,10 @@ class LiveSession:
 
         if isinstance(command, ChooseRecommendation):
             self._choose_recommendation(grp_id=command.grp_id)
+            return self.snapshot
+
+        if isinstance(command, FocusBuildCard):
+            self._focus_build_card(grp_id=command.grp_id)
             return self.snapshot
 
         if isinstance(command, ChangeSplashPreference):
@@ -1638,6 +1668,21 @@ class LiveSession:
                 )
             )
 
+    def _card_image_focuses_current_build(
+        self,
+        *,
+        card_image: CardImageState,
+        build: BuildResult | None,
+    ) -> bool:
+        """Return whether the shared image still belongs to the published build."""
+
+        grp_id = card_image.grp_id
+        if grp_id is None or build is None:
+            return False
+        return any(entry.card.grp_id == grp_id for entry in build.spells) or any(
+            entry.card.grp_id == grp_id for entry in build.bench
+        )
+
     def _score_current_pack(self) -> None:
         with self._state_lock:
             self._score_current_pack_locked()
@@ -1682,18 +1727,34 @@ class LiveSession:
                 config=engine.config,
                 ratings_data=ratings_data,
             )
+        previous_snapshot = self.snapshot if snapshot is None else snapshot
+        build_image_focus = self._card_image_focuses_current_build(
+            card_image=previous_snapshot.card_image,
+            build=previous_snapshot.build,
+        )
+        card_image = (
+            previous_snapshot.card_image
+            if build_image_focus
+            or previous_snapshot.card_image.grp_id == recommendations.selected_grp_id
+            else self._retire_card_image()
+        )
         self._publish(
             snapshot=replace(
-                self.snapshot if snapshot is None else snapshot,
+                previous_snapshot,
                 ratings=ratings,
                 recommendations=recommendations,
                 pool=self._pool_state(
                     pool_grp_ids=event.pool_grp_ids,
                     scored_pack=scored_pack,
                 ),
+                card_image=card_image,
             )
         )
-        self._start_selected_card_image_load()
+        if not build_image_focus:
+            self._start_focused_card_image_load(
+                grp_id=recommendations.selected_grp_id,
+                allow_metadata_lookup=not self._defer_focused_card_image_metadata,
+            )
         return True
 
     def _recommendation_state(self, *, scored_pack: ScoredPack) -> RecommendationState:
@@ -1759,90 +1820,111 @@ class LiveSession:
             image_path=None if image_path is None else str(image_path),
         )
 
-    def _start_selected_card_image_load(self) -> None:
-        """Publish one selected-image request for the adapter worker.
+    def _start_focused_card_image_load(
+        self,
+        *,
+        grp_id: int | None,
+        allow_metadata_lookup: bool = True,
+    ) -> None:
+        """Publish one focused-card image request for the adapter worker.
         The worker performs its bounded fetch and returns an explicit result.
         """
 
         if self.snapshot.status.phase == ApplicationPhase.STOPPED:
             return
 
+        card_image = self.snapshot.card_image
+        if (
+            card_image.grp_id == grp_id
+            and card_image.phase in {DataLoadPhase.LOADING, DataLoadPhase.READY}
+        ):
+            return
+
+        self._retire_card_image()
         card_image_service = self._card_image_service
-        recommendations = self.snapshot.recommendations
-        selected_grp_id = recommendations.selected_grp_id
-        if card_image_service is None or selected_grp_id is None or self._card_database is None:
-            self._card_image_request = None
+        if card_image_service is None or grp_id is None or self._card_database is None:
             self._publish(
                 snapshot=replace(
                     self.snapshot,
                     card_image=CardImageState(
-                        grp_id=selected_grp_id,
+                        grp_id=grp_id,
                         message="No selected card image is available.",
                     ),
                 )
             )
             return
 
-        card = self._card_database.lookup(grp_id=selected_grp_id)
+        card = self._card_database.lookup(grp_id=grp_id)
+        self._card_image_generation += 1
+        generation = self._card_image_generation
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                card_image=CardImageState(
+                    grp_id=grp_id,
+                    phase=DataLoadPhase.LOADING,
+                    message=f"Loading image for {card.name}.",
+                ),
+            )
+        )
         image_uri = card_image_service.resolve_image_uri(
             card=card,
             card_database=self._card_database,
         )
+        if image_uri is None and not allow_metadata_lookup:
+            self._deferred_focused_card_image_lookup_grp_id = grp_id
+        if image_uri is None and allow_metadata_lookup:
+            try:
+                image_uri = card_image_service.resolve_focused_image_uri(
+                    card=card,
+                    card_database=self._card_database,
+                )
+            except CardImageError as error:
+                if generation != self._card_image_generation:
+                    return
+                self._publish(
+                    snapshot=replace(
+                        self.snapshot,
+                        card_image=CardImageState(
+                            grp_id=grp_id,
+                            phase=DataLoadPhase.FAILED,
+                            message=f"Card image unavailable: {error}",
+                        ),
+                    )
+                )
+                return
+
+        if generation != self._card_image_generation:
+            return
         if image_uri is None:
-            self._card_image_request = None
             self._publish(
                 snapshot=replace(
                     self.snapshot,
                     card_image=CardImageState(
-                        grp_id=selected_grp_id,
+                        grp_id=grp_id,
                         message=f"No card image is available for {card.name}.",
                     ),
                 )
             )
             return
 
-        card_image = self.snapshot.card_image
-        if (
-            card_image.grp_id == selected_grp_id
-            and card_image.phase in {
-                DataLoadPhase.LOADING,
-                DataLoadPhase.READY,
-                DataLoadPhase.FAILED,
-            }
-        ):
-            return
-
         cached_path = self._card_image_paths_by_uri.get(image_uri)
         if cached_path is not None and cached_path.is_file():
-            self._card_image_request = None
             self._publish_selected_card_image(
-                grp_id=selected_grp_id,
+                grp_id=grp_id,
                 image_path=cached_path,
             )
             return
 
-        self._card_image_generation += 1
         request = CardImageRequest(
-            generation=self._card_image_generation,
-            grp_id=selected_grp_id,
+            generation=generation,
+            grp_id=grp_id,
             image_uri=image_uri,
         )
         self._card_image_request = request
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                card_image=CardImageState(
-                    grp_id=selected_grp_id,
-                    phase=DataLoadPhase.LOADING,
-                    message=f"Loading image for {card.name}.",
-                ),
-            )
-        )
 
     def _publish_selected_card_image(self, *, grp_id: int, image_path: Path) -> None:
-        """Publish the resolved selected-card path as a plain snapshot value.
-        Recommendation ordering and scoring remain unchanged.
-        """
+        """Publish the resolved focused-card path as a plain snapshot value."""
 
         recommendations = replace(
             self.snapshot.recommendations,
@@ -1862,6 +1944,7 @@ class LiveSession:
                 recommendations=recommendations,
                 card_image=CardImageState(
                     grp_id=grp_id,
+                    image_path=str(image_path),
                     phase=DataLoadPhase.READY,
                     message="Card image ready.",
                 ),
@@ -1940,9 +2023,32 @@ class LiveSession:
                     self.snapshot.recommendations,
                     selected_grp_id=grp_id,
                 ),
+                card_image=self._retire_card_image(),
             )
         )
-        self._start_selected_card_image_load()
+        self._start_focused_card_image_load(grp_id=grp_id)
+
+    def _focus_build_card(self, *, grp_id: int) -> None:
+        build = self.snapshot.build
+        available_grp_ids = (
+            set()
+            if build is None
+            else {
+                entry.card.grp_id
+                for entry in (*build.spells, *build.bench)
+            }
+        )
+        if grp_id not in available_grp_ids:
+            raise ValueError(f"Card {grp_id} is not in the current build.")
+        card_image = self.snapshot.card_image
+        if (
+            card_image.grp_id == grp_id
+            and card_image.phase in {DataLoadPhase.LOADING, DataLoadPhase.READY}
+        ):
+            return
+        if card_image.grp_id == grp_id:
+            self._retire_card_image()
+        self._start_focused_card_image_load(grp_id=grp_id)
 
     def _change_splash_preference(self, *, enabled: bool) -> None:
         with self._state_lock:

@@ -43,7 +43,26 @@ Item {
             if (recommendation.card.grp_id === recommendations.selected_grp_id)
                 return recommendation
         }
-        return cards.length > 0 ? cards[0] : null
+        return null
+    }
+
+    property bool recommendationFocusPublishedWhileVisible: false
+
+    onVisibleChanged: {
+        if (!root.visible) {
+            root.recommendationFocusPublishedWhileVisible = false
+            return
+        }
+        Qt.callLater(function() {
+            if (!root.visible || root.recommendationFocusPublishedWhileVisible
+                    || !root.selectedRecommendation) {
+                return
+            }
+            root.recommendationFocusPublishedWhileVisible = true
+            sessionProvider.chooseRecommendation(
+                root.selectedRecommendation.card.grp_id
+            )
+        })
     }
 
     ColumnLayout {

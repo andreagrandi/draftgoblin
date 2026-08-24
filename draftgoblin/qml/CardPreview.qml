@@ -8,13 +8,17 @@ Rectangle {
     property var recommendation: null
     property bool loading: false
     property var imageState: null
+    readonly property bool imageCurrent: Boolean(
+        recommendation
+            && imageState
+            && imageState.grp_id === recommendation.card.grp_id
+    )
     readonly property bool imageLoading: Boolean(
-        loading || imageState && imageState.phase === "loading"
+        loading || imageCurrent && imageState.phase === "loading"
     )
     readonly property bool imageAvailable: Boolean(
-        recommendation
-            && recommendation.card.image_path
-            && imageState
+        imageCurrent
+            && imageState.image_path
             && imageState.phase === "ready"
     )
 
@@ -50,11 +54,12 @@ Rectangle {
 
             Image {
                 id: cardImage
+                objectName: "cardPreviewImage"
                 anchors.fill: parent
-                source: root.imageAvailable ? root.recommendation.card.image_path : ""
+                source: root.imageAvailable ? root.imageState.image_path : ""
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
-                visible: status === Image.Ready
+                visible: root.imageAvailable && status === Image.Ready
             }
 
             ColumnLayout {
@@ -94,7 +99,7 @@ Rectangle {
                     text: {
                         if (cardImage.status === Image.Error)
                             return "Card image could not be displayed."
-                        if (root.imageState)
+                        if (root.imageCurrent)
                             return root.imageState.message
                         return "Card image unavailable"
                     }

@@ -8,7 +8,9 @@ from draftgoblin.session import (
     ChangeRanking,
     ChangeSplashPreference,
     ChooseRecommendation,
+    DataLoadPhase,
     DismissError,
+    FocusBuildCard,
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
@@ -72,11 +74,17 @@ def test_mock_scenarios_cover_loading_empty_progress_warning_and_error() -> None
 def test_mock_provider_dispatches_production_commands() -> None:
     session = MockLiveSession()
     selected_grp_id = session.snapshot.recommendations.cards[2].card.grp_id
+    build = session.snapshot.build
+    assert build is not None
+    session.dispatch(command=FocusBuildCard(grp_id=build.spells[0].card.grp_id))
 
     selected = session.dispatch(
         command=ChooseRecommendation(grp_id=selected_grp_id),
     )
     assert selected.recommendations.selected_grp_id == selected_grp_id
+    assert selected.card_image.grp_id == selected_grp_id
+    assert selected.card_image.image_path is None
+    assert selected.card_image.phase == DataLoadPhase.UNAVAILABLE
 
     ranked = session.dispatch(command=ChangeRanking(ranking_mode="alsa"))
     assert ranked.recommendations.ranking_mode == "alsa"
