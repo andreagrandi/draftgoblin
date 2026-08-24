@@ -16,6 +16,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
+from draftgoblin import __version__
 from draftgoblin.carddb import (
     CardDatabase,
     build_card_database_from_bulk_file,
@@ -39,8 +40,20 @@ from draftgoblin.seventeen import (
     load_or_refresh_17lands_data,
 )
 
+
 SURFACES = ("live", "build", "backtest", "settings")
 ProviderName = Literal["live", "mock"]
+APPLICATION_NAME = "Draftgoblin"
+
+
+def _configure_application_metadata(*, application: QGuiApplication) -> None:
+    """Set the Qt application metadata.
+    Use the canonical package name and version.
+    """
+    application.setApplicationName(APPLICATION_NAME)
+    application.setApplicationDisplayName(APPLICATION_NAME)
+    application.setApplicationVersion(__version__)
+    application.setOrganizationName(APPLICATION_NAME)
 
 
 def _parser(*, forced_provider: ProviderName | None = None) -> argparse.ArgumentParser:
@@ -234,8 +247,7 @@ def run_gui(
 
     QQuickStyle.setStyle("Fusion")
     application = QGuiApplication([sys.argv[0]])
-    application.setApplicationName("Draftgoblin")
-    application.setOrganizationName("Draftgoblin")
+    _configure_application_metadata(application=application)
 
     provider = _build_provider(args=args)
     preferences = GuiPreferencesAdapter(app_dir=args.app_dir, parent=application)
@@ -245,7 +257,8 @@ def run_gui(
     context = engine.rootContext()
     context.setContextProperty("sessionProvider", provider)
     context.setContextProperty("guiPreferences", preferences)
-    context.setContextProperty("applicationTitle", "Draftgoblin")
+    context.setContextProperty("applicationTitle", APPLICATION_NAME)
+    context.setContextProperty("applicationVersion", __version__)
     context.setContextProperty("initialSurface", args.surface)
     context.setContextProperty("initialWindowWidth", args.width)
     context.setContextProperty("initialWindowHeight", args.height)

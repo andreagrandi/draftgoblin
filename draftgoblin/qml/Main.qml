@@ -19,6 +19,7 @@ ApplicationWindow {
     readonly property var sessionState: provider.state
     readonly property var displayPreferences: guiPreferences
     property string automaticBuildContext: ""
+    readonly property string desktopApplicationVersion: applicationVersion
 
     function requestCompletedDraftBuild() {
         if (window.currentSurface !== "build")
@@ -45,6 +46,7 @@ ApplicationWindow {
     Component.onCompleted: requestCompletedDraftBuild()
 
     header: AppBar {
+        narrow: window.narrow
         sessionState: window.sessionState
         provider: window.provider
         onSettingsRequested: window.currentSurface = "settings"
@@ -52,6 +54,7 @@ ApplicationWindow {
 
     footer: StatusStrip {
         sessionState: window.sessionState
+        applicationVersion: window.desktopApplicationVersion
     }
 
     RowLayout {

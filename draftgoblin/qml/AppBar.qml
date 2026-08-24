@@ -9,7 +9,7 @@ Rectangle {
 
     required property var sessionState
     required property var provider
-
+    required property bool narrow
     signal settingsRequested()
 
     color: Theme.surfaceLow
@@ -21,26 +21,18 @@ Rectangle {
         anchors.rightMargin: 20
         spacing: 16
 
-        ColumnLayout {
-            spacing: 0
-
-            Label {
-                text: "DRAFTGOBLIN"
-                color: Theme.primary
-                font.pixelSize: 18
-                font.bold: true
-                font.letterSpacing: 1.2
-            }
-
-            Label {
-                text: "TACTICAL GRIMOIRE"
-                color: Theme.textMuted
-                font.pixelSize: 10
-                font.letterSpacing: 1.6
-            }
+        Label {
+            objectName: "appBarBrandTitle"
+            visible: root.narrow
+            text: "DRAFTGOBLIN"
+            color: Theme.primary
+            font.pixelSize: 18
+            font.bold: true
+            font.letterSpacing: 1.2
         }
 
         Rectangle {
+            visible: root.narrow
             Layout.preferredWidth: 1
             Layout.preferredHeight: 34
             color: Theme.outline

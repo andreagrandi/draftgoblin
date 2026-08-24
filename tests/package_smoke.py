@@ -12,7 +12,9 @@ import tomllib
 from collections.abc import Sequence
 from glob import glob
 from pathlib import Path
+from tarfile import TarFile
 from tempfile import TemporaryDirectory
+from zipfile import ZipFile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPLAY_FIXTURE_PATH = (
@@ -24,6 +26,7 @@ BULK_FIXTURE_PATH = (
 REPLAY_GOLDEN_PATH = (
     PROJECT_ROOT / "tests" / "golden" / "quick-draft-msh-player.replay.txt"
 )
+RUNTIME_LOGO_PATH = "draftgoblin/assets/draftgoblin_logo.png"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -43,6 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = build_parser().parse_args(args=argv)
     artifact_path = _resolve_artifact(pattern=args.artifact_pattern)
+    _check_runtime_logo(artifact_path=artifact_path)
 
     with TemporaryDirectory(prefix="draftgoblin-package-smoke-") as temporary_dir:
         temporary_path = Path(temporary_dir)
@@ -89,6 +93,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RuntimeError("Packaged replay output does not match the golden file.")
 
     return 0
+
+
+def _check_runtime_logo(*, artifact_path: Path) -> None:
+    """Check the distribution artifact for the desktop logo.
+    Require the installed runtime resource used by QML.
+    """
+    if artifact_path.suffix == ".whl":
+        with ZipFile(file=artifact_path) as artifact:
+            paths = artifact.namelist()
+    else:
+        with TarFile.open(name=artifact_path) as artifact:
+            paths = artifact.getnames()
+
+    if not any(path.endswith(RUNTIME_LOGO_PATH) for path in paths):
+        raise RuntimeError(
+            f"Packaged artifact omitted the desktop logo: {RUNTIME_LOGO_PATH}."
+        )
 
 
 def _resolve_artifact(*, pattern: str) -> Path:
