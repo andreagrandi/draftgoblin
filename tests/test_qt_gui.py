@@ -485,7 +485,7 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPointF, Qt, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QAccessible, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 from PySide6.QtQuick import QQuickItem
@@ -593,6 +593,12 @@ card_details_toggle = find_visual_item(root.contentItem(), "buildCardDetailsTogg
 assert card_details_toggle is not None
 assert_visible_active_focus(card_details_toggle)
 assert build_view.property("focusedCard")["card"]["name"] == provider.state["build"]["spells"][1]["card"]["name"]
+assert spell_button.property("selected") is True
+accessible_spell = QAccessible.queryAccessibleInterface(spell_button)
+assert accessible_spell is not None
+assert accessible_spell.object() is spell_button
+assert spell_button.property("accessibilitySelectable") is True
+assert spell_button.property("accessibilitySelected") is True
 narrow_preview = find_visual_item(root.contentItem(), "narrowBuildCardPreview")
 assert narrow_preview is not None and narrow_preview.isVisible()
 assert narrow_preview.property("recommendation")["card"]["name"] == provider.state["build"]["spells"][1]["card"]["name"]
@@ -601,6 +607,7 @@ application.processEvents()
 assert_visible_active_focus(card_details_toggle)
 bench_toggle = root.findChild(QObject, "buildBenchToggle")
 assert bench_toggle is not None
+assert bench_toggle.property("text").endswith("bench · 2")
 bench_toggle.forceActiveFocus()
 QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
@@ -612,6 +619,39 @@ application.processEvents()
 assert narrow_preview.property("recommendation")["card"]["name"] == provider.state["build"]["bench"][0]["card"]["name"]
 QTest.qWait(20)
 assert_visible_active_focus(card_details_toggle)
+
+root.resize(1059, 900)
+application.processEvents()
+assert root.property("narrow") is False
+assert build_view.property("compactPresentation") is True
+compact_spell = find_visual_item(root.contentItem(), "buildSpellButton1")
+assert compact_spell is not None and compact_spell.isVisible()
+
+root.resize(1060, 900)
+application.processEvents()
+assert build_view.property("compactPresentation") is False
+wide_spells = find_visual_item(root.contentItem(), "buildSpellGroups")
+assert wide_spells is not None and wide_spells.isVisible()
+assert wide_spells.x() >= 0
+assert wide_spells.x() + wide_spells.width() <= build_view.width()
+wide_reason = find_visual_item(root.contentItem(), "widePairOptionWG")
+assert wide_reason is not None and wide_reason.isVisible()
+assert "score 82.4" in wide_reason.property("text")
+assert "25 playables" in wide_reason.property("text")
+
+build_view.setProperty("benchExpanded", False)
+application.processEvents()
+wide_bench_toggle = find_visual_item(root.contentItem(), "buildBenchToggle")
+assert wide_bench_toggle is not None and wide_bench_toggle.isVisible()
+assert wide_bench_toggle.property("text").endswith("bench · 2")
+wide_bench_toggle.forceActiveFocus()
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+wide_bench = find_visual_item(root.contentItem(), "buildBenchButton0")
+assert wide_bench is not None and wide_bench.isVisible()
+wide_bench.forceActiveFocus()
+application.processEvents()
+assert wide_bench.property("activeFocus") is True
 
 
 provider.selectScenario("build_error")
