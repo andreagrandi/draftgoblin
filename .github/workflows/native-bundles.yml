@@ -26,12 +26,14 @@ jobs:
             bundle: Draftgoblin-unsigned-macos.app
             artifact: Draftgoblin-unsigned-macos.tar
             artifact_name: draftgoblin-macos-unsigned-development
+            smoke_timeout: 60
           - os: windows-latest
             platform: windows
             config: pysidedeploy.windows.spec
             bundle: Draftgoblin-unsigned-windows.exe
             artifact: Draftgoblin-unsigned-windows.exe
             artifact_name: draftgoblin-windows-unsigned-development
+            smoke_timeout: 300
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -108,12 +110,14 @@ jobs:
             "dist-native/macos-unsigned/${{ matrix.artifact }}" \
             -C "$extracted_bundle"
           uv run python tests/bundle_smoke.py \
+            --timeout "${{ matrix.smoke_timeout }}" \
             "$extracted_bundle/${{ matrix.bundle }}"
 
       - name: Smoke-test Windows executable with deterministic mock data
         if: matrix.platform == 'windows'
         run: >-
           uv run python tests/bundle_smoke.py
+          --timeout "${{ matrix.smoke_timeout }}"
           "dist-native/windows-unsigned/${{ matrix.bundle }}"
 
       - name: Upload unsigned development artifact
