@@ -122,6 +122,7 @@ class SpellCounts:
     two_drops: int
     expensive: int
     splashes: int = 0
+    instants: int = 0
 
     @property
     def noncreatures(self) -> int:
@@ -1221,8 +1222,20 @@ def _type_face_is_spell(*, face: str) -> bool:
 
 
 
+def _card_has_type(*, card: CardInfo, marker: str) -> bool:
+    return any(
+        marker in face
+        for type_line in card.types
+        for face in type_line.split("//")
+    )
+
+
 def _is_creature_card(*, card: CardInfo) -> bool:
-    return any("Creature" in type_line for type_line in card.types)
+    return _card_has_type(card=card, marker="Creature")
+
+
+def _is_instant_card(*, card: CardInfo) -> bool:
+    return _card_has_type(card=card, marker="Instant")
 
 
 
@@ -1743,6 +1756,7 @@ def _spell_counts(
             if pair is None
             else sum(1 for card in cards if _is_splash_card(card=card.card, pair=pair))
         ),
+        instants=sum(1 for card in cards if _is_instant_card(card=card.card)),
     )
 
 

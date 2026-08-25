@@ -377,6 +377,8 @@ class BuildResult:
     warnings: tuple[str, ...] = ()
     spell_count: int | None = None
     land_count: int | None = None
+    creature_count: int | None = None
+    instant_count: int | None = None
     domain_pool: BuildPool | None = None
     domain_selection: PairSelection | None = None
     domain_spell_selection: SpellSelection | None = None
@@ -1203,8 +1205,10 @@ class LiveSession:
             deck_size=mana_base.total_cards,
             average_mana_value=average_mana_value,
             pair_override=selection.forced_pair,
-            spell_count=len(spell_selection.spells),
-            land_count=mana_base.total_cards - len(spell_selection.spells),
+            spell_count=spell_selection.counts.total,
+            land_count=mana_base.total_cards - spell_selection.counts.total,
+            creature_count=spell_selection.counts.creatures,
+            instant_count=spell_selection.counts.instants,
             warnings=(
                 tuple(
                     f"Applied spell-selection relaxation: {relaxation}"

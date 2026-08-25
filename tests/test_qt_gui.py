@@ -1531,6 +1531,20 @@ application.processEvents()
 root.setProperty("currentSurface", "build")
 application.processEvents()
 build_view = root.findChild(QObject, "buildView")
+narrow_type_summary = find_visual_item(root.contentItem(), "narrowBuildTypeSummary")
+assert narrow_type_summary is not None and narrow_type_summary.isVisible()
+assert narrow_type_summary.property("text") == "7 creatures · 1 instant"
+changed_state = dict(provider.state)
+changed_build = dict(changed_state["build"])
+changed_build["creature_count"] = 5
+changed_build["instant_count"] = 2
+changed_state["build"] = changed_build
+provider._replace_state(state=changed_state)
+application.processEvents()
+assert narrow_type_summary.property("text") == "5 creatures · 2 instants"
+provider.selectScenario("ready")
+application.processEvents()
+assert narrow_type_summary.property("text") == "7 creatures · 1 instant"
 assert build_view is not None
 initial_focus_key = build_view.property("publishedBuildFocusKey")
 assert initial_focus_key
@@ -1578,6 +1592,8 @@ rebuild.forceActiveFocus()
 QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
 assert any(isinstance(command, RequestBuild) and command.pair_override == "BG" for command in provider.commands)
+assert provider.state["build"]["selected_pair"] == "BG"
+assert narrow_type_summary.property("text") == "7 creatures · 1 instant"
 spell_button = find_visual_item(root.contentItem(), "buildSpellButton1")
 assert build_view is not None and spell_button is not None
 spell_button.forceActiveFocus()
@@ -1675,6 +1691,12 @@ assert narrow_context.height() == collapsed_narrow_context_height
 root.resize(1060, 900)
 application.processEvents()
 assert build_view.property("compactPresentation") is False
+wide_creature_count = find_visual_item(root.contentItem(), "wideBuildCreatureCount")
+wide_instant_count = find_visual_item(root.contentItem(), "wideBuildInstantCount")
+assert wide_creature_count is not None and wide_creature_count.isVisible()
+assert wide_instant_count is not None and wide_instant_count.isVisible()
+assert wide_creature_count.property("text") == "7"
+assert wide_instant_count.property("text") == "1"
 assert pair_selector.isVisible()
 assert rebuild.isVisible()
 
