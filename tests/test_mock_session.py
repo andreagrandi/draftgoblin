@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from draftgoblin.mock_session import MOCK_SCENARIOS, MockLiveSession
+from draftgoblin.mock_session import CARDS, MOCK_SCENARIOS, MockLiveSession
 from draftgoblin.session import (
     ApplicationPhase,
     ChangeRanking,
@@ -10,7 +10,9 @@ from draftgoblin.session import (
     ChooseRecommendation,
     DataLoadPhase,
     DismissError,
+    DismissRecentPickPreview,
     FocusBuildCard,
+    PreviewRecentPick,
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
@@ -27,24 +29,31 @@ def test_ready_mock_snapshot_covers_every_desktop_data_surface() -> None:
     assert snapshot.recommendations.cards[0].letter_grade == "A-"
     assert snapshot.recommendations.cards[0].explanation
     assert snapshot.recommendations.confidence_summary is None
-    assert snapshot.pool.total_cards == 10
+    assert snapshot.pool.total_cards == 24
     assert snapshot.pool.target_cards == 42
     assert sum(
         pool_card.quantity for pool_card in snapshot.pool.cards
     ) == snapshot.pool.total_cards
+    assert all(pool_card.quantity == 3 for pool_card in snapshot.pool.cards)
+    assert len(snapshot.pool.recent_picks) == 24
+    assert tuple(
+        pick.card.grp_id for pick in snapshot.pool.recent_picks
+    ) == tuple(card.grp_id for card in reversed(CARDS * 3))
     assert all(
-        pool_card.quantity == 1 for pool_card in snapshot.pool.recent_picks
+        pick.image.phase == DataLoadPhase.UNAVAILABLE
+        and pick.image.image_path is None
+        for pick in snapshot.pool.recent_picks
     )
     assert snapshot.pool.color_distribution == (
         ("W", 0),
-        ("U", 0),
-        ("B", 1),
+        ("U", 3),
+        ("B", 3),
         ("R", 0),
-        ("G", 9),
-        ("C", 0),
+        ("G", 15),
+        ("C", 3),
     )
-    assert sum(snapshot.pool.mana_curve) == snapshot.pool.total_cards
-    assert snapshot.pool.average_mana_value == pytest.approx(2.7)
+    assert sum(snapshot.pool.mana_curve) == 21
+    assert snapshot.pool.average_mana_value == pytest.approx(17 / 7)
     assert snapshot.build is not None
     assert snapshot.build.deck_size == 40
     assert snapshot.build.spell_count == 23
@@ -129,6 +138,23 @@ def test_mock_provider_dispatches_production_commands() -> None:
     progress = session.dispatch(command=RequestRatingsDownload(set_code="OTJ"))
     assert progress.progress is not None
     assert session.scenario == "progress"
+
+
+def test_mock_provider_previews_and_dismisses_recent_picks() -> None:
+    session = MockLiveSession()
+    grp_id = session.snapshot.pool.recent_picks[0].card.grp_id
+    original_card_image = session.snapshot.card_image
+
+    previewed = session.dispatch(command=PreviewRecentPick(grp_id=grp_id))
+    assert previewed.pool.previewed_recent_pick_grp_id == grp_id
+    assert previewed.card_image == original_card_image
+
+    dismissed = session.dispatch(command=DismissRecentPickPreview())
+    assert dismissed.pool.previewed_recent_pick_grp_id is None
+    assert dismissed.card_image == original_card_image
+
+    with pytest.raises(ValueError, match="is not in the recent picks"):
+        session.dispatch(command=PreviewRecentPick(grp_id=999999))
 
 
 def test_mock_provider_retries_and_dismisses_errors_by_identifier() -> None:

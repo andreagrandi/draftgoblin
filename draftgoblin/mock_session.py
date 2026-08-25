@@ -26,6 +26,7 @@ from draftgoblin.session import (
     ChooseRecommendation,
     DataLoadPhase,
     DismissError,
+    DismissRecentPickPreview,
     DraftIdentity,
     FocusBuildCard,
     LiveSessionCommand,
@@ -33,10 +34,12 @@ from draftgoblin.session import (
     OperationKind,
     PoolCard,
     PoolState,
+    PreviewRecentPick,
     ProgressState,
     RatingsState,
     Recommendation,
     RecommendationState,
+    RecentPick,
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
@@ -206,23 +209,29 @@ def _recommendations() -> tuple[Recommendation, ...]:
 
 
 def _pool() -> PoolState:
-    pool_cards = tuple(
-        PoolCard(card=card, quantity=quantity)
-        for card, quantity in zip(CARDS[:6], (1, 2, 1, 2, 3, 1), strict=True)
+    chronological_cards = CARDS * 3
+    recent_picks = tuple(
+        RecentPick(
+            card=card,
+            image=CardImageState(
+                grp_id=card.grp_id,
+                phase=DataLoadPhase.UNAVAILABLE,
+                message=f"No image is available for {card.name}.",
+            ),
+        )
+        for card in reversed(chronological_cards)
     )
+    pool_cards = tuple(PoolCard(card=card, quantity=3) for card in CARDS)
     return PoolState(
         cards=pool_cards,
-        recent_picks=tuple(
-            PoolCard(card=pool_card.card, quantity=1)
-            for pool_card in pool_cards[-5:]
-        ),
-        total_cards=sum(pool_card.quantity for pool_card in pool_cards),
+        recent_picks=recent_picks,
+        total_cards=24,
         target_cards=42,
         inferred_pair="White · Green",
         commitment=0.64,
-        color_distribution=(("W", 0), ("U", 0), ("B", 1), ("R", 0), ("G", 9), ("C", 0)),
-        mana_curve=(0, 0, 3, 7, 0, 0, 0),
-        average_mana_value=2.7,
+        color_distribution=(("W", 0), ("U", 3), ("B", 3), ("R", 0), ("G", 15), ("C", 3)),
+        mana_curve=(0, 3, 6, 12, 0, 0, 0),
+        average_mana_value=17 / 7,
     )
 
 
@@ -609,6 +618,30 @@ class MockLiveSession:
                 card_image=CardImageState(
                     grp_id=command.grp_id,
                     message="Mock card images are unavailable.",
+                ),
+            )
+        elif isinstance(command, PreviewRecentPick):
+            known_ids = {
+                recent_pick.card.grp_id
+                for recent_pick in snapshot.pool.recent_picks
+            }
+            if command.grp_id not in known_ids:
+                raise ValueError(
+                    f"Card {command.grp_id} is not in the recent picks."
+                )
+            snapshot = replace(
+                snapshot,
+                pool=replace(
+                    snapshot.pool,
+                    previewed_recent_pick_grp_id=command.grp_id,
+                ),
+            )
+        elif isinstance(command, DismissRecentPickPreview):
+            snapshot = replace(
+                snapshot,
+                pool=replace(
+                    snapshot.pool,
+                    previewed_recent_pick_grp_id=None,
                 ),
             )
         elif isinstance(command, ChangeRanking):

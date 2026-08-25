@@ -85,6 +85,9 @@ RatingsProgressLoaderFactory: TypeAlias = Callable[
     RatingsProgressLoader,
 ]
 RatingsCacheChecker: TypeAlias = Callable[[str], bool]
+RECENT_PICK_LIMIT = 24
+
+
 
 
 class ApplicationPhase(StrEnum):
@@ -233,7 +236,7 @@ class RatingsState:
 
 @dataclass(frozen=True, slots=True)
 class CardImageState:
-    """Describe focused-card image availability for presentation adapters.
+    """Describe focused-card or recent-pick image availability for adapters.
     Fetching stays in Python while frontends render the atomically published path.
     """
 
@@ -241,17 +244,24 @@ class CardImageState:
     image_path: str | None = None
     phase: DataLoadPhase = DataLoadPhase.UNAVAILABLE
     message: str = "No selected card image is available."
-
-
 @dataclass(frozen=True, slots=True)
 class CardImageRequest:
-    """Identify one selected-card image fetch for the adapter worker.
+    """Identify one focused or recent-pick image fetch for the adapter worker.
     The session validates completion before it publishes a result.
     """
 
     generation: int
     grp_id: int
     image_uri: str
+
+
+@dataclass(frozen=True, slots=True)
+class RecentPick:
+    """Describe one chronological picked card and its gallery image state."""
+
+    card: CardView
+    image: CardImageState
+
 
 @dataclass(frozen=True, slots=True)
 class PoolCard:
@@ -270,7 +280,8 @@ class PoolState:
     """
 
     cards: tuple[PoolCard, ...] = ()
-    recent_picks: tuple[PoolCard, ...] = ()
+    recent_picks: tuple[RecentPick, ...] = ()
+    previewed_recent_pick_grp_id: int | None = None
     total_cards: int = 0
     inferred_pair: str | None = None
     commitment: float = 0.0
@@ -454,6 +465,18 @@ class ChooseAccount:
 
     account_id: str
 
+@dataclass(frozen=True, slots=True)
+class PreviewRecentPick:
+    """Request that one recent-pick gallery card open in the preview."""
+
+    grp_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class DismissRecentPickPreview:
+    """Request that the recent-pick preview close."""
+
+
 
 @dataclass(frozen=True, slots=True)
 class ChooseRecommendation:
@@ -537,6 +560,8 @@ class RetryError:
 
 LiveSessionCommand: TypeAlias = (
     ChooseAccount
+    | PreviewRecentPick
+    | DismissRecentPickPreview
     | ChooseRecommendation
     | FocusBuildCard
     | ChangeRanking
@@ -637,6 +662,11 @@ class LiveSession:
         self._card_image_generation = 0
         self._deferred_focused_card_image_lookup_grp_id: int | None = None
         self._defer_focused_card_image_metadata = False
+        self._recent_pick_image_generation = 0
+        self._recent_pick_image_requests: list[CardImageRequest] = []
+        self._recent_pick_image_states: dict[int, CardImageState] = {}
+        self._recent_pick_pool_grp_ids: tuple[int, ...] | None = None
+        self._recent_pick_preview_cleared = False
         self._configure_ratings_loader_for_card_database()
         if card_database is not None:
             card_data = CardDataState(
@@ -703,6 +733,64 @@ class LiveSession:
         """
 
         return self._card_image_request
+
+    def recent_pick_image_request(self) -> CardImageRequest | None:
+        """Return the next queued recent-pick image fetch, if any."""
+
+        return (
+            self._recent_pick_image_requests[0]
+            if self._recent_pick_image_requests
+            else None
+        )
+
+    def complete_recent_pick_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        image_path: Path,
+    ) -> None:
+        """Publish a successful gallery fetch when its pool generation is current."""
+
+        with self._state_lock:
+            if (
+                request.generation != self._recent_pick_image_generation
+                or request not in self._recent_pick_image_requests
+                or request.grp_id not in self._recent_pick_image_states
+            ):
+                return
+            self._recent_pick_image_requests.remove(request)
+            self._card_image_paths_by_uri[request.image_uri] = image_path
+            self._recent_pick_image_states[request.grp_id] = CardImageState(
+                grp_id=request.grp_id,
+                image_path=str(image_path),
+                phase=DataLoadPhase.READY,
+                message="Card image ready.",
+            )
+            self._publish_recent_pick_projection()
+
+    def fail_recent_pick_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        error_message: str,
+    ) -> None:
+        """Publish a failed gallery fetch when its pool generation is current."""
+
+        with self._state_lock:
+            if (
+                request.generation != self._recent_pick_image_generation
+                or request not in self._recent_pick_image_requests
+                or request.grp_id not in self._recent_pick_image_states
+            ):
+                return
+            self._recent_pick_image_requests.remove(request)
+            self._recent_pick_image_states[request.grp_id] = CardImageState(
+                grp_id=request.grp_id,
+                phase=DataLoadPhase.FAILED,
+                message=f"Card image unavailable: {error_message}",
+            )
+            self._publish_recent_pick_projection()
+
 
     def fetch_card_image(self, *, request: CardImageRequest) -> Path:
         """Fetch one adapter-scheduled image through the configured service.
@@ -873,6 +961,15 @@ class LiveSession:
             self._focus_build_card(grp_id=command.grp_id)
             return self.snapshot
 
+        if isinstance(command, PreviewRecentPick):
+            self._preview_recent_pick(grp_id=command.grp_id)
+            return self.snapshot
+
+        if isinstance(command, DismissRecentPickPreview):
+            self._dismiss_recent_pick_preview()
+            return self.snapshot
+
+
         if isinstance(command, ChangeSplashPreference):
             self._change_splash_preference(enabled=command.enabled)
             return self.snapshot
@@ -898,6 +995,37 @@ class LiveSession:
             return self.snapshot
 
         raise ValueError(f"Live session command is not implemented yet: {command!r}.")
+
+    def _preview_recent_pick(self, *, grp_id: int) -> None:
+        if not any(
+            pick.card.grp_id == grp_id
+            for pick in self.snapshot.pool.recent_picks
+        ):
+            raise ValueError(f"Card {grp_id} is not in the recent picks.")
+        if self.snapshot.pool.previewed_recent_pick_grp_id == grp_id:
+            return
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                pool=replace(
+                    self.snapshot.pool,
+                    previewed_recent_pick_grp_id=grp_id,
+                ),
+            )
+        )
+
+    def _dismiss_recent_pick_preview(self) -> None:
+        if self.snapshot.pool.previewed_recent_pick_grp_id is None:
+            return
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                pool=replace(
+                    self.snapshot.pool,
+                    previewed_recent_pick_grp_id=None,
+                ),
+            )
+        )
 
     def _request_build(self, *, command: RequestBuild) -> None:
         with self._state_lock:
@@ -1286,6 +1414,7 @@ class LiveSession:
         with self._state_lock:
             self._card_image_generation += 1
             self._card_image_request = None
+            self._retire_recent_pick_images()
             card_image = self.snapshot.card_image
             self._publish(
                 snapshot=replace(
@@ -1301,6 +1430,10 @@ class LiveSession:
                         )
                         if card_image.phase == DataLoadPhase.LOADING
                         else card_image
+                    ),
+                    pool=replace(
+                        self.snapshot.pool,
+                        previewed_recent_pick_grp_id=None,
                     ),
                 )
             )
@@ -1853,6 +1986,138 @@ class LiveSession:
             image_path=None if image_path is None else str(image_path),
         )
 
+    def _retire_recent_pick_images(self) -> None:
+        """Invalidate all gallery work independently from focused-card work."""
+
+        self._recent_pick_image_generation += 1
+        self._recent_pick_image_requests.clear()
+        self._recent_pick_image_states.clear()
+        self._recent_pick_pool_grp_ids = None
+        self._recent_pick_preview_cleared = True
+
+    def _prepare_recent_pick_images(
+        self,
+        *,
+        pool_grp_ids: tuple[int, ...],
+    ) -> tuple[RecentPick, ...]:
+        database = self._card_database
+        if database is None:
+            return ()
+
+        recent_grp_ids = tuple(reversed(pool_grp_ids[-RECENT_PICK_LIMIT:]))
+        if recent_grp_ids != self._recent_pick_pool_grp_ids:
+            previous_states = self._recent_pick_image_states
+            self._recent_pick_image_generation += 1
+            self._recent_pick_image_requests.clear()
+            active_grp_ids = set(recent_grp_ids)
+            self._recent_pick_image_states = {
+                grp_id: state
+                for grp_id, state in previous_states.items()
+                if grp_id in active_grp_ids
+            }
+            self._recent_pick_pool_grp_ids = recent_grp_ids
+
+        card_image_service = self._card_image_service
+        recent_picks: list[RecentPick] = []
+        queued_grp_ids = {
+            request.grp_id for request in self._recent_pick_image_requests
+        }
+        for grp_id in dict.fromkeys(recent_grp_ids):
+            card = database.lookup(grp_id=grp_id)
+            card_view = self._card_view(card=card)
+            image_uri = (
+                None
+                if card_image_service is None
+                else card_image_service.resolve_image_uri(
+                    card=card,
+                    card_database=database,
+                )
+            )
+            image = self._recent_pick_image_states.get(grp_id)
+            if image is None:
+                cached_path = (
+                    None
+                    if image_uri is None
+                    else self._card_image_paths_by_uri.get(image_uri)
+                )
+                if cached_path is not None and cached_path.is_file():
+                    image = CardImageState(
+                        grp_id=grp_id,
+                        image_path=str(cached_path),
+                        phase=DataLoadPhase.READY,
+                        message="Card image ready.",
+                    )
+                elif image_uri is None:
+                    image = CardImageState(
+                        grp_id=grp_id,
+                        phase=DataLoadPhase.UNAVAILABLE,
+                        message=f"No image is available for {card.name}.",
+                    )
+                else:
+                    image = CardImageState(
+                        grp_id=grp_id,
+                        phase=DataLoadPhase.LOADING,
+                        message=f"Loading image for {card.name}.",
+                    )
+                self._recent_pick_image_states[grp_id] = image
+
+            if (
+                image.phase == DataLoadPhase.LOADING
+                and image_uri is not None
+                and grp_id not in queued_grp_ids
+            ):
+                self._recent_pick_image_requests.append(
+                    CardImageRequest(
+                        generation=self._recent_pick_image_generation,
+                        grp_id=grp_id,
+                        image_uri=image_uri,
+                    )
+                )
+                queued_grp_ids.add(grp_id)
+
+            recent_picks.append(
+                RecentPick(
+                    card=replace(card_view, image_path=image.image_path),
+                    image=image,
+                )
+            )
+
+        return tuple(
+            pick
+            for grp_id in recent_grp_ids
+            for pick in recent_picks
+            if pick.card.grp_id == grp_id
+        )
+
+    def _publish_recent_pick_projection(self) -> None:
+        """Publish only gallery entries after an adapter fetch completes."""
+
+        pool = self.snapshot.pool
+        recent_picks = tuple(
+            RecentPick(
+                card=(
+                    pick.card
+                    if (image := self._recent_pick_image_states.get(pick.card.grp_id))
+                    is None
+                    or image.image_path is None
+                    else replace(pick.card, image_path=image.image_path)
+                ),
+                image=(
+                    pick.image
+                    if (image := self._recent_pick_image_states.get(pick.card.grp_id))
+                    is None
+                    else image
+                ),
+            )
+            for pick in pool.recent_picks
+        )
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                pool=replace(pool, recent_picks=recent_picks),
+            )
+        )
+
     def _start_focused_card_image_load(
         self,
         *,
@@ -2259,7 +2524,6 @@ class LiveSession:
                 else None
             ),
         )
-
     def _pool_state(
         self,
         *,
@@ -2278,19 +2542,25 @@ class LiveSession:
             )
             for grp_id in dict.fromkeys(pool_grp_ids)
         )
-        recent_picks = tuple(
-            PoolCard(
-                card=self._card_view(card=database.lookup(grp_id=grp_id)),
-                quantity=1,
-            )
-            for grp_id in pool_grp_ids[-5:]
+        recent_picks = self._prepare_recent_pick_images(
+            pool_grp_ids=pool_grp_ids,
         )
+        recent_grp_ids = {pick.card.grp_id for pick in recent_picks}
+        previous_previewed_grp_id = self.snapshot.pool.previewed_recent_pick_grp_id
+        previewed_grp_id = (
+            None
+            if self._recent_pick_preview_cleared
+            or previous_previewed_grp_id not in recent_grp_ids
+            else previous_previewed_grp_id
+        )
+        self._recent_pick_preview_cleared = False
         color_distribution, mana_curve, average_mana_value = self._pool_aggregates(
             cards=cards
         )
         return PoolState(
             cards=cards,
             recent_picks=recent_picks,
+            previewed_recent_pick_grp_id=previewed_grp_id,
             total_cards=len(pool_grp_ids),
             target_cards=42,
             inferred_pair=(
@@ -2507,6 +2777,8 @@ class LiveSession:
         )
         with self._state_lock:
             errors = self._retire_derived_operations()
+            if not keep_recommendations:
+                self._retire_recent_pick_images()
             card_image = (
                 self.snapshot.card_image
                 if keep_recommendations
@@ -2571,6 +2843,7 @@ class LiveSession:
         active_account = self._identity_for(account_id=account_id)
         with self._state_lock:
             errors = self._retire_derived_operations()
+            self._retire_recent_pick_images()
             card_image = self._retire_card_image()
             self._publish(
                 snapshot=replace(
@@ -2622,8 +2895,8 @@ class LiveSession:
         self._current_pack_event = None
         self._current_scored_pack = None
         self._transient_pool_grp_ids = ()
-        self._set_active_set_code(set_code=None)
         with self._state_lock:
+            self._retire_recent_pick_images()
             errors = self._retire_derived_operations()
             card_image = self._retire_card_image()
             self._publish(
@@ -2688,6 +2961,8 @@ class LiveSession:
                 or previous_draft.account_id != state.account_id
                 or previous_draft.draft_id != state.draft_id
             )
+            if switches_context:
+                self._retire_recent_pick_images()
             card_image = (
                 self._retire_card_image()
                 if switches_context or not isinstance(event, PickMadeEvent)

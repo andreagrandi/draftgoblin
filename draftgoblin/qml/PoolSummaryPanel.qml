@@ -8,19 +8,17 @@ Rectangle {
     id: root
 
     required property var pool
+    required property bool narrow
+    signal previewRequested(int grpId)
+    signal previewDismissed()
 
     readonly property bool hasPool: root.pool && root.pool.total_cards > 0
     readonly property var colorDistribution: root.pool
         && root.pool.color_distribution ? root.pool.color_distribution : []
     readonly property var manaCurve: root.pool
         && root.pool.mana_curve ? root.pool.mana_curve : []
-    readonly property var recentPicks: {
-        if (!root.pool)
-            return []
-        if (root.pool.recent_picks && root.pool.recent_picks.length > 0)
-            return root.pool.recent_picks
-        return root.pool.cards ? root.pool.cards.slice(0, 5) : []
-    }
+    readonly property var recentPicks: root.pool && root.pool.recent_picks
+        ? root.pool.recent_picks : []
     readonly property int maxManaCount: {
         let largest = 0
         for (let index = 0; index < root.manaCurve.length; index++)
@@ -312,44 +310,13 @@ Rectangle {
                     }
                 }
 
-                Label {
-                    text: "RECENT PICKS"
-                    color: Theme.textMuted
-                    font.pixelSize: 11
-                    font.bold: true
-                    font.letterSpacing: 1
-                }
-
-                Repeater {
-                    model: root.recentPicks
-
-                    delegate: RowLayout {
-                        required property var modelData
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        Rectangle {
-                            Layout.preferredWidth: 8
-                            Layout.preferredHeight: 8
-                            radius: 4
-                            color: modelData.card.colors.length > 0
-                                ? Theme.colorForMana(modelData.card.colors[0])
-                                : Theme.textMuted
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: modelData.card.name
-                            color: Theme.textMuted
-                            elide: Text.ElideRight
-                        }
-
-                        Label {
-                            text: "×" + modelData.quantity
-                            color: Theme.text
-                            font.family: fixedFontFamily
-                        }
-                    }
+                RecentPicksGallery {
+                    objectName: "recentPicksGallery"
+                    Layout.fillWidth: true
+                    pool: root.pool
+                    narrow: root.narrow
+                    onPreviewRequested: root.previewRequested(grpId)
+                    onPreviewDismissed: root.previewDismissed()
                 }
             }
 

@@ -37,10 +37,12 @@ from draftgoblin.session import (
     ChooseAccount,
     ChooseRecommendation,
     DismissError,
+    DismissRecentPickPreview,
     FocusBuildCard,
     LiveSession,
     LiveSessionCommand,
     LiveSessionSnapshot,
+    PreviewRecentPick,
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
@@ -274,6 +276,14 @@ class SessionAdapter(QObject):
         self._dispatch(command=ChooseRecommendation(grp_id=grp_id))
 
     @Slot(int)
+    def previewRecentPick(self, grp_id: int) -> None:
+        self._dispatch(command=PreviewRecentPick(grp_id=grp_id))
+
+    @Slot()
+    def dismissRecentPickPreview(self) -> None:
+        self._dispatch(command=DismissRecentPickPreview())
+
+    @Slot(int)
     def focusBuildCard(self, grp_id: int) -> None:
         self._dispatch(command=FocusBuildCard(grp_id=grp_id))
 
@@ -456,7 +466,7 @@ class _LiveSessionWorker(QObject):
             return
         try:
             self._session.dispatch(command=command)
-            self._request_selected_card_image()
+            self._request_one_card_image()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.failed.emit(str(error))
 
@@ -470,7 +480,7 @@ class _LiveSessionWorker(QObject):
         try:
             snapshot = self._session.poll_once()
             self._publish_snapshot(snapshot)
-            self._request_selected_card_image()
+            self._request_one_card_image()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.failed.emit(str(error))
             return False
@@ -479,26 +489,47 @@ class _LiveSessionWorker(QObject):
                 self.stop()
         return True
 
-    def _request_selected_card_image(self) -> None:
-        if self._session is None or self._stop_requested or not hasattr(
-            self._session,
-            "selected_card_image_request",
-        ):
+    def _request_one_card_image(self) -> None:
+        """Fetch at most one pending image, prioritizing focused-card work."""
+        session = self._session
+        if session is None or self._stop_requested:
             return
-        request = self._session.selected_card_image_request()
+
+        request = None
+        recent = False
+        if hasattr(session, "selected_card_image_request"):
+            request = session.selected_card_image_request()
+        if request is None and hasattr(session, "recent_pick_image_request"):
+            request = session.recent_pick_image_request()
+            recent = request is not None
         if request is None or self._stop_requested:
             return
+
         try:
-            image_path = self._session.fetch_card_image(request=request)
+            image_path = session.fetch_card_image(request=request)
         except Exception as error:  # pragma: no cover - defensive network boundary.
-            if not self._stop_requested:
-                self._session.fail_card_image_request(
+            if self._stop_requested:
+                return
+            if recent:
+                session.fail_recent_pick_image_request(
+                    request=request,
+                    error_message=str(error),
+                )
+            else:
+                session.fail_card_image_request(
                     request=request,
                     error_message=str(error),
                 )
         else:
-            if not self._stop_requested:
-                self._session.complete_card_image_request(
+            if self._stop_requested:
+                return
+            if recent:
+                session.complete_recent_pick_image_request(
+                    request=request,
+                    image_path=image_path,
+                )
+            else:
+                session.complete_card_image_request(
                     request=request,
                     image_path=image_path,
                 )

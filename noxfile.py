@@ -21,6 +21,7 @@ def gui(session: nox.Session) -> None:
         "run",
         "pytest",
         "tests/test_session.py",
+        "tests/test_mock_session.py",
         "tests/test_qt_adapter.py",
         "tests/test_qt_mock.py",
         "tests/test_qt_gui.py",
