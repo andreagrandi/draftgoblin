@@ -78,11 +78,17 @@ Build the platform matching the host:
 
 ```bash
 # macOS
+mkdir -p dist-native/macos-unsigned
 uv run pyside6-deploy --config-file pysidedeploy.macos.spec --force
 
 # Windows PowerShell
+New-Item -ItemType Directory -Force dist-native/windows-unsigned | Out-Null
 uv run pyside6-deploy --config-file pysidedeploy.windows.spec --force
 ```
+
+The deployment output directory must exist before `pyside6-deploy` finalizes
+the bundle. The native workflow creates the matrix platform's directory
+explicitly; the local commands above do the same.
 
 Standalone Windows builds require Dependency Walker. The Windows workflow
 downloads the official x64 2.2 archive over HTTPS, verifies its pinned SHA-256
