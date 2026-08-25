@@ -226,18 +226,21 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
-                RowLayout {
+                ColumnLayout {
                     Layout.fillWidth: true
+                    spacing: 2
                     Label {
+                        objectName: "manaCurveTitle"
+                        Layout.fillWidth: true
                         text: "MANA CURVE"
                         color: Theme.textMuted
                         font.pixelSize: 10
                         font.bold: true
                         font.letterSpacing: 1
                     }
-                    Item { Layout.fillWidth: true }
                     Label {
                         objectName: "manaCurveAverage"
+                        Layout.fillWidth: true
                         text: root.averageManaValueText()
                         color: Theme.textMuted
                         font.pixelSize: 11
@@ -498,6 +501,7 @@ Item {
                     }
 
                     Rectangle {
+                        objectName: "wideBuildManaBase"
                         Layout.fillWidth: true
                         Layout.preferredHeight: manaBase.implicitHeight + Theme.panelPadding * 2
                         color: Theme.surfaceLow
@@ -522,8 +526,10 @@ Item {
                             }
                         }
                     }
+                    ManaCurve { objectName: "wideBuildManaCurve" }
 
                     Rectangle {
+                        objectName: "wideBuildWarnings"
                         visible: root.build.warnings.length > 0
                         Layout.fillWidth: true
                         Layout.preferredHeight: wideWarnings.implicitHeight + Theme.panelPadding * 2
@@ -653,7 +659,6 @@ Item {
                         recommendation: root.focusedCard
                         imageState: root.sessionState.card_image
                     }
-                    ManaCurve { objectName: "wideBuildManaCurve" }
                     Rectangle {
                         objectName: "wideBuildContext"
                         visible: root.displayPreferences.detailedBuildContext

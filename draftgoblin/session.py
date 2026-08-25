@@ -276,6 +276,7 @@ class PoolState:
     commitment: float = 0.0
     color_distribution: tuple[tuple[str, int], ...] = ()
     mana_curve: tuple[int, ...] = ()
+    average_mana_value: float | None = None
     target_cards: int = 42
 
 
@@ -2226,26 +2227,38 @@ class LiveSession:
     def _pool_aggregates(
         *,
         cards: tuple[PoolCard, ...],
-    ) -> tuple[tuple[tuple[str, int], ...], tuple[int, ...]]:
-        """Return authoritative color counts and spell mana-value buckets.
-        Lands do not contribute to the spell curve.
+    ) -> tuple[tuple[tuple[str, int], ...], tuple[int, ...], float | None]:
+        """Return authoritative color counts, spell curve, and average value.
+        Lands and unknown mana values do not contribute to spell aggregates.
         """
 
         color_counts = {color: 0 for color in ("W", "U", "B", "R", "G", "C")}
         mana_curve = [0] * 7
+        mana_value_total = 0.0
+        mana_value_quantity = 0
         for pool_card in cards:
             quantity = pool_card.quantity
             colors = pool_card.card.colors or ("C",)
             for color in colors:
                 color_counts[color if color in color_counts else "C"] += quantity
             mana_value = pool_card.card.mana_value
-            if (
-                mana_value is not None
-                and not any("Land" in type_line for type_line in pool_card.card.types)
-            ):
-                bucket = min(6, max(0, int(mana_value)))
-                mana_curve[bucket] += quantity
-        return tuple(color_counts.items()), tuple(mana_curve)
+            if any("Land" in type_line for type_line in pool_card.card.types):
+                continue
+            if mana_value is None:
+                continue
+            bucket = min(6, max(0, int(mana_value)))
+            mana_curve[bucket] += quantity
+            mana_value_total += mana_value * quantity
+            mana_value_quantity += quantity
+        return (
+            tuple(color_counts.items()),
+            tuple(mana_curve),
+            (
+                mana_value_total / mana_value_quantity
+                if mana_value_quantity > 0
+                else None
+            ),
+        )
 
     def _pool_state(
         self,
@@ -2272,7 +2285,9 @@ class LiveSession:
             )
             for grp_id in pool_grp_ids[-5:]
         )
-        color_distribution, mana_curve = self._pool_aggregates(cards=cards)
+        color_distribution, mana_curve, average_mana_value = self._pool_aggregates(
+            cards=cards
+        )
         return PoolState(
             cards=cards,
             recent_picks=recent_picks,
@@ -2288,6 +2303,7 @@ class LiveSession:
             ),
             color_distribution=color_distribution,
             mana_curve=mana_curve,
+            average_mana_value=average_mana_value,
         )
 
     def _select_recovered_state(self, *, state: DraftState) -> None:

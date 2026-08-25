@@ -44,6 +44,7 @@ def test_ready_mock_snapshot_covers_every_desktop_data_surface() -> None:
         ("C", 0),
     )
     assert sum(snapshot.pool.mana_curve) == snapshot.pool.total_cards
+    assert snapshot.pool.average_mana_value == pytest.approx(2.7)
     assert snapshot.build is not None
     assert snapshot.build.deck_size == 40
     assert snapshot.build.spell_count == 23
