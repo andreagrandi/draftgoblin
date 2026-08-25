@@ -22,6 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Launch a compiled Draftgoblin bundle in deterministic mock mode.",
     )
     parser.add_argument("bundle", type=Path)
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=60,
+        help="Maximum seconds to wait for the compiled application to exit.",
+    )
     return parser
 
 
@@ -47,7 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             check=True,
             cwd=executable.parent,
             env=environment,
-            timeout=60,
+            timeout=args.timeout,
         )
 
     return 0

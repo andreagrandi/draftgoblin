@@ -115,6 +115,7 @@ uv run python tests/bundle_smoke.py \
 
 # Windows PowerShell
 uv run python tests/bundle_smoke.py `
+  --timeout 300 `
   dist-native/windows-unsigned/Draftgoblin-unsigned-windows.exe
 ```
 
@@ -123,6 +124,10 @@ by `CFBundleExecutable`, so neighboring binaries and libraries do not affect
 selection. It uses the Windows `.exe` directly, then passes `--provider mock
 --smoke-test` and an isolated temporary `--app-dir`. A successful smoke run
 exits with code 0 after the existing deterministic 800 ms GUI smoke behavior.
+The helper defaults to a 60-second process timeout. The Windows CI smoke run
+allows 300 seconds because the first launch must unpack the compressed one-file
+runtime before the application's smoke timer starts; the bounded timeout still
+fails a bundle that does not exit.
 Mock mode avoids network, Arena logs, card downloads, and machine-specific
 runtime caches, so the bundle can be visually inspected without live services.
 

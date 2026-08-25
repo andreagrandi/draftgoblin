@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from tests import bundle_smoke
 from tests.bundle_smoke import _resolve_bundle_executable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +54,26 @@ def _create_macos_bundle(
     with (bundle_path / "Contents" / "Info.plist").open(mode="wb") as plist_file:
         plistlib.dump(metadata, plist_file)
     return bundle_path
+
+
+def test_bundle_smoke_main_configures_launch_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bundle smoke timeout is strict by default and configurable for CI."""
+
+    bundle_path = tmp_path / "Draftgoblin.exe"
+    bundle_path.write_bytes(b"executable")
+    calls: list[dict[str, object]] = []
+
+    def fake_run(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(bundle_smoke.subprocess, "run", fake_run)
+
+    assert bundle_smoke.main([str(bundle_path)]) == 0
+    assert bundle_smoke.main([str(bundle_path), "--timeout", "300"]) == 0
+    assert [call["timeout"] for call in calls] == [60, 300]
 
 
 def test_macos_bundle_resolution_uses_plist_executable(tmp_path: Path) -> None:
