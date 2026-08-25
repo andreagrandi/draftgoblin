@@ -1,8 +1,15 @@
 name: Build native desktop bundles
 
+run-name: ${{ inputs.request_id && format('Development release request {0}', inputs.request_id) || 'Build native desktop bundles' }}
+
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      request_id:
+        description: Unique request identifier for this development release
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -127,3 +134,137 @@ jobs:
           path: dist-native/${{ matrix.platform }}-unsigned/${{ matrix.artifact }}
           if-no-files-found: error
           overwrite: true
+
+  publish-development:
+    name: Publish rolling development release
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref_name == github.event.repository.default_branch }}
+    needs: native-bundle
+    runs-on: ubuntu-latest
+    concurrency:
+      group: development-release-publish
+      queue: max
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Download macOS unsigned development bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: draftgoblin-macos-unsigned-development
+          path: release-assets/macos
+
+      - name: Download Windows unsigned development bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: draftgoblin-windows-unsigned-development
+          path: release-assets/windows
+
+      - name: Derive development build metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(uv version --short)"
+          utc_date="$(date -u +%Y%m%d)"
+          release_date="${utc_date:0:4}-${utc_date:4:2}-${utc_date:6:2}"
+          build_identifier="v${package_version}-dev.${utc_date}.${GITHUB_RUN_NUMBER}"
+          release_title="Draftgoblin v${package_version} development build ${release_date} #${GITHUB_RUN_NUMBER}"
+
+          {
+            echo "package_version=${package_version}"
+            echo "release_date=${release_date}"
+            echo "build_identifier=${build_identifier}"
+            echo "release_title=${release_title}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish rolling development release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: development
+          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
+          RELEASE_DATE: ${{ steps.metadata.outputs.release_date }}
+          BUILD_IDENTIFIER: ${{ steps.metadata.outputs.build_identifier }}
+          RELEASE_TITLE: ${{ steps.metadata.outputs.release_title }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          latest_run_number="$(
+            gh api \
+              --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/native-bundles.yml/runs" \
+              -f event=workflow_dispatch \
+              -f branch="${GITHUB_REF_NAME}" \
+              -f per_page=100 \
+              --jq '[.workflow_runs[].run_number] | max // 0'
+          )"
+          if (( latest_run_number > GITHUB_RUN_NUMBER )); then
+            echo "Skipping stale development run ${GITHUB_RUN_NUMBER}; a newer request uses run ${latest_run_number}."
+            exit 0
+          fi
+
+          macos_name="draftgoblin-${BUILD_IDENTIFIER}-unsigned-macos.tar"
+          windows_name="draftgoblin-${BUILD_IDENTIFIER}-unsigned-windows.exe"
+          checksums_name="draftgoblin-${BUILD_IDENTIFIER}-unsigned-sha256sums.txt"
+          mkdir -p release-assets/published
+          mv release-assets/macos/Draftgoblin-unsigned-macos.tar \
+            "release-assets/published/${macos_name}"
+          mv release-assets/windows/Draftgoblin-unsigned-windows.exe \
+            "release-assets/published/${windows_name}"
+          (
+            cd release-assets/published
+            sha256sum "${macos_name}" "${windows_name}" > "${checksums_name}"
+          )
+
+          git tag --force "${RELEASE_TAG}" "${SOURCE_COMMIT}"
+          git push origin "refs/tags/${RELEASE_TAG}" --force
+
+          notes_file="${RUNNER_TEMP}/development-release-notes.md"
+          cat > "${notes_file}" <<EOF
+          # ${RELEASE_TITLE}
+
+          - Build identifier: \`${BUILD_IDENTIFIER}\`
+          - Source commit: \`${SOURCE_COMMIT}\`
+          - Package version: \`${PACKAGE_VERSION}\`
+          - UTC date: \`${RELEASE_DATE}\`
+          - Progressive run number: ${GITHUB_RUN_NUMBER}
+          - Warning: This is an unsigned native development build.
+          - Workflow run: ${WORKFLOW_RUN_URL}
+          EOF
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" \
+              --prerelease \
+              --title "${RELEASE_TITLE}" \
+              --notes-file "${notes_file}" \
+              --target "${SOURCE_COMMIT}"
+          else
+            gh release create "${RELEASE_TAG}" \
+              --prerelease \
+              --verify-tag \
+              --title "${RELEASE_TITLE}" \
+              --notes-file "${notes_file}"
+          fi
+
+          existing_assets="$(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name')"
+          while IFS= read -r asset_name; do
+            [[ -z "${asset_name}" ]] && continue
+            gh release delete-asset "${RELEASE_TAG}" "${asset_name}" --yes
+          done <<< "${existing_assets}"
+
+          gh release upload "${RELEASE_TAG}" \
+            "release-assets/published/${macos_name}" \
+            "release-assets/published/${windows_name}" \
+            "release-assets/published/${checksums_name}"
