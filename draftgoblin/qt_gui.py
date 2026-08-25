@@ -308,6 +308,7 @@ def run_gui(
     exit_code = application.exec()
     if isinstance(provider, LiveSessionAdapter):
         provider.shutdown()
+        provider.wait_for_shutdown()
     del engine
     return exit_code
 

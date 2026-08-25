@@ -72,11 +72,13 @@ Rectangle {
             - previewHeading.implicitHeight
             - previewLayout.rowSpacing * 2
     )
+    readonly property real detailedContentWidth: root.width
+        - Theme.panelPadding * 2 - previewLayout.columnSpacing
     readonly property real detailedImageFrameWidth: Math.max(
         120,
         Math.min(
-            180,
-            (root.width - Theme.panelPadding * 2 - previewLayout.columnSpacing) * 0.46,
+            200,
+            root.detailedContentWidth * 0.52,
             root.detailedImageFrameAvailableHeight / 1.4
         )
     )
@@ -114,7 +116,7 @@ Rectangle {
             Layout.columnSpan: root.detailedIntel ? 2 : 1
             text: root.detailedIntel ? "FOCUSED INTEL" : "SELECTED CARD"
             color: root.detailedIntel ? Theme.primary : Theme.textMuted
-            font.pixelSize: 10
+            font.pixelSize: 11
             font.bold: true
             font.letterSpacing: 1.2
         }
@@ -200,6 +202,9 @@ Rectangle {
             visible: root.recommendation !== null
             Layout.alignment: root.detailedIntel ? Qt.AlignTop : Qt.AlignLeft
             Layout.fillWidth: true
+            Layout.maximumWidth: root.detailedIntel
+                ? Math.max(0, root.detailedContentWidth - root.imageFrameWidth)
+                : root.width
             spacing: 6
 
             Label {
@@ -226,6 +231,7 @@ Rectangle {
                         + "   ·   MV " + root.recommendation.card.mana_value
                 }
                 color: Theme.textMuted
+                font.pixelSize: 12
                 wrapMode: Text.WordWrap
             }
 
@@ -237,37 +243,41 @@ Rectangle {
                 columnSpacing: 12
                 rowSpacing: 4
 
-                Label { text: "DG Score"; color: Theme.textMuted }
+                Label { text: "DG Score"; color: Theme.textMuted; font.pixelSize: 11 }
                 Label {
                     text: root.recommendation ? root.recommendation.score : "—"
                     color: Theme.primary
                     font.family: fixedFontFamily
+                    font.pixelSize: 16
                     font.bold: true
                 }
 
-                Label { text: "17L WR"; color: Theme.textMuted }
+                Label { text: "17L WR"; color: Theme.textMuted; font.pixelSize: 11 }
                 Label {
                     text: root.winRateText
                     color: Theme.text
                     font.family: fixedFontFamily
+                    font.pixelSize: 15
                 }
 
-                Label { text: "Grade"; color: Theme.textMuted }
+                Label { text: "Grade"; color: Theme.textMuted; font.pixelSize: 11 }
                 Label {
                     text: root.recommendation
                         ? root.recommendation.letter_grade || "—" : "—"
                     color: Theme.warning
+                    font.pixelSize: 15
                     font.bold: true
                 }
 
-                Label { text: "ALSA"; color: Theme.textMuted }
+                Label { text: "ALSA"; color: Theme.textMuted; font.pixelSize: 11 }
                 Label {
                     text: root.alsaText
                     color: Theme.text
                     font.family: fixedFontFamily
+                    font.pixelSize: 15
                 }
 
-                Label { text: "Fit"; color: Theme.textMuted }
+                Label { text: "Fit"; color: Theme.textMuted; font.pixelSize: 11 }
                 Label {
                     Layout.fillWidth: true
                     text: root.recommendation
@@ -276,7 +286,7 @@ Rectangle {
                     elide: Text.ElideRight
                 }
 
-                Label { text: "Source"; color: Theme.textMuted }
+                Label { text: "Source"; color: Theme.textMuted; font.pixelSize: 11 }
                 Label {
                     Layout.fillWidth: true
                     text: root.recommendation
@@ -326,6 +336,7 @@ Rectangle {
                     return root.recommendation.explanation || ""
                 }
                 color: Theme.textMuted
+                font.pixelSize: 12
                 wrapMode: Text.WordWrap
             }
         }

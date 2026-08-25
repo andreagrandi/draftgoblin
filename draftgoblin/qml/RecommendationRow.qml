@@ -123,6 +123,7 @@ FocusScope {
                         Layout.minimumWidth: 0
                         text: root.recommendation.card.name
                         color: Theme.text
+                        font.pixelSize: 14
                         font.bold: root.recommended || root.selected
                         wrapMode: Text.WordWrap
                         elide: Text.ElideNone
@@ -137,7 +138,7 @@ FocusScope {
                         Layout.maximumWidth: 102
                         text: root.stateText
                         color: root.stateColor
-                        font.pixelSize: 9
+                        font.pixelSize: 10
                         font.bold: true
                         font.letterSpacing: 0.8
                         horizontalAlignment: Text.AlignRight
@@ -151,7 +152,7 @@ FocusScope {
                         + " · MV " + root.manaValueText
                         + " · " + (root.recommendation.source_label || "Source unavailable")
                     color: Theme.textMuted
-                    font.pixelSize: 10
+                    font.pixelSize: 11
                     elide: Text.ElideRight
                 }
             }
@@ -225,6 +226,7 @@ FocusScope {
                     Layout.minimumWidth: 0
                     text: root.recommendation.card.name
                     color: Theme.text
+                    font.pixelSize: 14
                     font.bold: root.recommended || root.selected
                     wrapMode: Text.WrapAnywhere
                     elide: Text.ElideNone
@@ -239,7 +241,7 @@ FocusScope {
                     Layout.maximumWidth: 102
                     text: root.stateText
                     color: root.stateColor
-                    font.pixelSize: 9
+                    font.pixelSize: 10
                     font.bold: true
                     font.letterSpacing: 0.8
                     horizontalAlignment: Text.AlignRight
@@ -275,6 +277,7 @@ FocusScope {
                     text: "DG " + root.recommendation.score
                     color: root.recommended ? Theme.primary : Theme.text
                     font.family: fixedFontFamily
+                    font.pixelSize: 12
                     font.bold: true
                 }
 
@@ -282,11 +285,13 @@ FocusScope {
                     text: "17L " + root.winRateText
                     color: Theme.text
                     font.family: fixedFontFamily
+                    font.pixelSize: 12
                 }
 
                 Label {
                     text: "Grade " + (root.recommendation.letter_grade || "—")
                     color: Theme.warning
+                    font.pixelSize: 12
                     font.bold: true
                 }
 
@@ -297,7 +302,7 @@ FocusScope {
                         + " · MV " + root.manaValueText
                         + " · " + (root.recommendation.source_label || "Source unavailable")
                     color: Theme.textMuted
-                    font.pixelSize: 10
+                    font.pixelSize: 11
                     horizontalAlignment: Text.AlignRight
                     elide: Text.ElideRight
                 }

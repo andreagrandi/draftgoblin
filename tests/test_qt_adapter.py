@@ -11,12 +11,13 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QCoreApplication, QObject, QUrl, Slot
+from PySide6.QtCore import QCoreApplication, QObject, QTimer, QUrl, Slot
 
 from draftgoblin.mock_session import MockLiveSession
 from draftgoblin.qt_adapter import (
     GuiPreferencesAdapter,
     LiveSessionAdapter,
+    RecommendationListModel,
     SessionAdapter,
 )
 from draftgoblin.session import (
@@ -84,6 +85,68 @@ class _FakeSession:
         return self.snapshot
 
 
+class _StartupReplaySession(_FakeSession):
+    def __init__(self, *, publish: SnapshotPublisher) -> None:
+        super().__init__(publish=publish)
+        self.poll_count = 0
+        self.post_start_ready = threading.Event()
+
+    def scan_startup_files(
+        self,
+        *,
+        include_previous: bool = True,
+        include_pre_draft_detection: bool = True,
+    ) -> LiveSessionSnapshot:
+        self.startup_thread_ids.append(threading.get_ident())
+        self.startup_options.append(
+            (include_previous, include_pre_draft_detection)
+        )
+        source_cards = self._model.snapshot.recommendations.cards
+        for card_count in (12, 4, 0):
+            self.snapshot = replace(
+                self.snapshot,
+                recommendations=replace(
+                    self.snapshot.recommendations,
+                    cards=source_cards[:card_count],
+                ),
+            )
+            self._publish(self.snapshot)
+        return self.snapshot
+
+    def poll_once(self) -> LiveSessionSnapshot:
+        self.poll_thread_ids.append(threading.get_ident())
+        self.poll_count += 1
+        if self.poll_count == 2:
+            self.snapshot = replace(
+                self.snapshot,
+                recommendations=replace(
+                    self.snapshot.recommendations,
+                    cards=self._model.snapshot.recommendations.cards[:1],
+                ),
+            )
+            self.post_start_ready.set()
+        self._publish(self.snapshot)
+        return self.snapshot
+
+
+class _FailingFirstPollSession(_FakeSession):
+    def __init__(self, *, publish: SnapshotPublisher) -> None:
+        super().__init__(publish=publish)
+        self.poll_count = 0
+        self.recovery_allowed = threading.Event()
+        self.recovered = threading.Event()
+
+    def poll_once(self) -> LiveSessionSnapshot:
+        self.poll_thread_ids.append(threading.get_ident())
+        self.poll_count += 1
+        if self.poll_count == 1:
+            self._publish(self.snapshot)
+            raise RuntimeError("initial poll failed")
+        self.recovery_allowed.wait(timeout=3.0)
+        self.recovered.set()
+        return self.snapshot
+
+
 class _ImageFakeSession(_FakeSession):
     def __init__(self, *, publish: SnapshotPublisher) -> None:
         super().__init__(publish=publish)
@@ -137,6 +200,39 @@ class _ImageFakeSession(_FakeSession):
 
     def stop(self) -> LiveSessionSnapshot:
         self.stopped = True
+        return self.snapshot
+
+
+class _BusySession(_FakeSession):
+    def __init__(self, *, publish: SnapshotPublisher) -> None:
+        super().__init__(publish=publish)
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.stopped = False
+
+    def load_card_data(self) -> LiveSessionSnapshot:
+        self.started.set()
+        self.release.wait(timeout=3.0)
+        return self.snapshot
+
+    def stop(self) -> LiveSessionSnapshot:
+        self.stopped = True
+        self.release.set()
+        return self.snapshot
+
+
+class _FailingStartupSession(_FakeSession):
+    def __init__(self, *, publish: SnapshotPublisher) -> None:
+        super().__init__(publish=publish)
+        self.stopped = False
+
+    def load_card_data(self) -> LiveSessionSnapshot:
+        self._publish(self.snapshot)
+        raise RuntimeError("startup load failed")
+
+    def stop(self) -> LiveSessionSnapshot:
+        self.stopped = True
+        self._publish(self.snapshot)
         return self.snapshot
 
 
@@ -204,6 +300,41 @@ def test_session_adapter_converts_local_image_path_to_file_url(
         QUrl.fromLocalFile(str(image_path)).toString()
     )
 
+
+def test_recommendation_model_updates_rows_without_reset_churn() -> None:
+    model = RecommendationListModel()
+    model_resets: list[object] = []
+    data_changes: list[object] = []
+    model.modelReset.connect(lambda: model_resets.append(True))
+    model.dataChanged.connect(lambda *args: data_changes.append(args))
+
+    def rows(*, image_suffix: str) -> list[dict[str, object]]:
+        return [
+            {
+                "grp_id": grp_id,
+                "card": {"image_path": f"file:///card-{grp_id}-{image_suffix}.jpg"},
+            }
+            for grp_id in range(12)
+        ]
+
+    model.replace(rows=rows(image_suffix="first"))
+    for image_suffix in ("second", "third", "fourth"):
+        model.replace(rows=rows(image_suffix=image_suffix))
+
+    assert model.rowCount() == 12
+    assert model.data(
+        model.index(0, 0),
+        RecommendationListModel.MODEL_DATA_ROLE,
+    )["card"]["image_path"] == "file:///card-0-fourth.jpg"
+    assert len(data_changes) == 3
+    assert model_resets == []
+
+    model.replace(rows=[])
+    assert model.rowCount() == 0
+    model.replace(rows=rows(image_suffix="restored"))
+    assert model.rowCount() == 12
+
+
 def _process_until(
     *,
     application: QCoreApplication,
@@ -268,6 +399,94 @@ def test_live_adapter_runs_session_work_on_worker_and_queues_plain_snapshots(
         assert "domain_selection" not in adapter.state["build"]
     finally:
         adapter.shutdown()
+
+    assert adapter.thread is not None
+    assert not adapter.thread.isRunning()
+
+
+def test_live_adapter_coalesces_historical_startup_snapshots(
+    qcore_application: QCoreApplication,
+) -> None:
+    gui_thread_id = threading.get_ident()
+    sessions: list[_StartupReplaySession] = []
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _StartupReplaySession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=5,
+    )
+    observer = _StateObserver(adapter=adapter)
+    adapter.stateChanged.connect(observer.observe)
+
+    try:
+        adapter.start()
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(sessions)
+            and sessions[0].post_start_ready.is_set(),
+            description="the post-start live snapshot",
+        )
+
+        observed_card_counts = [
+            len(cast(dict[str, object], state["recommendations"])["cards"])
+            for state in observer.states
+        ]
+        assert observed_card_counts == [0, 1]
+        assert observer.thread_ids
+        assert set(observer.thread_ids) == {gui_thread_id}
+    finally:
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
+
+    assert adapter.thread is not None
+    assert not adapter.thread.isRunning()
+
+
+def test_live_adapter_retains_initial_poll_failure_until_recovery(
+    qcore_application: QCoreApplication,
+) -> None:
+    sessions: list[_FailingFirstPollSession] = []
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _FailingFirstPollSession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=5,
+    )
+
+    try:
+        adapter.start()
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(adapter.state.get("errors")),
+            description="the initial poll error",
+        )
+        session = sessions[0]
+        assert session.poll_count >= 1
+        assert adapter.state["errors"][0]["message"] == "initial poll failed"
+        assert adapter.state["status"]["phase"] == "error"
+
+        session.recovery_allowed.set()
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: session.recovered.is_set()
+            and not adapter.state.get("errors"),
+            description="a recovered polling snapshot",
+        )
+        assert adapter.state["status"]["phase"] != "error"
+    finally:
+        session = sessions[0] if sessions else None
+        if session is not None:
+            session.recovery_allowed.set()
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
 
     assert adapter.thread is not None
     assert not adapter.thread.isRunning()
@@ -425,6 +644,38 @@ def test_live_adapter_surfaces_and_dismisses_worker_initialization_errors(
         adapter.shutdown()
 
 
+def test_live_adapter_retains_startup_failure_when_stop_publishes(
+    qcore_application: QCoreApplication,
+) -> None:
+    sessions: list[_FailingStartupSession] = []
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _FailingStartupSession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=60_000,
+    )
+    adapter.start()
+    try:
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(adapter.state.get("errors"))
+            and adapter.thread is not None
+            and not adapter.thread.isRunning(),
+            description="the startup load failure and worker shutdown",
+        )
+
+        assert sessions[0].stopped is True
+        assert adapter.state["errors"][0]["message"] == "startup load failed"
+        assert adapter.state["status"]["phase"] == "error"
+    finally:
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
+
+
 def test_gui_preferences_adapter_persists_display_choices_independently(
     qcore_application: QCoreApplication,
     tmp_path: Path,
@@ -446,3 +697,96 @@ def test_gui_preferences_adapter_persists_display_choices_independently(
     assert reloaded.secondaryStats is False
     assert reloaded.cardPreview is False
     assert reloaded.detailedBuildContext is False
+
+
+def test_live_adapter_shutdown_returns_while_startup_work_is_busy(
+    qcore_application: QCoreApplication,
+) -> None:
+    sessions: list[_BusySession] = []
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _BusySession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=60_000,
+    )
+    adapter.start()
+    try:
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(sessions) and sessions[0].started.is_set(),
+            description="busy startup work",
+        )
+        started_at = time.monotonic()
+        adapter.shutdown()
+        assert time.monotonic() - started_at < 0.5
+        assert adapter.thread is not None and adapter.thread.isRunning()
+
+        sessions[0].release.set()
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: adapter.thread is not None
+            and not adapter.thread.isRunning(),
+            description="cooperative worker shutdown",
+        )
+        assert sessions[0].stopped is True
+    finally:
+        sessions[0].release.set()
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
+
+
+def test_application_quit_releases_busy_worker_before_adapter_teardown(
+    qcore_application: QCoreApplication,
+) -> None:
+    sessions: list[_BusySession] = []
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _BusySession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=60_000,
+    )
+    adapter.start()
+    _process_until(
+        application=qcore_application,
+        predicate=lambda: bool(sessions) and sessions[0].started.is_set(),
+        description="busy startup work before application quit",
+    )
+
+    quit_requested = threading.Event()
+
+    def release_after_quit() -> None:
+        quit_requested.wait(timeout=1.0)
+        sessions[0].release.set()
+
+    def quit_application() -> None:
+        quit_requested.set()
+        qcore_application.quit()
+
+    release_thread = threading.Thread(target=release_after_quit)
+    release_thread.start()
+    try:
+        QTimer.singleShot(0, quit_application)
+        started_at = time.monotonic()
+        qcore_application.exec()
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
+        elapsed = time.monotonic() - started_at
+
+        assert elapsed < 1.0
+        assert adapter.thread is not None
+        assert not adapter.thread.isRunning()
+        assert sessions[0].stopped is True
+    finally:
+        quit_requested.set()
+        sessions[0].release.set()
+        release_thread.join(timeout=1.0)
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
