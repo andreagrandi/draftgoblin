@@ -1142,7 +1142,7 @@ assert pool_count.property("text") == (
 )
 pool_average = wide_pool.findChild(QObject, "poolManaCurveAverage")
 assert pool_average is not None
-assert pool_average.property("text") == "Average mana value: 2.70"
+assert pool_average.property("text") == "Average mana value: 2.43"
 unavailable_pool_state = dict(provider.state)
 unavailable_pool = dict(unavailable_pool_state["pool"])
 unavailable_pool["average_mana_value"] = None

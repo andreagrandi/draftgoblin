@@ -16,7 +16,7 @@ packages = Nuitka==4.1.3
 [qt]
 # Every QML file and the module manifest are listed deliberately. The deploy tool
 # also preserves draftgoblin/assets/ so NavigationRail.qml can resolve the logo.
-qml_files = draftgoblin/qml/AppBar.qml,draftgoblin/qml/BacktestView.qml,draftgoblin/qml/BuildView.qml,draftgoblin/qml/CardPreview.qml,draftgoblin/qml/LiveDraftView.qml,draftgoblin/qml/Main.qml,draftgoblin/qml/NavigationRail.qml,draftgoblin/qml/PoolSummaryPanel.qml,draftgoblin/qml/RecommendationRow.qml,draftgoblin/qml/SettingsView.qml,draftgoblin/qml/StateBanner.qml,draftgoblin/qml/StatusStrip.qml,draftgoblin/qml/Theme.qml,draftgoblin/qml/qmldir
+qml_files = draftgoblin/qml/AppBar.qml,draftgoblin/qml/BacktestView.qml,draftgoblin/qml/BuildView.qml,draftgoblin/qml/CardPreview.qml,draftgoblin/qml/LiveDraftView.qml,draftgoblin/qml/Main.qml,draftgoblin/qml/NavigationRail.qml,draftgoblin/qml/PoolSummaryPanel.qml,draftgoblin/qml/RecentPickThumbnail.qml,draftgoblin/qml/RecentPicksGallery.qml,draftgoblin/qml/RecommendationRow.qml,draftgoblin/qml/SettingsView.qml,draftgoblin/qml/StateBanner.qml,draftgoblin/qml/StatusStrip.qml,draftgoblin/qml/Theme.qml,draftgoblin/qml/qmldir
 excluded_qml_plugins = QtCharts,QtQuick3D,QtSensors,QtTest,QtWebEngine
 modules = Core,Gui,Qml,Quick,QuickControls2
 plugins = imageformats,platforms,platformthemes,styles

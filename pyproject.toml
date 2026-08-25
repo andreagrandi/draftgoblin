@@ -102,6 +102,8 @@ files = [
     "draftgoblin/qml/BuildView.qml",
     "draftgoblin/qml/CardPreview.qml",
     "draftgoblin/qml/LiveDraftView.qml",
+    "draftgoblin/qml/RecentPickThumbnail.qml",
+    "draftgoblin/qml/RecentPicksGallery.qml",
     "draftgoblin/qml/Main.qml",
     "draftgoblin/qml/NavigationRail.qml",
     "draftgoblin/qml/PoolSummaryPanel.qml",

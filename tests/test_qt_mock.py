@@ -29,7 +29,14 @@ def test_qt_translation_publishes_plain_values_without_domain_payloads() -> None
     assert values["status"]["phase"] == "drafting"
     assert values["recommendations"]["cards"][0]["card"]["name"]
     assert values["build"]["average_mana_value"] == pytest.approx(expected_average)
-    assert values["pool"]["average_mana_value"] == pytest.approx(2.7)
+    assert values["pool"]["average_mana_value"] == pytest.approx(17 / 7)
+    recent_picks = values["pool"]["recent_picks"]
+    assert isinstance(recent_picks, list)
+    assert isinstance(recent_picks[0], dict)
+    assert isinstance(recent_picks[0]["card"], dict)
+    assert isinstance(recent_picks[0]["image"], dict)
+    assert recent_picks[0]["image"]["phase"] == "unavailable"
+    assert recent_picks[0]["image"]["image_path"] is None
     assert "domain_pool" not in values["build"]
     assert "domain_selection" not in values["build"]
 
