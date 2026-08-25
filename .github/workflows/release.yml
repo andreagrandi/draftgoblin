@@ -108,9 +108,77 @@ jobs:
       - name: Publish to PyPI
         run: uv publish --trusted-publishing always dist/*
 
+  native-bundles:
+    name: Build native desktop bundles
+    uses: ./.github/workflows/native-bundles.yml
+    permissions:
+      contents: read
+
   homebrew:
     needs: publish
     uses: ./.github/workflows/homebrew.yml
     with:
       version: ${{ github.ref_name }}
     secrets: inherit
+
+  github-release:
+    name: Publish GitHub Release
+    needs:
+      - publish
+      - native-bundles
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download macOS native bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: draftgoblin-macos-unsigned-development
+          path: release-assets/macos
+
+      - name: Download Windows native bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: draftgoblin-windows-unsigned-development
+          path: release-assets/windows
+
+      - name: Rename native bundles and generate checksums
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          macos_name="draftgoblin-${RELEASE_TAG}-unsigned-macos.tar"
+          windows_name="draftgoblin-${RELEASE_TAG}-unsigned-windows.exe"
+          checksums_name="draftgoblin-${RELEASE_TAG}-unsigned-sha256sums.txt"
+
+          mkdir -p release-assets/published
+          mv release-assets/macos/Draftgoblin-unsigned-macos.tar \
+            "release-assets/published/${macos_name}"
+          mv release-assets/windows/Draftgoblin-unsigned-windows.exe \
+            "release-assets/published/${windows_name}"
+
+          (
+            cd release-assets/published
+            sha256sum "${macos_name}" "${windows_name}" > "${checksums_name}"
+          )
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" \
+              --draft \
+              --verify-tag \
+              --title "${RELEASE_TAG}" \
+              --generate-notes
+          fi
+          gh release upload "${RELEASE_TAG}" \
+            "release-assets/published/draftgoblin-${RELEASE_TAG}-unsigned-macos.tar" \
+            "release-assets/published/draftgoblin-${RELEASE_TAG}-unsigned-windows.exe" \
+            "release-assets/published/draftgoblin-${RELEASE_TAG}-unsigned-sha256sums.txt" \
+            --clobber
+          gh release edit "${RELEASE_TAG}" --draft=false

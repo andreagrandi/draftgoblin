@@ -59,8 +59,62 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["draftgoblin*"]
 [tool.setuptools.package-data]
-draftgoblin = ["assets/*.png", "qml/*.qml", "qml/qmldir"]
-
+draftgoblin = [
+    "assets/*.icns",
+    "assets/*.ico",
+    "assets/*.png",
+    "qml/*.qml",
+    "qml/qmldir",
+]
+[tool.pyside6-project]
+# Keep the deployment project input explicit: Python sources, QML module files,
+# and the logo used by NavigationRail.qml. No fonts are bundled.
+files = [
+    "draftgoblin/__init__.py",
+    "draftgoblin/audit.py",
+    "draftgoblin/backtest.py",
+    "draftgoblin/benchmark.py",
+    "draftgoblin/carddb.py",
+    "draftgoblin/cardimages.py",
+    "draftgoblin/cli.py",
+    "draftgoblin/config.py",
+    "draftgoblin/deckbuilder.py",
+    "draftgoblin/events.py",
+    "draftgoblin/logfollow.py",
+    "draftgoblin/mock_session.py",
+    "draftgoblin/paths.py",
+    "draftgoblin/pickengine.py",
+    "draftgoblin/pool.py",
+    "draftgoblin/preferences.py",
+    "draftgoblin/qt_adapter.py",
+    "draftgoblin/qt_gui.py",
+    "draftgoblin/qt_mock.py",
+    "draftgoblin/ranking.py",
+    "draftgoblin/replay.py",
+    "draftgoblin/session.py",
+    "draftgoblin/setinfo.py",
+    "draftgoblin/seventeen.py",
+    "draftgoblin/splash.py",
+    "draftgoblin/tui.py",
+    "draftgoblin/watch.py",
+    "draftgoblin/qml/AppBar.qml",
+    "draftgoblin/qml/BacktestView.qml",
+    "draftgoblin/qml/BuildView.qml",
+    "draftgoblin/qml/CardPreview.qml",
+    "draftgoblin/qml/LiveDraftView.qml",
+    "draftgoblin/qml/Main.qml",
+    "draftgoblin/qml/NavigationRail.qml",
+    "draftgoblin/qml/PoolSummaryPanel.qml",
+    "draftgoblin/qml/RecommendationRow.qml",
+    "draftgoblin/qml/SettingsView.qml",
+    "draftgoblin/qml/StateBanner.qml",
+    "draftgoblin/qml/StatusStrip.qml",
+    "draftgoblin/qml/Theme.qml",
+    "draftgoblin/qml/qmldir",
+    "draftgoblin/assets/draftgoblin.icns",
+    "draftgoblin/assets/draftgoblin.ico",
+    "draftgoblin/assets/draftgoblin_logo.png",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

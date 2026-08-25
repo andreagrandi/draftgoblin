@@ -76,7 +76,8 @@ Install the optional `gui` dependencies and run `draftgoblin-gui` for the live
 PySide6/QML application. The deterministic mock provider remains available for
 visual development with `draftgoblin-gui --provider mock`. See the
 [desktop GUI guide](docs/gui-mockup.md) for live and mock launch options,
-selectable states, and responsive review targets.
+selectable states, and responsive review targets. For reproducible unsigned
+development bundles, see the [desktop bundle guide](docs/desktop-bundles.md).
 
 ## Local draft audit data
 
