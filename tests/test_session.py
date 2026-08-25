@@ -187,6 +187,8 @@ def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> Non
         warnings=("Fixture warning",),
         spell_count=23,
         land_count=17,
+        creature_count=2,
+        instant_count=0,
     )
     backtest = BacktestResult(
         ranking_mode="score",
@@ -1113,6 +1115,13 @@ def test_live_session_build_request_publishes_structured_ordered_result(
     )
     assert snapshot.build.land_count == sum(
         land.quantity for land in snapshot.build.lands
+    )
+    assert snapshot.build.domain_spell_selection is not None
+    assert snapshot.build.creature_count == (
+        snapshot.build.domain_spell_selection.counts.creatures
+    )
+    assert snapshot.build.instant_count == (
+        snapshot.build.domain_spell_selection.counts.instants
     )
     assert any(
         option.pair == "WU" and option.selected and option.automatic

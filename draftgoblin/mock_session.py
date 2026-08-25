@@ -316,6 +316,8 @@ def _build() -> BuildResult:
         warnings=("Two flexible slots use lower-confidence ratings.",),
         spell_count=23,
         land_count=17,
+        creature_count=7,
+        instant_count=1,
     )
 
 

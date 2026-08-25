@@ -22,9 +22,11 @@ Item {
         deck_size: 0,
         average_mana_value: null,
         pair_override: null,
-        warnings: [],
         spell_count: null,
-        land_count: null
+        warnings: [],
+        land_count: null,
+        creature_count: null,
+        instant_count: null
     })
     readonly property int wideMinimumWidth: 220 + 360 + 240 + Theme.gutter * 2
     readonly property bool compactPresentation: root.narrow || root.width < root.wideMinimumWidth
@@ -127,6 +129,13 @@ Item {
         if (average === null || average === undefined)
             return "Average mana value: —"
         return "Average mana value: " + Number(average).toFixed(2)
+    }
+    function countText(value) {
+        return value === null || value === undefined ? "—" : value
+    }
+    function countLabel(value, singular) {
+        const text = root.countText(value)
+        return text + " " + singular + (text === 1 ? "" : "s")
     }
 
     function manaBucket(spell) {
@@ -489,10 +498,14 @@ Item {
                                 columnSpacing: 20
                                 rowSpacing: 8
                                 Label { text: root.build.deck_size; color: Theme.text; font.pixelSize: 22; font.bold: true }
-                                Label { text: root.build.spell_count !== null ? root.build.spell_count : "—"; color: Theme.primary; font.pixelSize: 22; font.bold: true }
+                                Label { text: root.countText(root.build.spell_count); color: Theme.primary; font.pixelSize: 22; font.bold: true }
                                 Label { text: "TOTAL CARDS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
                                 Label { text: "SPELLS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
-                                Label { text: root.build.land_count !== null ? root.build.land_count : "—"; color: Theme.warning; font.pixelSize: 18; font.bold: true }
+                                Label { objectName: "wideBuildCreatureCount"; text: root.countText(root.build.creature_count); color: Theme.primary; font.pixelSize: 18; font.bold: true }
+                                Label { objectName: "wideBuildInstantCount"; text: root.countText(root.build.instant_count); color: Theme.primary; font.pixelSize: 18; font.bold: true }
+                                Label { text: "CREATURES"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
+                                Label { text: "INSTANTS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
+                                Label { text: root.countText(root.build.land_count); color: Theme.warning; font.pixelSize: 18; font.bold: true }
                                 Label { text: root.build.deck_size === 40 ? "DECK SIZE READY" : "DECK SIZE CHECK"; color: root.build.deck_size === 40 ? Theme.primary : Theme.warning; font.pixelSize: 10; font.bold: true }
                                 Label { text: "LANDS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
                                 Label { text: "SUGGESTED DECK"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
@@ -810,7 +823,20 @@ Item {
                                 Label { text: root.build.deck_size; color: Theme.primary; font.pixelSize: 22; font.bold: true }
                                 Label { text: "/ 40 CARDS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
                                 Item { Layout.fillWidth: true }
-                                Label { text: root.build.spell_count + " spells · " + root.build.land_count + " lands"; color: Theme.textMuted; font.pixelSize: 11 }
+                                Label {
+                                    text: root.countText(root.build.spell_count) + " spells · "
+                                        + root.countText(root.build.land_count) + " lands"
+                                    color: Theme.textMuted
+                                    font.pixelSize: 11
+                                }
+                            }
+                            Label {
+                                objectName: "narrowBuildTypeSummary"
+                                Layout.fillWidth: true
+                                text: root.countLabel(root.build.creature_count, "creature") + " · "
+                                    + root.countLabel(root.build.instant_count, "instant")
+                                color: Theme.textMuted
+                                font.pixelSize: 11
                             }
                             Label {
                                 text: root.build.selected_pair + " · " + (root.build.pair_override ? "override" : "automatic")

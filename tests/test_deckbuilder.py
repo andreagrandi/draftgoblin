@@ -184,6 +184,57 @@ def test_select_deck_spells_fills_exact_23_with_structural_constraints() -> None
 
 
 
+def test_spell_counts_include_quantity_aware_creatures_and_instants() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=5,
+        creature_floor=0,
+        creature_ceiling=5,
+        minimum_two_drops=0,
+        maximum_expensive_spells=5,
+        bench_card_count=0,
+    )
+    database = CardDatabase(
+        cards={
+            701: _card(
+                grp_id=701,
+                name="Creature // Instant",
+                colors=("W",),
+                types=("Creature // Instant",),
+            ),
+            702: _card(
+                grp_id=702,
+                name="Instant",
+                colors=("U",),
+                types=("Instant",),
+            ),
+            703: _card(
+                grp_id=703,
+                name="Creature",
+                colors=("W",),
+                types=("Creature",),
+            ),
+            704: _card(
+                grp_id=704,
+                name="Sorcery",
+                colors=("U",),
+                types=("Sorcery",),
+            ),
+        }
+    )
+
+    selection = select_deck_spells(
+        pool_grp_ids=(701, 701, 702, 703, 704),
+        card_database=database,
+        pair="WU",
+        config=config,
+    )
+
+    assert selection.counts.total == 5
+    assert selection.counts.creatures == 3
+    assert selection.counts.instants == 3
+
+
 def test_spell_selection_ignores_scored_duplicates_beyond_pool_quantity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

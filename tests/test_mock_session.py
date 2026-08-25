@@ -58,6 +58,8 @@ def test_ready_mock_snapshot_covers_every_desktop_data_surface() -> None:
     assert snapshot.build.deck_size == 40
     assert snapshot.build.spell_count == 23
     assert snapshot.build.land_count == 17
+    assert snapshot.build.creature_count == 7
+    assert snapshot.build.instant_count == 1
     assert snapshot.backtest is not None
     assert snapshot.backtest.rows
 
