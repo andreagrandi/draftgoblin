@@ -57,6 +57,18 @@ def _configure_application_metadata(*, application: QGuiApplication) -> None:
     application.setOrganizationName(APPLICATION_NAME)
 
 
+def _qml_directory(*, executable_path: Path | None = None) -> Path:
+    """Resolve QML beside the source package or compiled bundle executable."""
+    source_directory = Path(__file__).with_name("qml")
+    if source_directory.is_dir():
+        return source_directory
+
+    bundle_executable = (
+        Path(sys.argv[0]) if executable_path is None else executable_path
+    )
+    return bundle_executable.resolve().parent / "qml"
+
+
 def _fixed_font_family() -> str:
     if QGuiApplication.instance() is None:
         raise RuntimeError(
@@ -268,7 +280,7 @@ def run_gui(
     provider = _build_provider(args=args)
     preferences = GuiPreferencesAdapter(app_dir=args.app_dir, parent=application)
     engine = QQmlApplicationEngine()
-    qml_directory = Path(__file__).with_name("qml")
+    qml_directory = _qml_directory()
     engine.addImportPath(str(qml_directory))
     context = engine.rootContext()
     context.setContextProperty("sessionProvider", provider)

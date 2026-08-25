@@ -14,6 +14,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+dist-native/
 downloads/
 eggs/
 .eggs/
@@ -34,6 +35,7 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!pysidedeploy.*.spec
 
 # Installer logs
 pip-log.txt
