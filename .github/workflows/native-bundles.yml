@@ -81,6 +81,11 @@ jobs:
           "NUITKA_CACHE_DIR_DOWNLOADS=$cache" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Create bundle output directory
+        run: >-
+          uv run python -c
+          "from pathlib import Path; Path('dist-native/${{ matrix.platform }}-unsigned').mkdir(parents=True, exist_ok=True)"
+
       - name: Build unsigned bundle
         run: uv run pyside6-deploy --config-file "${{ matrix.config }}" --force
 
