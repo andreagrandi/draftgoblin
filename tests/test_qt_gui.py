@@ -802,6 +802,7 @@ assert provider.state["ratings"]["phase"] == "loading"
 def test_qml_tab_and_shift_tab_traversal_stays_on_surfaces_and_dialogs_offscreen() -> None:
     probe = """
 from pathlib import Path
+import time
 from tempfile import TemporaryDirectory
 
 from PySide6.QtCore import QObject, QPointF, Qt, QUrl
@@ -840,6 +841,30 @@ def assert_visual_item_inside(parent: QQuickItem, child: QQuickItem) -> None:
     assert child_top_left.y() >= parent_top_left.y()
     assert child_bottom_right.x() <= parent_bottom_right.x()
     assert child_bottom_right.y() <= parent_bottom_right.y()
+
+def wait_until(predicate, description: str) -> None:
+    deadline = time.monotonic() + 5
+    while not predicate():
+        application.processEvents()
+        if time.monotonic() >= deadline:
+            raise AssertionError("Timed out waiting for " + description)
+        time.sleep(0.005)
+    application.processEvents()
+
+
+def image_source(image: QObject) -> str:
+    source = image.property("source")
+    return source.toString() if isinstance(source, QUrl) else str(source)
+
+
+def visible_texts(item: QQuickItem) -> list[str]:
+    values = []
+    text = item.property("text")
+    if item.isVisible() and isinstance(text, str) and text:
+        values.append(text)
+    for child in item.childItems():
+        values.extend(visible_texts(child))
+    return values
 
 
 def has_focus(item: QObject) -> bool:
@@ -931,6 +956,132 @@ assert wide_pool is not None and wide_pool.isVisible()
 assert wide_row is not None and wide_row.isVisible()
 assert second_row is not None and second_row.isVisible()
 assert third_row is not None and third_row.isVisible()
+
+second_row.forceActiveFocus()
+QTest.keyClick(root, Qt.Key_Return)
+application.processEvents()
+assert provider.state["recommendations"]["selected_grp_id"] == (
+    provider.state["recommendations"]["cards"][1]["card"]["grp_id"]
+)
+third_row.forceActiveFocus()
+application.processEvents()
+assert wide_row.property("stateText") == "Recommended"
+assert second_row.property("stateText") == "Selected"
+assert third_row.property("stateText") == "Keyboard focused"
+
+image_path = Path.cwd() / "draftgoblin" / "assets" / "draftgoblin_logo.png"
+image_url = QUrl.fromLocalFile(str(image_path)).toString()
+missing_image_url = QUrl.fromLocalFile(
+    str(Path(preferences_dir.name) / "missing-card-image.png")
+).toString()
+long_name = "A very long recommendation name that must remain readable within its row"
+recommendations_state = dict(provider.state["recommendations"])
+recommendation_cards = []
+for index, recommendation in enumerate(recommendations_state["cards"]):
+    updated_recommendation = dict(recommendation)
+    updated_card = dict(recommendation["card"])
+    updated_card["image_path"] = None
+    if index == 0:
+        updated_card["image_path"] = image_url
+        updated_card["name"] = long_name
+    elif index == 2:
+        updated_card["image_path"] = missing_image_url
+    updated_recommendation["card"] = updated_card
+    if index == 2:
+        updated_recommendation["win_rate"] = None
+        updated_recommendation["letter_grade"] = None
+        updated_recommendation["color_fit"] = None
+        updated_recommendation["average_last_seen_at"] = None
+        updated_recommendation["source_label"] = None
+    recommendation_cards.append(updated_recommendation)
+recommendations_state["cards"] = recommendation_cards
+state_with_thumbnails = dict(provider.state)
+state_with_thumbnails["recommendations"] = recommendations_state
+provider._replace_state(state=state_with_thumbnails)
+application.processEvents()
+wide_row = find_visual_item(root.contentItem(), "wideRecommendationRow1")
+second_row = find_visual_item(root.contentItem(), "wideRecommendationRow2")
+third_row = find_visual_item(root.contentItem(), "wideRecommendationRow3")
+assert wide_row is not None and second_row is not None and third_row is not None
+wide_header_rank = find_visual_item(root.contentItem(), "recommendationHeaderRank")
+wide_header_card = find_visual_item(root.contentItem(), "recommendationHeaderCard")
+wide_rank = find_visual_item(wide_row, "recommendationRank")
+wide_card = find_visual_item(wide_row, "recommendationCardCell")
+assert wide_header_rank is not None and wide_header_card is not None
+assert wide_rank is not None and wide_card is not None
+assert wide_rank.mapToScene(QPointF(0, 0)).x() < \
+    wide_card.mapToScene(QPointF(0, 0)).x()
+assert abs(
+    wide_header_rank.mapToScene(QPointF(0, 0)).x()
+    - wide_rank.mapToScene(QPointF(0, 0)).x()
+) <= 2
+assert abs(
+    wide_header_card.mapToScene(QPointF(0, 0)).x()
+    - wide_card.mapToScene(QPointF(0, 0)).x()
+) <= 2
+
+wide_thumbnail_frame = find_visual_item(
+    wide_row, "recommendationThumbnailFrame"
+)
+wide_thumbnail_image = find_visual_item(
+    wide_row, "recommendationThumbnailImage"
+)
+wide_thumbnail_fallback = find_visual_item(
+    wide_row, "recommendationThumbnailFallback"
+)
+wide_thumbnail_label = find_visual_item(
+    wide_row, "recommendationThumbnailFallbackLabel"
+)
+assert wide_thumbnail_frame is not None and wide_thumbnail_frame.isVisible()
+assert wide_thumbnail_image is not None
+assert wide_thumbnail_fallback is not None and wide_thumbnail_label is not None
+assert wide_thumbnail_frame.width() == 50
+assert wide_thumbnail_frame.height() > 0
+assert_visual_item_inside(wide_card, wide_thumbnail_frame)
+assert wide_rank.mapToScene(QPointF(0, 0)).x() < \
+    wide_thumbnail_frame.mapToScene(QPointF(0, 0)).x()
+wide_thumbnail_top_left = wide_thumbnail_frame.mapToItem(
+    wide_row, QPointF(0, 0)
+)
+wide_thumbnail_bottom_right = wide_thumbnail_frame.mapToItem(
+    wide_row, QPointF(wide_thumbnail_frame.width(), wide_thumbnail_frame.height())
+)
+assert wide_thumbnail_top_left.x() >= -1
+assert wide_thumbnail_top_left.y() >= -1
+assert wide_thumbnail_bottom_right.x() <= wide_row.width() + 1
+assert wide_thumbnail_bottom_right.y() <= wide_row.height() + 1
+wait_until(
+    lambda: wide_thumbnail_image.isVisible(),
+    "the visible locally published recommendation thumbnail",
+)
+assert image_source(wide_thumbnail_image) == image_url
+assert wide_thumbnail_fallback.isVisible() is False
+
+wide_missing_fallback = find_visual_item(
+    second_row, "recommendationThumbnailFallback"
+)
+wide_missing_label = find_visual_item(
+    second_row, "recommendationThumbnailFallbackLabel"
+)
+assert wide_missing_fallback is not None and wide_missing_fallback.isVisible()
+assert wide_missing_label is not None
+assert wide_missing_label.property("text") == "No image available"
+
+wide_error_image = find_visual_item(third_row, "recommendationThumbnailImage")
+wide_error_fallback = find_visual_item(
+    third_row, "recommendationThumbnailFallback"
+)
+wide_error_label = find_visual_item(
+    third_row, "recommendationThumbnailFallbackLabel"
+)
+assert wide_error_image is not None
+assert wide_error_fallback is not None and wide_error_label is not None
+wait_until(
+    lambda: wide_error_fallback.isVisible()
+    and wide_error_label.property("text") == "Image failed to load",
+    "the labelled failed recommendation thumbnail fallback",
+)
+assert wide_error_image.isVisible() is False
 assert wide_preview.mapToItem(root.contentItem(), QPointF(0, wide_preview.height())).y() \
     <= wide_pool.mapToItem(root.contentItem(), QPointF(0, 0)).y()
 assert wide_preview.property("imageFrameHeight") > 0
@@ -1001,6 +1152,14 @@ application.processEvents()
 assert pool_average.property("text") == "Average mana value: —"
 provider.selectScenario("warning")
 application.processEvents()
+restored_state = dict(provider.state)
+restored_state["recommendations"] = recommendations_state
+provider._replace_state(state=restored_state)
+application.processEvents()
+wide_row = find_visual_item(root.contentItem(), "wideRecommendationRow1")
+second_row = find_visual_item(root.contentItem(), "wideRecommendationRow2")
+third_row = find_visual_item(root.contentItem(), "wideRecommendationRow3")
+assert wide_row is not None and second_row is not None and third_row is not None
 pool_flickable = wide_pool.findChild(QObject, "poolSummaryFlickable")
 pool_scrollbar = wide_pool.findChild(QObject, "poolSummaryScrollBar")
 assert pool_flickable is not None and pool_flickable.property("activeFocusOnTab") is True
@@ -1039,17 +1198,116 @@ assert name is not None
 assert name.property("text") == provider.state["recommendations"]["cards"][0]["card"]["name"]
 assert name.property("truncated") is False
 assert name.property("paintedWidth") <= name.property("width") + 1
-second_row.forceActiveFocus()
-QTest.keyClick(root, Qt.Key_Return)
-application.processEvents()
-assert provider.state["recommendations"]["selected_grp_id"] == (
-    provider.state["recommendations"]["cards"][1]["card"]["grp_id"]
+assert name.property("paintedHeight") <= name.property("height") + 1
+assert_visual_item_inside(wide_card, name)
+metadata = wide_row.findChild(QObject, "recommendationMetadata")
+assert metadata is not None
+assert_visual_item_inside(wide_card, metadata)
+first_card = provider.state["recommendations"]["cards"][0]
+wide_metrics = {
+    "recommendationColors": " · ".join(first_card["card"]["colors"]) or "Colorless",
+    "recommendationScore": str(first_card["score"]),
+    "recommendationWinRate": f'{first_card["win_rate"] * 100:.1f}%',
+    "recommendationGrade": first_card["letter_grade"],
+    "recommendationFit": first_card["color_fit"],
+}
+for metric_name, metric_text in wide_metrics.items():
+    metric = wide_row.findChild(QObject, metric_name)
+    assert metric is not None and metric.isVisible()
+    assert metric.property("text") == metric_text
+    assert_visual_item_inside(wide_row, metric)
+assert name.property("text") == long_name
+assert wide_row.height() == 84
+assert wide_row.width() <= wide_row.parentItem().width() + 1
+live_view = root.findChild(QObject, "liveDraftView")
+assert live_view is not None
+wide_content_threshold = int(
+    live_view.property("wideRecommendationsMinimumWidth")
 )
-third_row.forceActiveFocus()
+window_threshold_width = root.width() + wide_content_threshold - live_view.width()
+root.resize(window_threshold_width, 900)
 application.processEvents()
-assert wide_row.property("stateText") == "Recommended"
-assert second_row.property("stateText") == "Selected"
-assert third_row.property("stateText") == "Keyboard focused"
+assert live_view.property("wideRecommendations") is True
+assert find_visual_item(root.contentItem(), "wideRecommendationRow1").isVisible()
+root.resize(window_threshold_width - 1, 900)
+application.processEvents()
+assert live_view.property("wideRecommendations") is False
+boundary_narrow_row = find_visual_item(
+    root.contentItem(), "narrowRecommendationRow1"
+)
+assert boundary_narrow_row is not None and boundary_narrow_row.isVisible()
+assert boundary_narrow_row.height() == 112
+assert boundary_narrow_row.property("recommendation")["card"]["name"] == long_name
+boundary_narrow_details = find_visual_item(
+    boundary_narrow_row, "recommendationNarrowCardDetails"
+)
+assert boundary_narrow_details is not None and boundary_narrow_details.isVisible()
+boundary_narrow_name = boundary_narrow_details.findChild(
+    QObject, "recommendationName"
+)
+assert boundary_narrow_name is not None
+assert boundary_narrow_name.property("text") == long_name
+root.resize(1440, 900)
+application.processEvents()
+assert live_view.property("wideRecommendations") is True
+
+
+root.resize(760, 900)
+application.processEvents()
+narrow_row = find_visual_item(root.contentItem(), "narrowRecommendationRow1")
+narrow_second_row = find_visual_item(root.contentItem(), "narrowRecommendationRow2")
+narrow_third_row = find_visual_item(root.contentItem(), "narrowRecommendationRow3")
+assert narrow_row is not None and narrow_row.isVisible()
+assert narrow_second_row is not None and narrow_second_row.isVisible()
+assert narrow_third_row is not None
+narrow_thumbnail_frame = find_visual_item(
+    narrow_row, "recommendationThumbnailFrame"
+)
+narrow_thumbnail_image = find_visual_item(
+    narrow_row, "recommendationThumbnailImage"
+)
+narrow_thumbnail_fallback = find_visual_item(
+    narrow_row, "recommendationThumbnailFallback"
+)
+assert narrow_thumbnail_frame is not None and narrow_thumbnail_frame.isVisible()
+assert narrow_thumbnail_image is not None and narrow_thumbnail_fallback is not None
+assert narrow_thumbnail_frame.width() == 50
+assert narrow_thumbnail_frame.height() > 0
+assert narrow_row.height() == 112
+assert narrow_row.width() <= narrow_row.parentItem().width() + 1
+narrow_thumbnail_top_left = narrow_thumbnail_frame.mapToItem(
+    narrow_row, QPointF(0, 0)
+)
+narrow_thumbnail_bottom_right = narrow_thumbnail_frame.mapToItem(
+    narrow_row,
+    QPointF(narrow_thumbnail_frame.width(), narrow_thumbnail_frame.height()),
+)
+assert narrow_thumbnail_top_left.x() >= -1
+assert narrow_thumbnail_top_left.y() >= -1
+assert narrow_thumbnail_bottom_right.x() <= narrow_row.width() + 1
+assert narrow_thumbnail_bottom_right.y() <= narrow_row.height() + 1
+wait_until(
+    lambda: narrow_thumbnail_image.isVisible(),
+    "the visible narrow recommendation thumbnail",
+)
+assert image_source(narrow_thumbnail_image) == image_url
+assert narrow_thumbnail_fallback.isVisible() is False
+
+narrow_missing_fallback = find_visual_item(
+    narrow_second_row, "recommendationThumbnailFallback"
+)
+narrow_missing_label = find_visual_item(
+    narrow_second_row, "recommendationThumbnailFallbackLabel"
+)
+assert narrow_missing_fallback is not None and narrow_missing_fallback.isVisible()
+assert narrow_missing_label is not None
+assert narrow_missing_label.property("text") == "No image available"
+narrow_third_texts = visible_texts(narrow_third_row)
+assert "17L —" in narrow_third_texts
+assert "Grade —" in narrow_third_texts
+assert "Open" in narrow_third_texts
+root.resize(1440, 900)
+application.processEvents()
 provider.selectScenario("empty")
 application.processEvents()
 assert confidence.isVisible() is False
@@ -1222,19 +1480,21 @@ assert GuiPreferencesAdapter(app_dir=preferences_dir.name).cardPreview is False
 root.resize(1080, 900)
 root.setProperty("currentSurface", "live")
 application.processEvents()
-wide_boundary_row = find_visual_item(root.contentItem(), "wideRecommendationRow1")
-wide_boundary_preview = find_visual_item(
-    root.contentItem(), "wideLiveCardPreview"
+responsive_live_view = root.findChild(QObject, "liveDraftView")
+assert responsive_live_view is not None
+assert responsive_live_view.property("wideRecommendations") is False
+responsive_narrow_row = find_visual_item(
+    root.contentItem(), "narrowRecommendationRow1"
 )
-assert wide_boundary_row is not None and wide_boundary_row.isVisible()
-assert wide_boundary_preview is not None and wide_boundary_preview.isVisible()
-wide_boundary_recommendations = wide_boundary_row.parentItem().parentItem()
-wide_boundary_context = wide_boundary_preview.parentItem()
-assert wide_boundary_recommendations is not None
-assert wide_boundary_context is not None
-assert_visual_item_inside(root.contentItem(), wide_boundary_recommendations)
-assert_visual_item_inside(root.contentItem(), wide_boundary_context)
-assert wide_boundary_recommendations.width() > wide_boundary_context.width()
+responsive_narrow_preview = find_visual_item(
+    root.contentItem(), "narrowLiveCardPreview"
+)
+assert responsive_narrow_row is not None and responsive_narrow_row.isVisible()
+assert responsive_narrow_row.height() == 112
+assert responsive_narrow_preview is not None and responsive_narrow_preview.isVisible()
+assert responsive_narrow_row.property("recommendation")["card"]["name"] == (
+    provider.state["recommendations"]["cards"][0]["card"]["name"]
+)
 
 root.resize(760, 900)
 root.setProperty("currentSurface", "live")
