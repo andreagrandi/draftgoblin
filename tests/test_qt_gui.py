@@ -458,6 +458,229 @@ finally:
     assert "TypeError" not in completed.stderr
 
 
+def test_completed_draft_automatically_builds_and_survives_unrelated_snapshots() -> None:
+    probe = """
+from dataclasses import replace
+from pathlib import Path
+import time
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QObject, QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+
+from draftgoblin.mock_session import MockLiveSession
+from draftgoblin.qt_adapter import GuiPreferencesAdapter
+from draftgoblin.qt_mock import MockSessionAdapter
+from draftgoblin.session import ApplicationPhase
+
+
+def wait_until(predicate, description):
+    deadline = time.monotonic() + 5
+    while not predicate():
+        application.processEvents()
+        if time.monotonic() >= deadline:
+            raise AssertionError("Timed out waiting for " + description)
+        time.sleep(0.005)
+    application.processEvents()
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+session = MockLiveSession(scenario="ready")
+session._snapshot = replace(
+    session.snapshot,
+    status=replace(
+        session.snapshot.status,
+        phase=ApplicationPhase.DRAFT_COMPLETE,
+        message="Draft complete.",
+    ),
+    draft=replace(session.snapshot.draft, completed=True),
+    pool=replace(session.snapshot.pool, total_cards=42),
+    build=None,
+)
+provider = MockSessionAdapter(session=session)
+with TemporaryDirectory() as preferences_dir:
+    preferences = GuiPreferencesAdapter(
+        app_dir=preferences_dir,
+        parent=application,
+    )
+    engine = QQmlApplicationEngine()
+    qml_directory = Path.cwd() / "draftgoblin" / "qml"
+    engine.addImportPath(str(qml_directory))
+    context = engine.rootContext()
+    context.setContextProperty("fixedFontFamily", "monospace")
+    context.setContextProperty("sessionProvider", provider)
+    context.setContextProperty("applicationTitle", "Draftgoblin")
+    context.setContextProperty("applicationVersion", "0.0")
+    context.setContextProperty("guiPreferences", preferences)
+    context.setContextProperty("initialSurface", "build")
+    context.setContextProperty("initialWindowWidth", 1440)
+    context.setContextProperty("initialWindowHeight", 900)
+    engine.setInitialProperties({"provider": provider})
+    engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+    root = engine.rootObjects()[0]
+    build_view = root.findChild(QObject, "buildView")
+    assert build_view is not None
+    wait_until(
+        lambda: provider.state.get("build") is not None,
+        "the automatic completed-draft build",
+    )
+    assert provider.state["draft"]["completed"] is True
+    assert provider.state["pool"]["total_cards"] == 42
+    assert build_view.property("hasBuild") is True
+    build_identity = build_view.property("buildIdentity")
+    assert build_identity
+
+    for image_phase in ("loading", "ready"):
+        unrelated_state = dict(provider.state)
+        unrelated_state["status"] = {
+            "phase": "draft_complete",
+            "message": "Draft complete; image " + image_phase + ".",
+        }
+        unrelated_state["card_image"] = {
+            "grp_id": 104983,
+            "image_path": "file:///tmp/unrelated-card.jpg",
+            "phase": image_phase,
+            "message": "Card image " + image_phase + ".",
+        }
+        provider._replace_state(state=unrelated_state)
+        application.processEvents()
+        assert build_view.property("hasBuild") is True
+        assert build_view.property("buildIdentity") == build_identity
+"""
+    completed = _run_qml_probe(probe, timeout=15)
+    assert completed.returncode == 0, completed.stderr
+    assert "TypeError" not in completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+
+
+def test_completed_draft_build_error_clear_recovers_once() -> None:
+    probe = """
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import time
+
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+
+from draftgoblin.mock_session import MockLiveSession
+from draftgoblin.qt_adapter import GuiPreferencesAdapter
+from draftgoblin.qt_mock import MockSessionAdapter
+from draftgoblin.session import ApplicationPhase, LiveSessionCommand, RequestBuild
+
+
+class RecordingMockSession(MockLiveSession):
+    def __init__(self, *, scenario):
+        super().__init__(scenario=scenario)
+        self.commands = []
+
+    def dispatch(self, *, command: LiveSessionCommand):
+        self.commands.append(command)
+        return super().dispatch(command=command)
+
+
+def wait_until(predicate, description):
+    deadline = time.monotonic() + 5
+    while not predicate():
+        application.processEvents()
+        if time.monotonic() >= deadline:
+            raise AssertionError("Timed out waiting for " + description)
+        time.sleep(0.005)
+    application.processEvents()
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+session = RecordingMockSession(scenario="build_error")
+session._snapshot = replace(
+    session.snapshot,
+    status=replace(
+        session.snapshot.status,
+        phase=ApplicationPhase.DRAFT_COMPLETE,
+    ),
+    draft=replace(session.snapshot.draft, completed=True),
+    pool=replace(session.snapshot.pool, total_cards=42),
+)
+provider = MockSessionAdapter(session=session)
+with TemporaryDirectory() as preferences_dir:
+    preferences = GuiPreferencesAdapter(
+        app_dir=preferences_dir,
+        parent=application,
+    )
+    engine = QQmlApplicationEngine()
+    qml_directory = Path.cwd() / "draftgoblin" / "qml"
+    engine.addImportPath(str(qml_directory))
+    context = engine.rootContext()
+    context.setContextProperty("fixedFontFamily", "monospace")
+    context.setContextProperty("sessionProvider", provider)
+    context.setContextProperty("applicationTitle", "Draftgoblin")
+    context.setContextProperty("applicationVersion", "0.0")
+    context.setContextProperty("guiPreferences", preferences)
+    context.setContextProperty("initialSurface", "build")
+    context.setContextProperty("initialWindowWidth", 1440)
+    context.setContextProperty("initialWindowHeight", 900)
+    engine.setInitialProperties({"provider": provider})
+    engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+    root = engine.rootObjects()[0]
+    application.processEvents()
+    assert provider.state["errors"][0]["operation"] == "build"
+    assert root.property("automaticBuildContext") == ""
+    assert session.commands == []
+    unrelated_error_state = dict(provider.state)
+    unrelated_error_state["status"] = dict(unrelated_error_state["status"])
+    unrelated_error_state["status"]["message"] = "Build error remains visible."
+    provider._replace_state(state=unrelated_error_state)
+    application.processEvents()
+    assert provider.state["errors"][0]["operation"] == "build"
+    assert session.commands == []
+
+    build_progress_state = dict(provider.state)
+    build_progress_state["errors"] = []
+    build_progress_state["build"] = None
+    build_progress_state["progress"] = {
+        "operation": "build",
+        "message": "Building deck",
+    }
+    provider._replace_state(state=build_progress_state)
+    application.processEvents()
+    assert provider.state["progress"]["operation"] == "build"
+    assert session.commands == []
+
+    completed_state = dict(provider.state)
+    completed_state["progress"] = None
+    provider._replace_state(state=completed_state)
+    wait_until(
+        lambda: sum(isinstance(command, RequestBuild) for command in session.commands)
+        == 1,
+        "the deferred build request",
+    )
+    build_commands = [
+        command for command in session.commands if isinstance(command, RequestBuild)
+    ]
+    assert len(build_commands) == 1
+    assert root.property("automaticBuildContext") == "mock-account:mock-otj-draft"
+    unrelated_state = dict(provider.state)
+    unrelated_state["status"] = dict(unrelated_state["status"])
+    unrelated_state["status"]["message"] = "Build remains available."
+    provider._replace_state(state=unrelated_state)
+    application.processEvents()
+    assert sum(isinstance(command, RequestBuild) for command in session.commands) == 1
+    del root
+    del engine
+"""
+    completed = _run_qml_probe(probe)
+    assert completed.returncode == 0, completed.stderr
+    assert "TypeError" not in completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+
+
 def test_qml_keyboard_controls_dispatch_account_and_ratings_commands_offscreen() -> None:
     probe = """
 from pathlib import Path
@@ -604,6 +827,20 @@ def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
             return found
     return None
 
+def assert_visual_item_inside(parent: QQuickItem, child: QQuickItem) -> None:
+    parent_top_left = parent.mapToScene(QPointF(0, 0))
+    parent_bottom_right = parent.mapToScene(
+        QPointF(parent.width(), parent.height())
+    )
+    child_top_left = child.mapToScene(QPointF(0, 0))
+    child_bottom_right = child.mapToScene(
+        QPointF(child.width(), child.height())
+    )
+    assert child_top_left.x() >= parent_top_left.x()
+    assert child_top_left.y() >= parent_top_left.y()
+    assert child_bottom_right.x() <= parent_bottom_right.x()
+    assert child_bottom_right.y() <= parent_bottom_right.y()
+
 
 def has_focus(item: QObject) -> bool:
     return bool(item.property("activeFocus"))
@@ -700,6 +937,30 @@ assert wide_preview.property("imageFrameHeight") > 0
 assert wide_preview.findChild(QObject, "cardPreviewFacts") is not None
 assert wide_preview.findChild(QObject, "cardPreviewScores") is not None
 assert wide_preview.findChild(QObject, "cardPreviewExplanation") is not None
+wide_frame = find_visual_item(wide_preview, "cardPreviewImageFrame")
+wide_details = find_visual_item(wide_preview, "cardPreviewDetails")
+assert wide_frame is not None and wide_frame.isVisible()
+assert wide_details is not None and wide_details.isVisible()
+assert 440 <= wide_preview.width() <= 450
+assert wide_row.width() > wide_preview.width()
+assert wide_frame.width() >= 195, (
+    wide_preview.width(),
+    wide_preview.height(),
+    wide_frame.width(),
+    wide_frame.height(),
+    wide_details.width(),
+    wide_details.height(),
+)
+assert wide_details.width() < wide_preview.width() / 2, (
+    wide_preview.width(),
+    wide_preview.height(),
+    wide_frame.width(),
+    wide_frame.height(),
+    wide_details.width(),
+    wide_details.height(),
+)
+assert_visual_item_inside(wide_preview, wide_frame)
+assert_visual_item_inside(wide_preview, wide_details)
 confidence = root.findChild(QObject, "recommendationConfidenceSummary")
 assert confidence is not None
 state_without_confidence = dict(provider.state)
@@ -837,7 +1098,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QPointF, Qt, QUrl
 from PySide6.QtGui import QAccessible, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtQuickControls2 import QQuickStyle
 
@@ -882,6 +1143,14 @@ def assert_visual_item_precedes(first: QQuickItem, second: QQuickItem) -> None:
     first_bottom = first.mapToScene(QPointF(0, first.height())).y()
     second_top = second.mapToScene(QPointF(0, 0)).y()
     assert first_bottom <= second_top
+
+
+def trigger_and_wait_for_layout(item, action, predicate) -> None:
+    height_change_spy = QSignalSpy(item.heightChanged)
+    action()
+    while not predicate(item.height()):
+        assert height_change_spy.wait(1000)
+    application.processEvents()
 
 
 class RecordingProvider(MockSessionAdapter):
@@ -938,6 +1207,23 @@ application.processEvents()
 assert preferences.cardPreview is False
 assert GuiPreferencesAdapter(app_dir=preferences_dir.name).cardPreview is False
 
+root.resize(1080, 900)
+root.setProperty("currentSurface", "live")
+application.processEvents()
+wide_boundary_row = find_visual_item(root.contentItem(), "wideRecommendationRow1")
+wide_boundary_preview = find_visual_item(
+    root.contentItem(), "wideLiveCardPreview"
+)
+assert wide_boundary_row is not None and wide_boundary_row.isVisible()
+assert wide_boundary_preview is not None and wide_boundary_preview.isVisible()
+wide_boundary_recommendations = wide_boundary_row.parentItem().parentItem()
+wide_boundary_context = wide_boundary_preview.parentItem()
+assert wide_boundary_recommendations is not None
+assert wide_boundary_context is not None
+assert_visual_item_inside(root.contentItem(), wide_boundary_recommendations)
+assert_visual_item_inside(root.contentItem(), wide_boundary_context)
+assert wide_boundary_recommendations.width() > wide_boundary_context.width()
+
 root.resize(760, 900)
 root.setProperty("currentSurface", "live")
 application.processEvents()
@@ -951,6 +1237,10 @@ assert narrow_live_pool is not None and narrow_live_pool.isVisible() is False
 assert narrow_row is not None and narrow_row.height() >= 100
 assert narrow_row.width() == live_tabs.width()
 assert narrow_live_preview.width() == live_tabs.width()
+narrow_frame = find_visual_item(narrow_live_preview, "cardPreviewImageFrame")
+assert narrow_frame is not None and narrow_frame.isVisible()
+assert narrow_frame.width() >= 195
+assert_visual_item_inside(narrow_live_preview, narrow_frame)
 assert narrow_row.width() > root.width() / 2
 assert logo.isVisible() is False
 assert app_bar_title.isVisible()
@@ -1084,9 +1374,11 @@ assert accessible_narrow_context.text(QAccessible.Text.Description) == (
     "The pair rationale is currently collapsed. Activating this button expands it."
 )
 narrow_context_toggle.forceActiveFocus()
-QTest.keyClick(root, Qt.Key_Space)
-application.processEvents()
-QTest.qWait(20)
+trigger_and_wait_for_layout(
+    narrow_context,
+    lambda: QTest.keyClick(root, Qt.Key_Space),
+    lambda height: height > collapsed_narrow_context_height,
+)
 assert build_view.property("contextExpanded") is True
 assert narrow_context_toggle.property("text") == "Hide why this pair"
 assert accessible_narrow_context.text(QAccessible.Text.Name) == "Hide why this pair"
@@ -1097,9 +1389,11 @@ assert narrow_context_details.isVisible()
 narrow_reason = find_visual_item(root.contentItem(), "narrowPairOptionWG")
 assert narrow_reason is not None and narrow_reason.isVisible()
 assert narrow_context.height() > collapsed_narrow_context_height
-QTest.keyClick(root, Qt.Key_Space)
-application.processEvents()
-QTest.qWait(20)
+trigger_and_wait_for_layout(
+    narrow_context,
+    lambda: QTest.keyClick(root, Qt.Key_Space),
+    lambda height: height == collapsed_narrow_context_height,
+)
 assert build_view.property("contextExpanded") is False
 assert narrow_context_toggle.property("text") == "Show why this pair"
 assert narrow_context_details.isVisible() is False
@@ -1138,9 +1432,11 @@ assert accessible_wide_context.text(QAccessible.Text.Description) == (
     "The pair rationale is currently collapsed. Activating this button expands it."
 )
 wide_context_toggle.forceActiveFocus()
-QTest.keyClick(root, Qt.Key_Space)
-application.processEvents()
-QTest.qWait(20)
+trigger_and_wait_for_layout(
+    wide_context,
+    lambda: QTest.keyClick(root, Qt.Key_Space),
+    lambda height: height > collapsed_wide_context_height,
+)
 assert build_view.property("contextExpanded") is True
 assert wide_context_toggle.property("text") == "Hide why this pair"
 assert accessible_wide_context.text(QAccessible.Text.Name) == "Hide why this pair"
@@ -1153,9 +1449,11 @@ assert wide_reason is not None and wide_reason.isVisible()
 assert "score 82.4" in wide_reason.property("text")
 assert "25 playables" in wide_reason.property("text")
 assert wide_context.height() > collapsed_wide_context_height
-QTest.keyClick(root, Qt.Key_Space)
-application.processEvents()
-QTest.qWait(20)
+trigger_and_wait_for_layout(
+    wide_context,
+    lambda: QTest.keyClick(root, Qt.Key_Space),
+    lambda height: height == collapsed_wide_context_height,
+)
 assert build_view.property("contextExpanded") is False
 assert wide_context_toggle.property("text") == "Show why this pair"
 assert wide_context_details.isVisible() is False

@@ -22,6 +22,16 @@ ApplicationWindow {
     readonly property string desktopApplicationVersion: applicationVersion
 
     function requestCompletedDraftBuild() {
+        const errors = window.sessionState ? window.sessionState.errors : null
+        if (errors && errors.some(error => error && error.operation === "build")) {
+            window.automaticBuildContext = ""
+            return
+        }
+
+        const progress = window.sessionState ? window.sessionState.progress : null
+        if (progress && progress.operation === "build")
+            return
+
         if (window.currentSurface !== "build")
             return
 
@@ -41,9 +51,9 @@ ApplicationWindow {
         window.provider.requestBuild("")
     }
 
-    onCurrentSurfaceChanged: requestCompletedDraftBuild()
-    onSessionStateChanged: requestCompletedDraftBuild()
-    Component.onCompleted: requestCompletedDraftBuild()
+    onCurrentSurfaceChanged: Qt.callLater(window.requestCompletedDraftBuild)
+    onSessionStateChanged: Qt.callLater(window.requestCompletedDraftBuild)
+    Component.onCompleted: Qt.callLater(window.requestCompletedDraftBuild)
 
     header: AppBar {
         narrow: window.narrow

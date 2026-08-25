@@ -112,9 +112,44 @@ class RecommendationListModel(QAbstractListModel):
     def replace(self, *, rows: list[dict[str, Any]]) -> None:
         if rows == self._rows:
             return
-        self.beginResetModel()
-        self._rows = rows
-        self.endResetModel()
+
+        previous_count = len(self._rows)
+        next_count = len(rows)
+        shared_count = min(previous_count, next_count)
+        changed_rows = [
+            row
+            for row in range(shared_count)
+            if self._rows[row] != rows[row]
+        ]
+
+        if changed_rows:
+            self._rows[:shared_count] = rows[:shared_count]
+            first_changed = changed_rows[0]
+            last_changed = changed_rows[-1]
+            self.dataChanged.emit(
+                self.index(first_changed, 0),
+                self.index(last_changed, 0),
+                [self.MODEL_DATA_ROLE],
+            )
+
+        if next_count < previous_count:
+            self.beginRemoveRows(
+                QModelIndex(),
+                next_count,
+                previous_count - 1,
+            )
+            del self._rows[next_count:]
+            self.endRemoveRows()
+            return
+
+        if next_count > previous_count:
+            self.beginInsertRows(
+                QModelIndex(),
+                previous_count,
+                next_count - 1,
+            )
+            self._rows.extend(rows[previous_count:])
+            self.endInsertRows()
 
 
 class GuiPreferencesAdapter(QObject):
@@ -349,30 +384,75 @@ class _LiveSessionWorker(QObject):
         self._startup_scan = startup_scan
         self._session: LiveSession | None = None
         self._timer: QTimer | None = None
+        self._stop_requested = False
+        self._stopped = False
+        self._startup_loading = False
+        self._startup_snapshot: LiveSessionSnapshot | None = None
+
+    def _publish_snapshot(self, snapshot: LiveSessionSnapshot) -> None:
+        if self._stop_requested:
+            return
+        if self._startup_loading:
+            self._startup_snapshot = snapshot
+            return
+        self.snapshotReady.emit(snapshot)
+
+    def _flush_startup_snapshot(self) -> None:
+        snapshot = self._startup_snapshot
+        self._startup_snapshot = None
+        self._startup_loading = False
+        if snapshot is not None and not self._stop_requested:
+            self.snapshotReady.emit(snapshot)
+
+    def request_stop(self) -> None:
+        """Request cooperative stop without queuing behind busy session work."""
+        self._stop_requested = True
 
     @Slot()
     def start(self) -> None:
+        self._startup_loading = True
+        self._startup_snapshot = None
         try:
-            self._session = self._session_factory(self.snapshotReady.emit)
-            self.snapshotReady.emit(self._session.snapshot)
+            self._session = self._session_factory(self._publish_snapshot)
+            self._publish_snapshot(self._session.snapshot)
+            if self._stop_requested:
+                self.stop()
+                return
             if hasattr(self._session, "load_card_data"):
                 self._session.load_card_data()
+            if self._stop_requested:
+                self.stop()
+                return
             if self._startup_scan:
                 self._session.scan_startup_files(
                     include_previous=True,
                     include_pre_draft_detection=False,
                 )
-            self._poll()
+            if self._stop_requested:
+                self.stop()
+                return
+            initial_poll_succeeded = self._poll()
+            if self._stop_requested:
+                self.stop()
+                return
+            if initial_poll_succeeded:
+                self._publish_snapshot(self._session.snapshot)
+                self._flush_startup_snapshot()
+            else:
+                self._startup_snapshot = None
+                self._startup_loading = False
             self._timer = QTimer(self)
             self._timer.setInterval(self._poll_interval_ms)
             self._timer.timeout.connect(self._poll)
             self._timer.start()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
-            self.failed.emit(str(error))
+            if not self._stop_requested:
+                self.failed.emit(str(error))
+            self.stop()
 
     @Slot(object)
     def dispatch(self, command: LiveSessionCommand) -> None:
-        if self._session is None:
+        if self._session is None or self._stop_requested:
             return
         try:
             self._session.dispatch(command=command)
@@ -381,39 +461,55 @@ class _LiveSessionWorker(QObject):
             self.failed.emit(str(error))
 
     @Slot()
-    def _poll(self) -> None:
+    def _poll(self) -> bool:
         if self._session is None:
-            return
+            return False
+        if self._stop_requested:
+            self.stop()
+            return False
         try:
-            self._session.poll_once()
+            snapshot = self._session.poll_once()
+            self._publish_snapshot(snapshot)
             self._request_selected_card_image()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.failed.emit(str(error))
+            return False
+        finally:
+            if self._stop_requested:
+                self.stop()
+        return True
 
     def _request_selected_card_image(self) -> None:
-        if self._session is None or not hasattr(
+        if self._session is None or self._stop_requested or not hasattr(
             self._session,
             "selected_card_image_request",
         ):
             return
         request = self._session.selected_card_image_request()
-        if request is None:
+        if request is None or self._stop_requested:
             return
         try:
             image_path = self._session.fetch_card_image(request=request)
         except Exception as error:  # pragma: no cover - defensive network boundary.
-            self._session.fail_card_image_request(
-                request=request,
-                error_message=str(error),
-            )
+            if not self._stop_requested:
+                self._session.fail_card_image_request(
+                    request=request,
+                    error_message=str(error),
+                )
         else:
-            self._session.complete_card_image_request(
-                request=request,
-                image_path=image_path,
-            )
+            if not self._stop_requested:
+                self._session.complete_card_image_request(
+                    request=request,
+                    image_path=image_path,
+                )
 
     @Slot()
     def stop(self) -> None:
+        self._stop_requested = True
+        self._startup_loading = False
+        self._startup_snapshot = None
+        if self._stopped:
+            return
         if self._timer is not None:
             self._timer.stop()
         if self._session is not None:
@@ -421,6 +517,7 @@ class _LiveSessionWorker(QObject):
                 self._session.stop()
             except Exception as error:  # pragma: no cover - defensive UI boundary.
                 self.failed.emit(str(error))
+        self._stopped = True
         self.finished.emit()
 
 
@@ -467,7 +564,10 @@ class LiveSessionAdapter(SessionAdapter):
         )
         worker.failed.connect(self._apply_failure, Qt.ConnectionType.QueuedConnection)
         thread.finished.connect(worker.deleteLater)
-        worker.finished.connect(thread.quit)
+        worker.finished.connect(
+            thread.quit,
+            Qt.ConnectionType.DirectConnection,
+        )
         self.thread = thread
         self._worker = worker
         thread.start()
@@ -478,14 +578,20 @@ class LiveSessionAdapter(SessionAdapter):
         worker = self._worker
         if thread is None or worker is None or not thread.isRunning():
             return
+        worker.request_stop()
+        thread.requestInterruption()
         QMetaObject.invokeMethod(
             worker,
             "stop",
-            Qt.ConnectionType.BlockingQueuedConnection,
+            Qt.ConnectionType.QueuedConnection,
         )
-        thread.quit()
-        thread.wait()
-        self._worker = None
+        thread.wait(100)
+
+    def wait_for_shutdown(self) -> None:
+        """Wait for the owned worker thread before the adapter is destroyed."""
+        thread = self.thread
+        if thread is not None and thread.isRunning():
+            thread.wait()
 
     def _dispatch(self, *, command: LiveSessionCommand) -> None:
         self._commandRequested.emit(command)

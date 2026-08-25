@@ -109,7 +109,7 @@ Item {
                     visible: root.confidenceSummary.length > 0
                     text: root.confidenceSummary
                     color: Theme.text
-                    font.pixelSize: 11
+                    font.pixelSize: 12
                     font.bold: true
                     wrapMode: Text.WordWrap
                 }
@@ -117,7 +117,7 @@ Item {
                 Label {
                     text: root.sessionState.status.message
                     color: Theme.textMuted
-                    font.pixelSize: 11
+                    font.pixelSize: 12
                 }
             }
 
@@ -249,13 +249,13 @@ Item {
                         Layout.leftMargin: 12
                         Layout.rightMargin: 12
 
-                        Label { Layout.preferredWidth: 30; text: "#"; color: Theme.textMuted; font.pixelSize: 10 }
-                        Label { Layout.fillWidth: true; text: "CARD"; color: Theme.textMuted; font.pixelSize: 10 }
-                        Label { Layout.preferredWidth: 70; text: "COLORS"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter }
-                        Label { Layout.preferredWidth: 58; text: "DG"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
-                        Label { Layout.preferredWidth: 68; text: "17L WR"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
-                        Label { Layout.preferredWidth: 44; text: "GRADE"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter }
-                        Label { Layout.preferredWidth: 82; text: "FIT"; color: Theme.textMuted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
+                        Label { Layout.preferredWidth: 30; text: "#"; color: Theme.textMuted; font.pixelSize: 11 }
+                        Label { Layout.fillWidth: true; text: "CARD"; color: Theme.textMuted; font.pixelSize: 11 }
+                        Label { Layout.preferredWidth: 70; text: "COLORS"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                        Label { Layout.preferredWidth: 58; text: "DG"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignRight }
+                        Label { Layout.preferredWidth: 68; text: "17L WR"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignRight }
+                        Label { Layout.preferredWidth: 44; text: "GRADE"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                        Label { Layout.preferredWidth: 82; text: "FIT"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignRight }
                     }
 
                     ListView {
@@ -282,7 +282,8 @@ Item {
             }
 
             ColumnLayout {
-                Layout.preferredWidth: 410
+                Layout.preferredWidth: 450
+                Layout.maximumWidth: 450
                 Layout.fillHeight: true
                 Layout.minimumWidth: 350
                 spacing: Theme.gutter
@@ -290,8 +291,8 @@ Item {
                 CardPreview {
                     objectName: "wideLiveCardPreview"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 340
-                    Layout.minimumHeight: 320
+                    Layout.preferredHeight: 380
+                    Layout.minimumHeight: 350
                     recommendation: root.selectedRecommendation
                     detailedIntel: true
                     loading: root.sessionState.card_data.phase === "loading"
@@ -359,7 +360,7 @@ Item {
 
         StackLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 300
+            Layout.preferredHeight: 340
             currentIndex: detailTabs.currentIndex
 
             CardPreview {
