@@ -6,11 +6,18 @@ import QtQuick.Layouts 1.15
 
 Item {
     id: root
+    objectName: "liveDraftView"
 
     required property var sessionState
     required property var recommendationModel
     required property bool narrow
     required property var displayPreferences
+
+    // The wide recommendation list needs this content width for its fixed
+    // metric columns and a two-line card name plus metadata.
+    readonly property int wideRecommendationsMinimumWidth: 762 + 450 + Theme.gutter
+    readonly property bool wideRecommendations: !root.narrow
+        && root.width >= root.wideRecommendationsMinimumWidth
 
     readonly property bool hasRecommendations: sessionState.recommendations
         && sessionState.recommendations.cards
@@ -229,7 +236,7 @@ Item {
         }
 
         RowLayout {
-            visible: !root.narrow && root.hasRecommendations
+            visible: root.wideRecommendations && root.hasRecommendations
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: Theme.gutter
@@ -246,11 +253,24 @@ Item {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.leftMargin: 12
+                        Layout.leftMargin: 14
                         Layout.rightMargin: 12
+                        spacing: 8
 
-                        Label { Layout.preferredWidth: 30; text: "#"; color: Theme.textMuted; font.pixelSize: 11 }
-                        Label { Layout.fillWidth: true; text: "CARD"; color: Theme.textMuted; font.pixelSize: 11 }
+                        Label {
+                            objectName: "recommendationHeaderRank"
+                            Layout.preferredWidth: 30
+                            text: "#"
+                            color: Theme.textMuted
+                            font.pixelSize: 11
+                        }
+                        Label {
+                            objectName: "recommendationHeaderCard"
+                            Layout.fillWidth: true
+                            text: "CARD"
+                            color: Theme.textMuted
+                            font.pixelSize: 11
+                        }
                         Label { Layout.preferredWidth: 70; text: "COLORS"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
                         Label { Layout.preferredWidth: 58; text: "DG"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignRight }
                         Label { Layout.preferredWidth: 68; text: "17L WR"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignRight }
@@ -269,12 +289,13 @@ Item {
                             recommendation: modelData
                             selected: root.sessionState.recommendations.selected_grp_id
                                 === modelData.card.grp_id
-                            wide: true
+                            wide: root.wideRecommendations
                             secondaryStats: root.displayPreferences.secondaryStats
                             onChosen: grpId => sessionProvider.chooseRecommendation(grpId)
                         }
                         clip: true
-                        model: root.recommendationModel
+                        model: root.wideRecommendations
+                            ? root.recommendationModel : null
                         Accessible.name: "Ranked recommendations"
 
                     }
@@ -311,7 +332,7 @@ Item {
         }
 
     ColumnLayout {
-        visible: root.narrow && root.hasRecommendations
+        visible: !root.wideRecommendations && root.hasRecommendations
         Layout.fillWidth: true
         Layout.fillHeight: true
         spacing: 8
@@ -322,7 +343,7 @@ Item {
             Layout.minimumHeight: 220
             spacing: root.displayPreferences.compactDensity ? 3 : 6
             clip: true
-            model: root.recommendationModel
+            model: root.wideRecommendations ? null : root.recommendationModel
             Accessible.name: "Ranked recommendations"
 
             delegate: RecommendationRow {
@@ -333,8 +354,8 @@ Item {
                 recommendation: modelData
                 selected: root.sessionState.recommendations.selected_grp_id
                     === modelData.card.grp_id
-                secondaryStats: root.displayPreferences.secondaryStats
                 wide: false
+                secondaryStats: root.displayPreferences.secondaryStats
                 onChosen: grpId => sessionProvider.chooseRecommendation(grpId)
             }
         }
