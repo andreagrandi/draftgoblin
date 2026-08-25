@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from draftgoblin.carddb import CardDatabase, CardInfo
@@ -7,8 +8,9 @@ from draftgoblin.events import PackOfferedEvent
 from draftgoblin.pickengine import (
     PickEngine,
     recommendation_confidence_summary,
+    recommendation_explanation,
 )
-from draftgoblin.ranking import rank_scored_cards
+from draftgoblin.ranking import RANKING_MODES, rank_scored_cards
 from draftgoblin.replay import format_pack_offered_event
 from draftgoblin.seventeen import (
     PREMIER_DRAFT_FORMAT,
@@ -92,6 +94,84 @@ def test_missing_ratings_data_still_scores_every_card_with_marked_prior() -> Non
     assert [card.score for card in scored_pack.cards] == [50, 50, 50]
     assert all(card.source_label == "Prior*" for card in scored_pack.cards)
     assert scored_pack.source_summary == "neutral prior"
+
+
+def test_freely_available_basic_land_scores_zero_and_ranks_last() -> None:
+    scored_pack = PickEngine(ratings_data=_ratings_data()).score_pack(
+        offered_grp_ids=(13, 3, 10),
+        card_database=_card_database(),
+    )
+
+    assert [card.card.name for card in scored_pack.cards] == [
+        "Quick Filler",
+        "Blue Filler",
+        "Arena Plains",
+    ]
+    assert all(card.score > 0 for card in scored_pack.cards[:-1])
+    basic_land = scored_pack.cards[-1]
+    assert basic_land.score == 0
+    assert basic_land.source_label == "Basic"
+    assert basic_land.no_data is False
+    assert basic_land.freely_available_basic is True
+    assert recommendation_explanation(
+        scored_card=basic_land,
+        inferred_pair=None,
+    ) == (
+        "Arena Plains is freely available during deck building, so it receives "
+        "0 DG points and ranks after draftable cards."
+    )
+
+
+def test_special_and_nonbasic_lands_retain_normal_scoring() -> None:
+    scored_pack = PickEngine().score_pack(
+        offered_grp_ids=(14, 15, 16),
+        card_database=_card_database(),
+    )
+
+    assert {
+        card.card.name: (
+            card.score,
+            card.source_label,
+            card.no_data,
+            card.freely_available_basic,
+        )
+        for card in scored_pack.cards
+    } == {
+        "Wastes": (50, "Prior*", True, False),
+        "Snow-Covered Plains": (50, "Prior*", True, False),
+        "Prairie Sanctuary": (50, "Prior*", True, False),
+    }
+
+
+def test_canonical_basic_overrides_rating_and_loses_zero_score_tie() -> None:
+    scored_pack = PickEngine(ratings_data=_rated_basic_and_zero_data()).score_pack(
+        offered_grp_ids=(121, 120),
+        card_database=_splash_card_database(),
+    )
+
+    assert [card.card.name for card in scored_pack.cards] == [
+        "Draftable Zero",
+        "Mountain",
+    ]
+    assert [card.score for card in scored_pack.cards] == [0, 0]
+    for ranking_mode in RANKING_MODES:
+        assert [
+            card.card.name
+            for card in rank_scored_cards(
+                cards=scored_pack.cards,
+                ranking_mode=ranking_mode,
+            )
+        ] == ["Draftable Zero", "Mountain"]
+
+    mountain = scored_pack.cards[-1]
+    assert mountain.rating.gih_win_rate == 0.70
+    assert mountain.source_label == "Basic"
+    assert mountain.no_data is False
+    assert recommendation_confidence_summary(
+        cards=scored_pack.cards,
+        ranking_mode="score",
+        phase="building",
+    ) is None
 
 
 def test_recommendation_confidence_summary_uses_shared_open_pick_copy() -> None:
@@ -306,6 +386,20 @@ def test_supported_single_pip_bomb_is_marked_as_a_splash_and_can_win_pick() -> N
         )
     )
     assert "Splash R" in rendered
+
+
+def test_freely_available_basic_does_not_block_splash_candidate() -> None:
+    scored_pack = PickEngine(ratings_data=_splash_ratings_data()).score_pack(
+        offered_grp_ids=(121, 105),
+        card_database=_splash_card_database(),
+        pool_grp_ids=(101, 102, 101, 102, 103, 104),
+        pick_index=10,
+    )
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+
+    assert by_id[121].score == 0
+    assert by_id[105].color_fit == "splash-ready"
+    assert by_id[105].splash.score_advantage is None
 
 
 def test_disabling_splash_treats_same_bomb_as_an_ordinary_off_color_card() -> None:
@@ -551,6 +645,31 @@ def _ratings_data() -> SeventeenLandsData:
     )
 
 
+def _rated_basic_and_zero_data() -> SeventeenLandsData:
+    data = _ratings_data()
+    primary = replace(
+        data.primary,
+        card_ratings={
+            **data.primary.card_ratings,
+            120: _stats(
+                grp_id=120,
+                name="Draftable Zero",
+                color="W",
+                gih=-1.0,
+                games_in_hand=900,
+            ),
+            121: _stats(
+                grp_id=121,
+                name="Mountain",
+                color="C",
+                gih=0.70,
+                games_in_hand=900,
+            ),
+        },
+    )
+    return replace(data, primary=primary)
+
+
 def _ratings_data_with_pair_filter() -> SeventeenLandsData:
     data = _ratings_data()
     pair_data = SeventeenLandsFormatData(
@@ -688,6 +807,13 @@ def _splash_ratings_data() -> SeventeenLandsData:
             gih=0.71,
             games_in_hand=900,
         ),
+        121: _stats(
+            grp_id=121,
+            name="Mountain",
+            color="C",
+            gih=0.70,
+            games_in_hand=900,
+        ),
     }
     card_ratings.update(
         {
@@ -772,6 +898,34 @@ def _card_database() -> CardDatabase:
             10: _card(grp_id=10, name="Blue Filler", colors=("U",)),
             11: _card(grp_id=11, name="Red Playable", colors=("R",)),
             12: _card(grp_id=12, name="Pair Filtered Card", colors=("W",)),
+            13: _card(
+                grp_id=13,
+                name="Arena Plains",
+                colors=(),
+                types=("Basic Land — Plains",),
+                mana_cost=None,
+            ),
+            14: _card(
+                grp_id=14,
+                name="Wastes",
+                colors=(),
+                types=("Basic Land",),
+                mana_cost=None,
+            ),
+            15: _card(
+                grp_id=15,
+                name="Snow-Covered Plains",
+                colors=(),
+                types=("Basic Snow Land — Plains",),
+                mana_cost=None,
+            ),
+            16: _card(
+                grp_id=16,
+                name="Prairie Sanctuary",
+                colors=(),
+                types=("Land — Plains",),
+                mana_cost=None,
+            ),
         }
     )
 
@@ -818,12 +972,18 @@ def _splash_card_database() -> CardDatabase:
                 mana_cost=None,
                 produced_mana=("R",),
             ),
+            120: _card(
+                grp_id=120,
+                name="Draftable Zero",
+                colors=("W",),
+            ),
             121: _card(
                 grp_id=121,
                 name="Mountain",
                 colors=(),
                 types=("Basic Land — Mountain",),
                 mana_cost=None,
+                mana_value=0.0,
                 produced_mana=("R",),
             ),
             105: _card(
@@ -867,13 +1027,14 @@ def _card(
     colors: tuple[str, ...],
     types: tuple[str, ...] = ("Creature",),
     mana_cost: str | None = "{2}",
+    mana_value: float | None = 2.0,
     produced_mana: tuple[str, ...] = (),
 ) -> CardInfo:
     return CardInfo(
         grp_id=grp_id,
         name=name,
         colors=colors,
-        mana_value=2.0,
+        mana_value=mana_value,
         rarity="common",
         types=types,
         mana_cost=mana_cost,

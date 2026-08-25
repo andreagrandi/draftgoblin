@@ -29,6 +29,12 @@ from draftgoblin.splash import (
 )
 CLOSE_DG_SCORE_THRESHOLD = 3.0
 CLOSE_WIN_RATE_THRESHOLD = 0.01
+STANDARD_BASIC_LAND_NAMES = frozenset(
+    {"Plains", "Island", "Swamp", "Mountain", "Forest"}
+)
+STANDARD_BASIC_LAND_TYPE_LINES = frozenset(
+    f"Basic Land — {name}" for name in STANDARD_BASIC_LAND_NAMES
+)
 
 
 def recommendation_confidence_summary(
@@ -59,6 +65,12 @@ def recommendation_explanation(
     """Describe one recommendation using only scoring and pool evidence.
     Wording describes supporting evidence rather than promising an outcome.
     """
+
+    if scored_card.freely_available_basic:
+        return (
+            f"{scored_card.card.name} is freely available during deck building, "
+            "so it receives 0 DG points and ranks after draftable cards."
+        )
 
     fit = scored_card.color_fit.replace("-", " ")
     pool_context = (
@@ -94,10 +106,13 @@ def _close_pick_label(
     cards: tuple[ScoredCard, ...],
     ranking_mode: str,
 ) -> str | None:
-    if len(cards) < 2:
+    draftable_cards = tuple(
+        card for card in cards if not card.freely_available_basic
+    )
+    if len(draftable_cards) < 2:
         return None
 
-    top_card, second_card = cards[:2]
+    top_card, second_card = draftable_cards[:2]
     if ranking_mode == "score":
         score_delta = max(0.0, top_card.raw_score - second_card.raw_score)
         if score_delta <= CLOSE_DG_SCORE_THRESHOLD:
@@ -186,6 +201,7 @@ class ScoredCard:
     pair_tiebreaker_weight: float | None
     score_sort_index: int
     splash: SplashAssessment
+    freely_available_basic: bool
 
     @property
     def no_data(self) -> bool:
@@ -193,7 +209,7 @@ class ScoredCard:
         Renderers mark these cards because no strong GIH sample was available.
         """
 
-        return self.rating.neutral_prior
+        return self.rating.neutral_prior and not self.freely_available_basic
 
     @property
     def prior_adjusted_by_alsa(self) -> bool:
@@ -313,7 +329,7 @@ class PickEngine:
         scores: list[float] = []
         for grp_id in offered_grp_ids:
             card = card_database.lookup(grp_id=grp_id)
-            if card.unknown:
+            if card.unknown or _is_freely_available_basic_land(card=card):
                 continue
             if not card_is_castable_in_pair(card=card, base_pair=pair):
                 continue
@@ -345,13 +361,18 @@ class PickEngine:
         best_on_color_score: float | None,
     ) -> ScoredCard:
         card = card_database.lookup(grp_id=grp_id)
+        freely_available_basic = _is_freely_available_basic_land(card=card)
         rating = _rating_for(
             ratings_data=self.ratings_data,
             grp_id=grp_id,
             config=self.config,
             commitment=commitment,
         )
-        base_rating = _base_rating(rating=rating, config=self.config)
+        base_rating = (
+            self.normalization.lower_rating
+            if freely_available_basic
+            else _base_rating(rating=rating, config=self.config)
+        )
         base_score = _normalized_score(
             adjusted_rating=base_rating,
             normalization=self.normalization,
@@ -380,17 +401,22 @@ class PickEngine:
             lower=0.0,
             upper=100.0,
         )
-        (
-            pair_tiebreaker_pair,
-            pair_tiebreaker_win_rate,
-            pair_tiebreaker_weight,
-        ) = _pair_tiebreaker_for_card(
-            card=card,
-            base_rating=base_rating,
-            commitment=commitment,
-            ratings_data=ratings_data,
-            config=self.config,
-        )
+        if freely_available_basic:
+            pair_tiebreaker_pair = None
+            pair_tiebreaker_win_rate = None
+            pair_tiebreaker_weight = None
+        else:
+            (
+                pair_tiebreaker_pair,
+                pair_tiebreaker_win_rate,
+                pair_tiebreaker_weight,
+            ) = _pair_tiebreaker_for_card(
+                card=card,
+                base_rating=base_rating,
+                commitment=commitment,
+                ratings_data=ratings_data,
+                config=self.config,
+            )
         return ScoredCard(
             card=card,
             rating=rating,
@@ -401,13 +427,18 @@ class PickEngine:
             adjusted_rating=base_rating * color_factor,
             raw_score=raw_score,
             score=_integer_score(raw_score=raw_score),
-            source_label=_source_label(rating=rating),
+            source_label=(
+                "Basic"
+                if freely_available_basic
+                else _source_label(rating=rating)
+            ),
             color_fit=color_fit,
             pair_tiebreaker_pair=pair_tiebreaker_pair,
             pair_tiebreaker_win_rate=pair_tiebreaker_win_rate,
             pair_tiebreaker_weight=pair_tiebreaker_weight,
             score_sort_index=original_index,
             splash=splash,
+            freely_available_basic=freely_available_basic,
         )
 
 
@@ -1018,6 +1049,13 @@ def _source_label(*, rating: ResolvedCardRating) -> str:
     return rating.metadata.source_format or "Unknown"
 
 
+def _is_freely_available_basic_land(*, card: CardInfo) -> bool:
+    return card.name in STANDARD_BASIC_LAND_NAMES or any(
+        type_line in STANDARD_BASIC_LAND_TYPE_LINES
+        for type_line in card.types
+    )
+
+
 def _source_summary(*, cards: tuple[ScoredCard, ...]) -> str:
     if not cards:
         return "none"
@@ -1025,6 +1063,7 @@ def _source_summary(*, cards: tuple[ScoredCard, ...]) -> str:
     uses_quick = any(card.source_label == "Quick" for card in cards)
     uses_premier = any(card.source_label == "Premier" for card in cards)
     uses_prior = any(card.no_data for card in cards)
+    uses_basic_policy = any(card.freely_available_basic for card in cards)
     parts: list[str] = []
     if uses_quick:
         parts.append("QuickDraft")
@@ -1035,11 +1074,22 @@ def _source_summary(*, cards: tuple[ScoredCard, ...]) -> str:
     if uses_prior:
         parts.append("neutral prior")
 
+    if uses_basic_policy:
+        parts.append("basic land policy")
+
     return " + ".join(parts) if parts else "unknown"
 
 
-def _scored_card_base_sort_key(card: ScoredCard) -> tuple[int, float, float, int]:
-    return (-card.score, -card.raw_score, -card.base_rating, card.original_index)
+def _scored_card_base_sort_key(
+    card: ScoredCard,
+) -> tuple[bool, int, float, float, int]:
+    return (
+        card.freely_available_basic,
+        -card.score,
+        -card.raw_score,
+        -card.base_rating,
+        card.original_index,
+    )
 
 
 def _percentile(*, values: tuple[float, ...], percentile: float) -> float | None:

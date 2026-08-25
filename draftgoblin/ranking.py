@@ -62,16 +62,35 @@ def rank_scored_cards(
     return tuple(sorted(cards, key=_mana_value_sort_key))
 
 
-def _win_rate_sort_key(card: ScoredCard) -> tuple[bool, float, int, float, int]:
+def _win_rate_sort_key(
+    card: ScoredCard,
+) -> tuple[bool, bool, float, int, float, int]:
     win_rate = card.rating.gih_win_rate
     if win_rate is None:
-        return (True, 0.0, -card.score, -card.raw_score, card.original_index)
+        return (
+            card.freely_available_basic,
+            True,
+            0.0,
+            -card.score,
+            -card.raw_score,
+            card.original_index,
+        )
 
-    return (False, -win_rate, -card.score, -card.raw_score, card.original_index)
-
-
-def _score_sort_key(card: ScoredCard) -> tuple[int, int, float, float, int]:
     return (
+        card.freely_available_basic,
+        False,
+        -win_rate,
+        -card.score,
+        -card.raw_score,
+        card.original_index,
+    )
+
+
+def _score_sort_key(
+    card: ScoredCard,
+) -> tuple[bool, int, int, float, float, int]:
+    return (
+        card.freely_available_basic,
         card.score_sort_index,
         -card.score,
         -card.raw_score,
@@ -80,14 +99,28 @@ def _score_sort_key(card: ScoredCard) -> tuple[int, int, float, float, int]:
     )
 
 
-def _alsa_sort_key(card: ScoredCard) -> tuple[float, int, float, int]:
+def _alsa_sort_key(card: ScoredCard) -> tuple[bool, float, int, float, int]:
     alsa = card.rating.average_last_seen_at
     sort_alsa = float("inf") if alsa is None else alsa
-    return (sort_alsa, -card.score, -card.raw_score, card.original_index)
+    return (
+        card.freely_available_basic,
+        sort_alsa,
+        -card.score,
+        -card.raw_score,
+        card.original_index,
+    )
 
 
-def _mana_value_sort_key(card: ScoredCard) -> tuple[float, int, float, int]:
+def _mana_value_sort_key(
+    card: ScoredCard,
+) -> tuple[bool, float, int, float, int]:
     mana_value = card.card.mana_value
     sort_mana_value = float("inf") if mana_value is None else mana_value
-    return (sort_mana_value, -card.score, -card.raw_score, card.original_index)
+    return (
+        card.freely_available_basic,
+        sort_mana_value,
+        -card.score,
+        -card.raw_score,
+        card.original_index,
+    )
 
