@@ -163,6 +163,7 @@ def test_native_specs_preserve_project_metadata() -> None:
                 f"--macos-signed-app-name={EXPECTED_BUNDLE_IDENTIFIER}",
             } <= nuitka_args
         else:
+            assert "--assume-yes-for-downloads" not in nuitka_args
             assert (
                 "--file-description=An unofficial Quick Draft assistant for MTG Arena"
                 in nuitka_args

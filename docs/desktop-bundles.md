@@ -84,6 +84,13 @@ uv run pyside6-deploy --config-file pysidedeploy.macos.spec --force
 uv run pyside6-deploy --config-file pysidedeploy.windows.spec --force
 ```
 
+Standalone Windows builds require Dependency Walker. The Windows workflow
+downloads the official x64 2.2 archive over HTTPS, verifies its pinned SHA-256
+(`35db68a613874a2e8c1422eb0ea7861f825fc71717d46dabf1f249ce9634b4f1`),
+and extracts it into Nuitka's downloads cache before packaging. A changed
+archive fails the build instead of executing unverified bytes. A first local
+Windows build may still prompt before populating the same user cache.
+
 The expected deployment output is the platform-specific path listed above.
 For a non-building input inspection, add `--dry-run`; pyside6-deploy should
 report the checked QML list and a generated Nuitka command containing the
