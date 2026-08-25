@@ -4,7 +4,7 @@ Draftgoblin keeps the raw 17Lands GIH win rate visible for every card with a str
 
 The base rating for `DG` is 17Lands GIH WR when the card has enough games-in-hand samples. If QuickDraft data is missing or thin, the resolver falls back to PremierDraft. If neither format has a strong GIH sample, the card uses a neutral prior, adjusted by ALSA when ALSA is available: earlier ALSA raises the prior, later ALSA lowers it.
 
-Scores are normalized against the set rating distribution and centered so the neutral prior displays as 50 before color logic. Color commitment then multiplies the normalized score: on-color cards rise gradually, ordinary off-color cards are penalized gradually, supported splash cards receive a smaller penalty, and colorless cards stay neutral.
+Scores are normalized against the set rating distribution and centered so the neutral prior displays as 50 before color logic. The five basic lands that can be added freely during deck building instead receive 0 DG points and rank after draftable cards; drafted nonbasic and special lands keep their normal ratings. Color commitment then multiplies the normalized score: on-color cards rise gradually, ordinary off-color cards are penalized gradually, supported splash cards receive a smaller penalty, and colorless cards stay neutral.
 
 Pool color weights come from picked cards. Each colored picked card contributes a quality-weighted amount to each of its colors, so a strong card pulls harder than filler. The highest-weighted two-color pair is the inferred pair once at least two colors have material weight.
 
