@@ -444,6 +444,7 @@ try:
     assert GuiPreferencesAdapter(app_dir=app_dir).cardPreview is False
 finally:
     provider.shutdown()
+    provider.wait_for_shutdown()
     del engine
 """
     completed = _run_qml_probe(
