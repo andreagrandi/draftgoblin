@@ -35,6 +35,12 @@ Rectangle {
     Accessible.role: Accessible.Pane
     Accessible.name: "Draft pool summary"
     Accessible.description: "Scrollable pool details. Use Up and Down, Page Up and Page Down, Home, or End to move through the summary."
+    function averageManaValueText() {
+        const average = root.pool ? root.pool.average_mana_value : null
+        if (average === null || average === undefined)
+            return "Average mana value: —"
+        return "Average mana value: " + Number(average).toFixed(2)
+    }
 
     function manaLabel(index) {
         return index === 6 ? "6+" : String(index)
@@ -242,12 +248,25 @@ Rectangle {
                     }
                 }
 
-                Label {
-                    text: "MANA CURVE"
-                    color: Theme.textMuted
-                    font.pixelSize: 11
-                    font.bold: true
-                    font.letterSpacing: 1
+                RowLayout {
+                    Layout.fillWidth: true
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "MANA CURVE"
+                        color: Theme.textMuted
+                        font.pixelSize: 11
+                        font.bold: true
+                        font.letterSpacing: 1
+                    }
+
+                    Label {
+                        objectName: "poolManaCurveAverage"
+                        text: root.averageManaValueText()
+                        color: Theme.textMuted
+                        font.pixelSize: 11
+                        Accessible.name: text
+                    }
                 }
 
                 RowLayout {

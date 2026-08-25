@@ -222,6 +222,7 @@ def _pool() -> PoolState:
         commitment=0.64,
         color_distribution=(("W", 0), ("U", 0), ("B", 1), ("R", 0), ("G", 9), ("C", 0)),
         mana_curve=(0, 0, 3, 7, 0, 0, 0),
+        average_mana_value=2.7,
     )
 
 

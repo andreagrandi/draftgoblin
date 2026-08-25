@@ -121,7 +121,9 @@ def test_pool_aggregates_apply_card_quantities_and_skip_lands() -> None:
         PoolCard(card=land_card, quantity=4),
     )
 
-    color_distribution, mana_curve = LiveSession._pool_aggregates(cards=cards)
+    color_distribution, mana_curve, average_mana_value = LiveSession._pool_aggregates(
+        cards=cards
+    )
 
     assert color_distribution == (
         ("W", 6),
@@ -132,6 +134,7 @@ def test_pool_aggregates_apply_card_quantities_and_skip_lands() -> None:
         ("C", 3),
     )
     assert mana_curve == (0, 0, 2, 0, 0, 0, 1)
+    assert average_mana_value == pytest.approx(11 / 3)
 
 
 def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> None:

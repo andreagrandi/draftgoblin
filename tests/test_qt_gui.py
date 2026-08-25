@@ -989,6 +989,18 @@ pool_state = provider.state["pool"]
 assert pool_count.property("text") == (
     f'{pool_state["total_cards"]} / {pool_state["target_cards"]} cards'
 )
+pool_average = wide_pool.findChild(QObject, "poolManaCurveAverage")
+assert pool_average is not None
+assert pool_average.property("text") == "Average mana value: 2.70"
+unavailable_pool_state = dict(provider.state)
+unavailable_pool = dict(unavailable_pool_state["pool"])
+unavailable_pool["average_mana_value"] = None
+unavailable_pool_state["pool"] = unavailable_pool
+provider._replace_state(state=unavailable_pool_state)
+application.processEvents()
+assert pool_average.property("text") == "Average mana value: —"
+provider.selectScenario("warning")
+application.processEvents()
 pool_flickable = wide_pool.findChild(QObject, "poolSummaryFlickable")
 pool_scrollbar = wide_pool.findChild(QObject, "poolSummaryScrollBar")
 assert pool_flickable is not None and pool_flickable.property("activeFocusOnTab") is True
@@ -1408,11 +1420,24 @@ assert rebuild.isVisible()
 
 wide_curve = find_visual_item(root.contentItem(), "wideBuildManaCurve")
 assert wide_curve is not None and wide_curve.isVisible()
+wide_mana_base = find_visual_item(root.contentItem(), "wideBuildManaBase")
+wide_warnings = find_visual_item(root.contentItem(), "wideBuildWarnings")
+assert wide_mana_base is not None and wide_mana_base.isVisible()
+assert wide_warnings is not None and wide_warnings.isVisible()
+assert_visual_item_precedes(wide_mana_base, wide_curve)
+assert_visual_item_precedes(wide_curve, wide_warnings)
+wide_title = find_visual_item(wide_curve, "manaCurveTitle")
+assert wide_title is not None and wide_title.isVisible()
+assert wide_title.width() <= wide_curve.width()
+assert wide_title.width() >= wide_title.property("implicitWidth")
+assert_visual_item_inside(wide_curve, wide_title)
 wide_average = find_visual_item(wide_curve, "manaCurveAverage")
 assert wide_average is not None and wide_average.isVisible()
 assert wide_average.property("text") == "Average mana value: 2.70"
 assert wide_average.width() <= wide_curve.width()
 assert wide_average.width() >= wide_average.property("implicitWidth")
+assert_visual_item_inside(wide_curve, wide_average)
+assert_visual_item_precedes(wide_title, wide_average)
 wide_spells = find_visual_item(root.contentItem(), "buildSpellGroups")
 assert wide_spells is not None and wide_spells.isVisible()
 assert wide_spells.x() >= 0
@@ -1488,11 +1513,16 @@ wide_details = find_visual_item(wide_preview, "cardPreviewDetails")
 assert wide_heading is not None and wide_heading.isVisible()
 assert wide_frame is not None and wide_frame.isVisible()
 assert abs(wide_frame.height() - wide_frame.width() * 1.4) <= 0.1
-assert wide_fallback is not None and wide_fallback.isVisible()
 assert wide_details is not None and wide_details.isVisible()
+assert wide_frame.width() > 240
+assert wide_preview.width() - wide_frame.width() >= 40
+assert abs(wide_details.width() - wide_frame.width()) <= 1
+assert abs(wide_details.x() - wide_frame.x()) <= 1
+assert wide_details.y() - (wide_frame.y() + wide_frame.height()) >= 18
+assert wide_fallback is not None and wide_fallback.isVisible()
 for item in (wide_heading, wide_frame, wide_fallback, wide_details):
     assert_visual_item_inside(wide_preview, item)
-assert_visual_item_precedes(wide_preview, wide_curve)
+assert_visual_item_inside(build_view, wide_curve)
 accessible_preview = QAccessible.queryAccessibleInterface(wide_preview)
 assert accessible_preview is not None
 assert accessible_preview.text(QAccessible.Text.Name) == (

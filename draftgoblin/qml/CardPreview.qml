@@ -64,7 +64,7 @@ Rectangle {
         root.height - Theme.panelPadding * 2
             - previewHeading.implicitHeight
             - (previewDetails.visible ? previewDetails.implicitHeight : 0)
-            - previewLayout.rowSpacing * (previewDetails.visible ? 3 : 2)
+            - previewLayout.rowSpacing * (previewDetails.visible ? 2 : 1)
     )
     readonly property real detailedImageFrameAvailableHeight: Math.max(
         0,
@@ -89,7 +89,7 @@ Rectangle {
             return Math.max(
                 0,
                 Math.min(
-                    240,
+                    260,
                     root.width - Theme.panelPadding * 2,
                     root.imageFrameAvailableHeight / 1.4
                 )
@@ -101,13 +101,22 @@ Rectangle {
         ))
     }
     readonly property real imageFrameHeight: root.imageFrameWidth * 1.4
+    readonly property real previewDetailsSideMargin: {
+        if (root.detailedIntel || !root.constrainImageFrameToHeight)
+            return 0
+        return Math.max(
+            0,
+            (root.width - Theme.panelPadding * 2 - root.imageFrameWidth) / 2
+        )
+    }
 
     GridLayout {
         id: previewLayout
         anchors.fill: parent
         anchors.margins: Theme.panelPadding
         columns: root.detailedIntel ? 2 : 1
-        rowSpacing: root.detailedIntel ? 10 : 12
+        rowSpacing: root.detailedIntel ? 10
+            : root.constrainImageFrameToHeight ? 18 : 12
         columnSpacing: 12
 
         Label {
@@ -202,6 +211,8 @@ Rectangle {
             visible: root.recommendation !== null
             Layout.alignment: root.detailedIntel ? Qt.AlignTop : Qt.AlignLeft
             Layout.fillWidth: true
+            Layout.leftMargin: root.previewDetailsSideMargin
+            Layout.rightMargin: root.previewDetailsSideMargin
             Layout.maximumWidth: root.detailedIntel
                 ? Math.max(0, root.detailedContentWidth - root.imageFrameWidth)
                 : root.width

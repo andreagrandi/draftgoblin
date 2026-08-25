@@ -29,6 +29,7 @@ def test_qt_translation_publishes_plain_values_without_domain_payloads() -> None
     assert values["status"]["phase"] == "drafting"
     assert values["recommendations"]["cards"][0]["card"]["name"]
     assert values["build"]["average_mana_value"] == pytest.approx(expected_average)
+    assert values["pool"]["average_mana_value"] == pytest.approx(2.7)
     assert "domain_pool" not in values["build"]
     assert "domain_selection" not in values["build"]
 
