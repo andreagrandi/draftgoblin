@@ -121,6 +121,73 @@ def test_live_gui_uses_shared_metadata_augmenting_factory(
     assert factory_calls == [(database, app_dir, True)]
 
 
+def test_qml_renders_full_pre_draft_setup_guidance_offscreen() -> None:
+    probe = """
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QObject, QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+
+from draftomen import __version__
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.qt_mock import MockSessionAdapter
+from draftomen.session import LOG_SETUP_GUIDANCE
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+preferences_dir = TemporaryDirectory()
+session = MockLiveSession(scenario="empty")
+initial_snapshot = session.snapshot
+session_state = replace(
+    initial_snapshot,
+    status=replace(
+        initial_snapshot.status,
+        message=LOG_SETUP_GUIDANCE,
+        setup_guidance=True,
+    ),
+)
+provider = MockSessionAdapter(session=session)
+provider._publish(snapshot=session_state)
+preferences = GuiPreferencesAdapter(app_dir=preferences_dir.name)
+engine = QQmlApplicationEngine()
+qml_directory = Path.cwd() / "draftomen" / "qml"
+engine.addImportPath(str(qml_directory))
+context = engine.rootContext()
+context.setContextProperty("fixedFontFamily", _fixed_font_family())
+context.setContextProperty("sessionProvider", provider)
+context.setContextProperty("applicationTitle", "Draft Omen")
+context.setContextProperty("applicationVersion", __version__)
+context.setContextProperty("guiPreferences", preferences)
+context.setContextProperty("initialSurface", "live")
+context.setContextProperty("initialWindowWidth", 900)
+context.setContextProperty("initialWindowHeight", 700)
+engine.setInitialProperties({"provider": provider})
+engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+assert engine.rootObjects()
+root = engine.rootObjects()[0]
+application.processEvents()
+
+heading = root.findChild(QObject, "preDraftHeading")
+assert heading is not None
+assert heading.isVisible()
+assert heading.property("text") == "Arena setup needed"
+guidance = root.findChild(QObject, "preDraftGuidance")
+assert guidance is not None
+assert guidance.isVisible()
+assert guidance.property("text") == LOG_SETUP_GUIDANCE
+"""
+    completed = _run_qml_probe(probe)
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_production_gui_processes_representative_arena_log_offscreen(
     tmp_path: Path,
 ) -> None:

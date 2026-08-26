@@ -1787,6 +1787,10 @@ class DraftomenTuiApp(App[None]):
         readiness.display = self._show_pre_draft_readiness()
         if not readiness.display:
             return
+        status = self.session.snapshot.status
+        if status.setup_guidance:
+            readiness.update(status.message)
+            return
 
         set_code = self._set_code
         if set_code is None:

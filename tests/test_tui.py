@@ -64,6 +64,30 @@ SCRYFALL_BULK_SAMPLE_PATH = (
 )
 
 
+def test_tui_renders_shared_setup_guidance_before_draft(tmp_path: Path) -> None:
+    asyncio.run(_assert_tui_renders_shared_setup_guidance(tmp_path=tmp_path))
+
+
+async def _assert_tui_renders_shared_setup_guidance(tmp_path: Path) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        await pilot.pause()
+        readiness = app.query_one("#pre-draft-readiness", Static)
+        guidance = str(readiness.render())
+
+        assert readiness.display
+        for requirement in (
+            "No draft or readable Player.log",
+            "Detailed Logs (Plugin Support)",
+            "Account settings",
+            "platform or Arena version",
+            "Restart Arena if required",
+            "return to Draft Omen and try again while Arena is running",
+        ):
+            assert requirement in guidance
+
+
 def test_tui_fixture_stream_updates_pack_panel_and_status_bar(tmp_path: Path) -> None:
     asyncio.run(_assert_fixture_stream_updates_pack_panel(tmp_path=tmp_path))
 
