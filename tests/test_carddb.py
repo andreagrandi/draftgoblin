@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from draftgoblin.carddb import (
+from draftomen.carddb import (
     CardDatabase,
     CardDatabaseCacheMissingError,
     CardDatabaseError,
@@ -20,8 +20,8 @@ from draftgoblin.carddb import (
     refresh_card_database,
     save_card_database,
 )
-from draftgoblin.cli import main
-from draftgoblin.events import DraftCompletedEvent, PackOfferedEvent, PickMadeEvent, parse_events
+from draftomen.cli import main
+from draftomen.events import DraftCompletedEvent, PackOfferedEvent, PickMadeEvent, parse_events
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
 SCRYFALL_BULK_SAMPLE_PATH = (
@@ -255,7 +255,7 @@ def test_load_or_refresh_rebuilds_schema_2_image_index_cache(
         return refreshed
 
     monkeypatch.setattr(
-        "draftgoblin.carddb.refresh_card_database",
+        "draftomen.carddb.refresh_card_database",
         fake_refresh_card_database,
     )
 
@@ -280,7 +280,7 @@ def test_failed_scryfall_refresh_keeps_existing_canonical_cache(
         raise CardDatabaseError("Scryfall is temporarily unavailable.")
 
     monkeypatch.setattr(
-        "draftgoblin.carddb.download_scryfall_card_database",
+        "draftomen.carddb.download_scryfall_card_database",
         failed_download,
     )
 
@@ -303,7 +303,7 @@ def test_load_or_refresh_preserves_runtime_arena_fallback(
         raise CardDatabaseError("Scryfall is temporarily unavailable.")
 
     monkeypatch.setattr(
-        "draftgoblin.carddb.download_scryfall_card_database",
+        "draftomen.carddb.download_scryfall_card_database",
         failed_download,
     )
 
@@ -349,7 +349,7 @@ def test_refresh_data_cli_rejects_uncacheable_arena_fallback(
         return fallback, False
 
     monkeypatch.setattr(
-        "draftgoblin.carddb._download_or_arena_card_database",
+        "draftomen.carddb._download_or_arena_card_database",
         arena_fallback,
     )
 

@@ -1,0 +1,416 @@
+<!DOCTYPE html><html class="dark" lang="en"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Draft Omen - Live Draft</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500;600&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-low": "#1c1b1b",
+                        "on-primary-fixed-variant": "#3a4d00",
+                        "on-secondary-fixed-variant": "#7a3000",
+                        "surface-variant": "#353534",
+                        "on-secondary-container": "#4b1b00",
+                        "secondary-fixed-dim": "#ffb693",
+                        "primary-container": "#8db600",
+                        "inverse-surface": "#e5e2e1",
+                        "surface-alt": "#1A1A1B",
+                        "surface-dim": "#131313",
+                        "mana-blue": "#0EA5E9",
+                        "surface-container-lowest": "#0e0e0e",
+                        "mana-white": "#F9FAFB",
+                        "surface-container": "#201f1f",
+                        "secondary-container": "#ea6b1e",
+                        "on-surface-variant": "#c4c9b0",
+                        "tertiary": "#ffa9fa",
+                        "on-tertiary": "#5a005f",
+                        "surface-bright": "#393939",
+                        "error-container": "#93000a",
+                        "surface-container-high": "#2a2a2a",
+                        "error": "#ffb4ab",
+                        "on-primary-container": "#324300",
+                        "on-error-container": "#ffdad6",
+                        "inverse-primary": "#4e6700",
+                        "primary-fixed-dim": "#aad630",
+                        "mana-red": "#EF4444",
+                        "primary-fixed": "#c6f34c",
+                        "on-tertiary-fixed-variant": "#7d0885",
+                        "background": "#131313",
+                        "on-primary": "#273500",
+                        "tertiary-container": "#f07cf0",
+                        "surface-tint": "#aad630",
+                        "tertiary-fixed-dim": "#ffa9fa",
+                        "outline": "#8e937c",
+                        "surface-container-highest": "#353534",
+                        "on-error": "#690005",
+                        "on-background": "#e5e2e1",
+                        "primary": "#aad630",
+                        "secondary": "#ffb693",
+                        "on-secondary-fixed": "#351000",
+                        "text-emphasis": "#F5F5DC",
+                        "inverse-on-surface": "#313030",
+                        "on-secondary": "#562000",
+                        "surface": "#131313",
+                        "tertiary-fixed": "#ffd6f8",
+                        "on-surface": "#e5e2e1",
+                        "mana-green": "#22C55E",
+                        "on-primary-fixed": "#151f00",
+                        "on-tertiary-container": "#6f0076",
+                        "secondary-fixed": "#ffdbcc",
+                        "outline-variant": "#444936",
+                        "mana-black": "#4B5563",
+                        "on-tertiary-fixed": "#37003b"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "unit": "4px",
+                        "gutter": "12px",
+                        "card-padding": "12px",
+                        "margin-desktop": "24px"
+                    },
+                    "fontFamily": {
+                        "body-sm": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "data-md": ["JetBrains Mono"],
+                        "data-lg": ["JetBrains Mono"],
+                        "headline": ["Inter"],
+                        "display": ["Inter"],
+                        "body": ["Inter"]
+                    },
+                    "fontSize": {
+                        "body-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "label-caps": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "data-md": ["13px", { "lineHeight": "16px", "fontWeight": "500" }],
+                        "data-lg": ["16px", { "lineHeight": "20px", "fontWeight": "600" }],
+                        "headline": ["18px", { "lineHeight": "24px", "fontWeight": "600" }],
+                        "display": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body": ["14px", { "lineHeight": "20px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .fill-icon {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #131313;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #353534;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #444936;
+        }
+    </style>
+</head>
+<body class="bg-surface-dim text-on-surface min-h-screen flex font-body selection:bg-primary-container selection:text-on-primary-container">
+<!-- Side Nav -->
+<nav class="hidden md:flex flex-col h-screen w-64 border-r border-outline-variant bg-surface-container py-gutter shrink-0 sticky top-0">
+<div class="px-gutter mb-6 flex items-center gap-3">
+<img class="w-10 h-10 rounded-full border border-outline-variant object-cover bg-surface-container-highest" data-alt="Draft Omen Logo" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCUq3r_ClEV6cCChSVErT0EG2UQXNYvZEjs4wuWAXsG5IMRZhDUBSF9ZVg3NQOC5tCHfLOJodjZ-KbCpty6W6eY_-CWkNrH-2ZccUxs3Ybtp9fca-RzvuJpymqLG8B3ITJwIXDvQOqnFP1PNjXTJ5C61_ogGOxwGIzVXoo-ba5_sd2LHtLCNmZsU1vAYX6wsPfHwF2i31Y6B5nrSjMP1dGUhKiLlSRfT1UQjmwH5HXAXCNqQ0LROEMHrkY_j_kdEYFN2gQ">
+<div>
+<h1 class="text-headline font-headline text-primary">Draft Omen</h1>
+<p class="text-body-sm font-body-sm text-on-surface-variant">Modern Cartographer</p>
+</div>
+</div>
+<div class="flex-1 flex flex-col gap-1 px-2">
+<a class="flex items-center gap-3 px-3 py-2 rounded text-primary bg-primary-container/10 border-r-2 border-primary hover:bg-surface-variant transition-all scale-100 active:scale-95 duration-75" href="#">
+<span class="material-symbols-outlined fill-icon" data-icon="gavel">gavel</span>
+<span class="text-label-caps font-label-caps">Live Draft</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant hover:bg-surface-variant transition-all scale-100 active:scale-95 duration-75" href="#">
+<span class="material-symbols-outlined" data-icon="style">style</span>
+<span class="text-label-caps font-label-caps">Deck Build</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant hover:bg-surface-variant transition-all scale-100 active:scale-95 duration-75" href="#">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+<span class="text-label-caps font-label-caps">Backtest</span>
+</a>
+</div>
+<div class="px-gutter mt-auto flex flex-col gap-3">
+<div class="flex items-center gap-2 text-label-caps font-label-caps text-on-surface-variant px-1">
+<span class="w-2 h-2 rounded-full bg-mana-green animate-pulse"></span>
+            Watching Arena
+        </div>
+<button class="w-full flex items-center justify-center gap-2 bg-surface-alt border border-outline-variant hover:border-primary text-on-surface hover:text-primary transition-all py-2 rounded text-label-caps font-label-caps active:translate-y-[1px]">
+<span class="material-symbols-outlined text-sm" data-icon="sync">sync</span>
+            Sync Arena
+        </button>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col h-screen overflow-hidden">
+<!-- Top App Bar (Mobile Fallback) -->
+<header class="md:hidden flex justify-between items-center w-full px-margin-desktop h-[48px] bg-surface-dim border-b border-outline-variant z-10 shrink-0">
+<div class="text-headline font-headline font-bold text-primary">Draft Omen</div>
+<div class="flex items-center gap-4">
+<span class="text-label-caps font-label-caps text-on-surface-variant flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-mana-green animate-pulse"></span>
+                Watching
+            </span>
+<span class="text-label-caps font-label-caps text-on-surface-variant">MagoAnubiTest</span>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+</button>
+</div>
+</header>
+<!-- Two Column Layout -->
+<div class="flex-1 flex flex-col lg:flex-row overflow-hidden">
+<!-- Left Column: Recommendation List (Wide) -->
+<section class="flex-[3] flex flex-col min-w-0 bg-surface-container-lowest border-r border-outline-variant">
+<!-- Pack Header -->
+<div class="px-margin-desktop py-4 border-b border-outline-variant bg-surface-dim flex justify-between items-end shrink-0">
+<div>
+<div class="text-label-caps font-label-caps text-on-surface-variant mb-1">Pack 1 • Pick 1</div>
+<h2 class="text-display font-display text-text-emphasis">Outlaws of Thunder Junction</h2>
+</div>
+<div class="flex gap-2">
+<div class="px-2 py-1 rounded bg-surface-alt border border-outline-variant text-data-md font-data-md flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-mana-white"></span>
+<span class="w-2 h-2 rounded-full bg-mana-blue"></span>
+<span class="text-on-surface-variant ml-1">Open</span>
+</div>
+</div>
+</div>
+<!-- List Content (Grimoire Style Data List) -->
+<div class="flex-1 overflow-y-auto p-4 space-y-1">
+<!-- List Header -->
+<div class="flex items-center gap-3 px-3 py-2 text-label-caps font-label-caps text-on-surface-variant border-b border-outline-variant mb-2">
+<div class="w-6 text-center">#</div>
+<div class="flex-1 min-w-0">Card</div>
+<div class="w-16">Colors</div>
+<div class="w-24 text-right">DO Score</div>
+<div class="w-20 text-right">17L WR</div>
+</div>
+<!-- Rank 1 (Active/Glowing) -->
+<div class="group flex items-center gap-3 p-3 rounded bg-surface-alt border border-primary/30 shadow-[inset_0_0_12px_rgba(141,182,0,0.1)] cursor-pointer hover:border-primary transition-all">
+<div class="w-6 text-center">
+<div class="text-data-md font-data-md text-primary">01</div>
+</div>
+<div class="flex-1 min-w-0 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-surface-container overflow-hidden border border-outline-variant shrink-0">
+<img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA3eyzEzJ3BdTxhxW9_id3j0SomF1MFGJ5ELCH7x2VuyK56bLh2WIA2fk4TVtQh-RXuCzrlr1_NYzzxTURLq9GEGahGs3E6BBPz3YrllnP8rM5-jhepC1DOeNc7Hb-Qb5znh2KkmdqEP0objEzbHn7Kw2BQOd4Ia9-FuY_0BK-a94X6bCNM_QA-yl_9KAgRh94ucWjFLfcJvd5AOMdKMokG_O2Yd_QvOCfDl7YjICsTUBBfc6gnfZZFOg">
+</div>
+<div>
+<div class="flex items-center gap-2">
+<h3 class="text-data-md font-data-md text-text-emphasis truncate">Oko, the Ringleader</h3>
+<span class="px-1.5 py-0.5 rounded-sm bg-primary-container/20 text-primary text-[9px] font-bold uppercase tracking-wider border border-primary/30 flex items-center gap-1">
+<span class="material-symbols-outlined text-[10px]" data-icon="psychology">psychology</span>Logic
+                                </span>
+</div>
+<div class="text-body-sm font-body-sm text-on-surface-variant">Planeswalker</div>
+</div>
+</div>
+<div class="w-16 flex items-center gap-1">
+<span class="w-3 h-3 rounded-full bg-mana-green flex items-center justify-center text-[8px] text-white font-bold">G</span>
+<span class="w-3 h-3 rounded-full bg-mana-blue flex items-center justify-center text-[8px] text-white font-bold">U</span>
+</div>
+<div class="w-24 flex flex-col items-end">
+<div class="text-data-md font-data-md text-primary">94.2</div>
+<div class="w-full h-1 bg-surface-container mt-1 rounded-full overflow-hidden">
+<div class="h-full bg-primary w-[94%]"></div>
+</div>
+</div>
+<div class="w-20 flex flex-col items-end">
+<div class="text-data-md font-data-md text-text-emphasis">63.1%</div>
+<div class="w-full h-1 bg-surface-container mt-1 rounded-full overflow-hidden">
+<div class="h-full bg-secondary-container w-[63%]"></div>
+</div>
+</div>
+</div>
+<!-- Rank 2 -->
+<div class="group flex items-center gap-3 p-3 rounded hover:bg-surface-variant border border-transparent hover:border-outline-variant cursor-pointer transition-all">
+<div class="w-6 text-center">
+<div class="text-data-md font-data-md text-on-surface-variant group-hover:text-text-emphasis">02</div>
+</div>
+<div class="flex-1 min-w-0 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-surface-container overflow-hidden border border-outline-variant shrink-0">
+<img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAPlcDiRtR36KZ-hTl8KSoP7bRA3yuBsZqRxGjLxFiXF6peeahwI4CDDTEIL4xN0YiM_YmQqb_J8YEt2Q3vzGEpi9_maJmMukho_Fw8hgcSOkVd9xbC_eeBugFDPGdVVoxOtktyFBDgIJ7L7ZsW9eGP1EOz8pOp0gwPVPrefGOLLgrHJIB9Ul_Bomw7oUD2qqx1BBq6howJZX1sYKTnW7mNmOSZwI9xh9NoJ6HRiYSCNHnoGVaKvqpwOA">
+</div>
+<div>
+<h3 class="text-data-md font-data-md text-on-surface truncate group-hover:text-text-emphasis">Terror of the Peaks</h3>
+<div class="text-body-sm font-body-sm text-on-surface-variant">Creature — Dragon</div>
+</div>
+</div>
+<div class="w-16 flex items-center gap-1">
+<span class="w-3 h-3 rounded-full bg-mana-red flex items-center justify-center text-[8px] text-white font-bold">R</span>
+<span class="w-3 h-3 rounded-full bg-mana-red flex items-center justify-center text-[8px] text-white font-bold">R</span>
+</div>
+<div class="w-24 flex flex-col items-end opacity-80 group-hover:opacity-100">
+<div class="text-data-md font-data-md text-on-surface">91.5</div>
+<div class="w-full h-1 bg-surface-container mt-1 rounded-full overflow-hidden">
+<div class="h-full bg-on-surface-variant w-[91%]"></div>
+</div>
+</div>
+<div class="w-20 flex flex-col items-end opacity-80 group-hover:opacity-100">
+<div class="text-data-md font-data-md text-on-surface">62.8%</div>
+<div class="w-full h-1 bg-surface-container mt-1 rounded-full overflow-hidden">
+<div class="h-full bg-secondary-container w-[62%]"></div>
+</div>
+</div>
+</div>
+<!-- Rank 3 -->
+<div class="group flex items-center gap-3 p-3 rounded hover:bg-surface-variant border border-transparent hover:border-outline-variant cursor-pointer transition-all">
+<div class="w-6 text-center">
+<div class="text-data-md font-data-md text-on-surface-variant group-hover:text-text-emphasis">03</div>
+</div>
+<div class="flex-1 min-w-0 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-surface-container overflow-hidden border border-outline-variant shrink-0">
+<img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCX9fbBOGjWYIRQg3AbQBak94TjG8oVcaKpqS1TsNicQ634gjggilGUw99sR8OsJbYwSRmDhnChXVxyGzbz7YXKhex_tZrkGjz-Ulg9AbuSj5Q3dcKrkXUG5kNDL4VLPlor1aAay8L48N6YiY3QrMu66iDwpY3ic0Zbc9I-Udx4wKAhyTftypK_ZC6QVDmInqGBXA1p7fSTbxR604OvJWafMofhjtN0Tl3DxS999RwW0GkcSwoTX4VENQ">
+</div>
+<div>
+<h3 class="text-data-md font-data-md text-on-surface truncate group-hover:text-text-emphasis">Shoot the Sheriff</h3>
+<div class="text-body-sm font-body-sm text-on-surface-variant">Instant</div>
+</div>
+</div>
+<div class="w-16 flex items-center gap-1">
+<span class="w-3 h-3 rounded-full bg-mana-black flex items-center justify-center text-[8px] text-white font-bold">B</span>
+</div>
+<div class="w-24 flex flex-col items-end opacity-80 group-hover:opacity-100">
+<div class="text-data-md font-data-md text-on-surface">88.0</div>
+<div class="w-full h-1 bg-surface-container mt-1 rounded-full overflow-hidden">
+<div class="h-full bg-on-surface-variant w-[88%]"></div>
+</div>
+</div>
+<div class="w-20 flex flex-col items-end opacity-80 group-hover:opacity-100">
+<div class="text-data-md font-data-md text-on-surface">59.4%</div>
+<div class="w-full h-1 bg-surface-container mt-1 rounded-full overflow-hidden">
+<div class="h-full bg-secondary-container w-[59%]"></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Right Column: Contextual Intel (Narrow) -->
+<aside class="flex-[2] max-w-[450px] flex flex-col min-w-0 bg-surface-dim border-l border-outline-variant relative">
+<div class="absolute inset-0 opacity-10 pointer-events-none" style="background-image: repeating-linear-gradient(45deg, #444936 0, #444936 1px, transparent 0, transparent 50%); background-size: 8px 8px;"></div>
+<div class="flex-1 flex flex-col overflow-y-auto relative z-10 p-4 gap-4">
+<!-- Focused Card Intel -->
+<div class="bg-surface-alt border border-outline-variant rounded p-4 shadow-lg">
+<div class="text-label-caps font-label-caps text-primary mb-4 flex items-center gap-2 border-b border-outline-variant pb-2">
+<span class="material-symbols-outlined text-[14px]" data-icon="visibility">visibility</span>
+                        Focused Intel
+                    </div>
+<div class="flex flex-col sm:flex-row gap-4 mb-4">
+<!-- Card Image Preview (Workbench framing) -->
+<div class="aspect-[2.5/3.5] w-full max-w-[200px] bg-surface-container border border-outline-variant rounded overflow-hidden shadow-md shrink-0">
+<img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD0Mds21yv0cHZwnbEOsAmyr2vaIcIhujv6IN_z-FDtJ9G39w4YCSS9tFXrCEWc1EcPc1II7dTpqmqT_ri4MSESXY6QJgjymM2LO5U2ir-orV1w1k5S6zdSSZ83Kn7cVg08wfPA0nX0G7dJVcWyRKNCw5uqyvSOFmbdlTozrf9Wh6twt3KEvtmrFn9E57xs-e39WxvX1l_cuNEDr0zk2yo8gI23UqPdYGT_wcQ57CSlpez6idnMT6k2mA">
+</div>
+<!-- Prominent Stats -->
+<div class="flex flex-col justify-center gap-4">
+<div>
+<div class="text-label-caps font-label-caps text-on-surface-variant mb-1">DO Score</div>
+<div class="text-[32px] leading-tight font-display text-primary font-bold">94.2</div>
+</div>
+<div>
+<div class="text-label-caps font-label-caps text-on-surface-variant mb-1">17L GIH WR</div>
+<div class="text-[28px] leading-tight font-display text-text-emphasis font-bold">63.1%</div>
+</div>
+</div>
+</div>
+<div class="space-y-3">
+<div>
+<h4 class="text-body-sm font-body-sm text-on-surface-variant mb-1">Archetype Fit</h4>
+<div class="flex flex-wrap gap-1">
+<span class="px-2 py-1 rounded-sm bg-surface-container-high border border-outline-variant text-label-caps font-label-caps flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-mana-green"></span>
+<span class="w-2 h-2 rounded-full bg-mana-blue"></span>
+                                    UG Midrange
+                                </span>
+</div>
+</div>
+<div>
+<h4 class="text-body-sm font-body-sm text-on-surface-variant mb-1">Synergy Notes</h4>
+<p class="text-body-sm font-body-sm text-on-surface leading-relaxed">
+                                Extremely high baseline power. Synergizes with crime enablers and provides ongoing value. First pickable in almost any scenario.
+                            </p>
+</div>
+</div>
+</div>
+<!-- Pool Summary -->
+<div class="bg-surface-alt border border-outline-variant rounded p-4">
+<div class="text-label-caps font-label-caps text-on-surface-variant mb-3 border-b border-outline-variant pb-2 flex justify-between items-center">
+<span class="">Pool Summary</span>
+<span class="text-primary font-data-md">1 Card</span>
+</div>
+<!-- Recent Picks Placeholder -->
+<div class="mb-4">
+<div class="text-label-caps font-label-caps text-on-surface-variant mb-2">Recent Picks</div>
+<div class="flex gap-2"><div class="w-10 h-14 bg-mana-green/40 border border-mana-green rounded flex items-center justify-center shadow-sm relative group cursor-pointer overflow-hidden">
+  <div class="absolute inset-0 opacity-40 group-hover:opacity-100 transition-opacity">
+    <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuA3eyzEzJ3BdTxhxW9_id3j0SomF1MFGJ5ELCH7x2VuyK56bLh2WIA2fk4TVtQh-RXuCzrlr1_NYzzxTURLq9GEGahGs3E6BBPz3YrllnP8rM5-jhepC1DOeNc7Hb-Qb5znh2KkmdqEP0objEzbHn7Kw2BQOd4Ia9-FuY_0BK-a94X6bCNM_QA-yl_9KAgRh94ucWjFLfcJvd5AOMdKMokG_O2Yd_QvOCfDl7YjICsTUBBfc6gnfZZFOg" class="w-full h-full object-cover">
+  </div>
+  <div class="absolute top-0 left-0 bg-surface-dim/80 px-1 rounded-br text-[8px] font-bold text-primary z-10">P1</div>
+  <div class="absolute bottom-0 left-0 right-0 bg-surface-dim/90 text-[7px] text-center py-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 truncate px-0.5">Outcaster Trailblazer</div>
+</div>
+<div class="w-10 h-14 bg-surface-container-low/30 border border-outline-variant/30 border-dashed rounded flex items-center justify-center opacity-40"></div>
+<div class="w-10 h-14 bg-surface-container-low/30 border border-outline-variant/30 border-dashed rounded flex items-center justify-center opacity-40"></div>
+<div class="w-10 h-14 bg-surface-container-low/30 border border-outline-variant/30 border-dashed rounded flex items-center justify-center opacity-40"></div>
+<div class="w-10 h-14 bg-surface-container-low/30 border border-outline-variant/30 border-dashed rounded flex items-center justify-center opacity-40"></div></div>
+</div>
+<!-- Mana Curve Graph -->
+<div class="pt-4 border-t border-outline-variant">
+<div class="text-label-caps font-label-caps text-on-surface-variant mb-2">Curve Expectation (Mocked)</div>
+<div class="flex items-end gap-1 h-16">
+<div class="flex-1 flex flex-col justify-end h-full">
+<div class="bg-primary/20 rounded-t border-b-2 border-primary/50 h-[20%] transition-all"></div>
+</div>
+<div class="flex-1 flex flex-col justify-end h-full">
+<div class="bg-primary/40 rounded-t border-b-2 border-primary h-[60%] transition-all"></div>
+</div>
+<div class="flex-1 flex flex-col justify-end h-full">
+<div class="bg-primary/30 rounded-t border-b-2 border-primary/80 h-[100%] transition-all"></div>
+</div>
+<div class="flex-1 flex flex-col justify-end h-full">
+<div class="bg-primary/20 rounded-t border-b-2 border-primary/50 h-[40%] transition-all"></div>
+</div>
+<div class="flex-1 flex flex-col justify-end h-full">
+<div class="bg-surface-container-high rounded-t border-b-2 border-outline-variant h-[15%] transition-all"></div>
+</div>
+<div class="flex-1 flex flex-col justify-end h-full">
+<div class="bg-surface-container-high rounded-t border-b-2 border-outline-variant h-[5%] transition-all"></div>
+</div>
+</div>
+<div class="flex justify-between mt-1 text-[10px] text-on-surface-variant font-data-md px-2">
+<span class="">1</span><span class="">2</span><span class="">3</span><span class="">4</span><span class="">5</span><span class="">6+</span>
+</div>
+</div>
+</div>
+</div>
+</aside>
+</div>
+<!-- Footer -->
+<footer class="md:hidden fixed bottom-0 left-0 w-full z-50 flex justify-between items-center px-margin-desktop h-[32px] bg-surface-container-lowest border-t border-outline-variant shrink-0">
+<div class="text-label-caps font-label-caps text-on-surface flex items-center gap-2">
+<span class="w-1.5 h-1.5 rounded-full bg-mana-green animate-pulse"></span>
+            Watching Arena | OTJ | 17Lands
+        </div>
+<div class="flex gap-4">
+<a class="text-data-md font-data-md text-on-surface-variant hover:text-secondary transition-colors" href="#">Help</a>
+<a class="text-data-md font-data-md text-on-surface-variant hover:text-secondary transition-colors" href="#">Logs</a>
+<a class="text-data-md font-data-md text-on-surface-variant hover:text-secondary transition-colors" href="#">Privacy</a>
+</div>
+</footer>
+</main>
+
+
+</body></html>

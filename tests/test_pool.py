@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from draftgoblin.events import (
+from draftomen.events import (
     AccountEvent,
     DraftCompletedEvent,
     DraftEvent,
@@ -15,7 +15,7 @@ from draftgoblin.events import (
     QuickDraftDetectedEvent,
     parse_events,
 )
-from draftgoblin.pool import (
+from draftomen.pool import (
     DraftPick,
     DraftPoolStore,
     DraftState,

@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
-from draftgoblin.config import DECK_BUILDER
-from draftgoblin.deckbuilder import (
+from draftomen.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
+from draftomen.config import DECK_BUILDER
+from draftomen.deckbuilder import (
     BuildPool,
     DeckBuilderError,
     ManaBase,
@@ -22,9 +22,9 @@ from draftgoblin.deckbuilder import (
     select_deck_spells,
     select_mana_base,
 )
-from draftgoblin.pickengine import PickEngine, ScoredPack
-from draftgoblin.pool import DraftState, save_draft_state
-from draftgoblin.seventeen import (
+from draftomen.pickengine import PickEngine, ScoredPack
+from draftomen.pool import DraftState, save_draft_state
+from draftomen.seventeen import (
     QUICK_DRAFT_FORMAT,
     ColorPairWinRate,
     RatingSampleCounts,

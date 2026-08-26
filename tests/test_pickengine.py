@@ -3,16 +3,16 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.events import PackOfferedEvent
-from draftgoblin.pickengine import (
+from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.events import PackOfferedEvent
+from draftomen.pickengine import (
     PickEngine,
     recommendation_confidence_summary,
     recommendation_explanation,
 )
-from draftgoblin.ranking import RANKING_MODES, rank_scored_cards
-from draftgoblin.replay import format_pack_offered_event
-from draftgoblin.seventeen import (
+from draftomen.ranking import RANKING_MODES, rank_scored_cards
+from draftomen.replay import format_pack_offered_event
+from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
     ColorPairWinRate,
@@ -21,7 +21,7 @@ from draftgoblin.seventeen import (
     SeventeenLandsData,
     SeventeenLandsFormatData,
 )
-from draftgoblin.splash import card_is_castable_in_pair, splash_requirement
+from draftomen.splash import card_is_castable_in_pair, splash_requirement
 
 
 def test_pick_engine_scores_and_sorts_with_fallback_sources() -> None:
@@ -118,7 +118,7 @@ def test_freely_available_basic_land_scores_zero_and_ranks_last() -> None:
         inferred_pair=None,
     ) == (
         "Arena Plains is freely available during deck building, so it receives "
-        "0 DG points and ranks after draftable cards."
+        "0 DO points and ranks after draftable cards."
     )
 
 

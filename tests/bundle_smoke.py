@@ -1,4 +1,4 @@
-"""Launch a compiled Draftgoblin desktop bundle with deterministic mock data.
+"""Launch a compiled Draftomen desktop bundle with deterministic mock data.
 This helper intentionally imports only the standard library so the target bundle is
 what supplies the application and PySide6 runtime.
 """
@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the native bundle smoke-test argument parser."""
 
     parser = argparse.ArgumentParser(
-        description="Launch a compiled Draftgoblin bundle in deterministic mock mode.",
+        description="Launch a compiled Draftomen bundle in deterministic mock mode.",
     )
     parser.add_argument("bundle", type=Path)
     parser.add_argument(
@@ -38,7 +38,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     bundle_path = args.bundle.resolve()
     executable = _resolve_bundle_executable(bundle_path=bundle_path)
 
-    with TemporaryDirectory(prefix="draftgoblin-bundle-smoke-") as temporary_dir:
+    with TemporaryDirectory(prefix="draftomen-bundle-smoke-") as temporary_dir:
         command = [
             str(executable),
             "--provider",

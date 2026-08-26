@@ -1,6 +1,6 @@
 # Native desktop bundles
 
-Draftgoblin's native desktop bundles are unsigned artifacts built in two
+Draft Omen's native desktop bundles are unsigned artifacts built in two
 automated contexts: a manual `workflow_dispatch` run for temporary development
 testing, or as part of the tagged `v*` release workflow. Ordinary pushes,
 merges, and pull requests do not trigger native builds automatically. The macOS
@@ -17,14 +17,14 @@ Briefcase was considered but rejected for this change. Its
 uses a stronger native-template and application-layout model and documents
 unsigned uploaded artifacts, which would require migrating this existing
 PySide6 entry point and launcher conventions. `pyside6-deploy` keeps the
-current `draftgoblin.qt_gui:main` entry point and QML adapter intact while
+current `draftomen.qt_gui:main` entry point and QML adapter intact while
 still producing a `.app` or `.exe`; that smaller migration is the reason for
 the choice.
 
 The checked-in platform specs are:
 
-- `pysidedeploy.macos.spec`: `dist-native/macos-unsigned/Draftgoblin-unsigned-macos.app`
-- `pysidedeploy.windows.spec`: `dist-native/windows-unsigned/Draftgoblin-unsigned-windows.exe`
+- `pysidedeploy.macos.spec`: `dist-native/macos-unsigned/Draftomen-unsigned-macos.app`
+- `pysidedeploy.windows.spec`: `dist-native/windows-unsigned/Draftomen-unsigned-windows.exe`
 
 Both specs pin `Nuitka==4.1.3`. The workflow installs that exact deployment
 dependency before invoking `pyside6-deploy`; the existing `uv.lock` continues
@@ -41,8 +41,8 @@ Qt inputs used by the adapter:
 - modules: `Core`, `Gui`, `Qml`, `Quick`, and `QuickControls2`;
 - plugins: `imageformats`, `platforms`, `platformthemes`, and `styles`;
 - QML: `QtQuick`, `QtQuick.Controls`, and `QtQuick.Layouts` imports through the
-  `draftgoblin/qml` module;
-- resources: `draftgoblin/assets/draftgoblin_logo.png` plus the `.icns` and `.ico`
+  `draftomen/qml` module;
+- resources: `draftomen/assets/draftomen_logo.png` plus the `.icns` and `.ico`
   icons generated from that checked-in logo. These native icon files are
   checked-in source inputs, not CI build products; regenerate them from the
   logo with deterministic fixed-size PNG variants when branding changes.
@@ -52,14 +52,14 @@ Both specs keep PySide6's default unused QML plugin exclusions explicit:
 
 `NavigationRail.qml` resolves the logo relative to the bundled QML directory.
 The pyside6-deploy QML data-directory input preserves the QML and assets
-siblings, and `draftgoblin.qt_gui._qml_directory()` also falls back to a
+siblings, and `draftomen.qt_gui._qml_directory()` also falls back to a
 `qml` directory beside a compiled executable when the source package path is
 not present. Card preview images are cache data and are intentionally not
 bundle resources.
 
 No application fonts are bundled. The GUI deliberately uses Qt's system fixed
 font, so a bundle does not capture machine-specific font files. Application
-metadata remains canonical (`Draftgoblin` and the package version) through
+metadata remains canonical (`Draft Omen` and the package version) through
 `qt_gui._configure_application_metadata`; the platform spec title and output
 directory mark each result as an unsigned development artifact. On macOS,
 “unsigned” means no developer/distribution identity or notarization despite
@@ -111,12 +111,12 @@ virtual-environment overrides before launching the bundle:
 ```bash
 # macOS
 uv run python tests/bundle_smoke.py \
-  dist-native/macos-unsigned/Draftgoblin-unsigned-macos.app
+  dist-native/macos-unsigned/Draftomen-unsigned-macos.app
 
 # Windows PowerShell
 uv run python tests/bundle_smoke.py `
   --timeout 300 `
-  dist-native/windows-unsigned/Draftgoblin-unsigned-windows.exe
+  dist-native/windows-unsigned/Draftomen-unsigned-windows.exe
 ```
 
 The helper reads `Contents/Info.plist` and resolves the macOS executable named
@@ -145,19 +145,19 @@ The workflow runs separate `macos-latest` and `windows-latest` jobs. It syncs
 the locked GUI environment, installs Nuitka 4.1.3, builds with the platform
 spec, and smoke-tests the same payload shape that it uploads:
 
-- macOS: the completed `Draftgoblin-unsigned-macos.app` is placed in a
-  `Draftgoblin-unsigned-macos.tar` archive. The workflow extracts that tar into
+- macOS: the completed `Draftomen-unsigned-macos.app` is placed in a
+  `Draftomen-unsigned-macos.tar` archive. The workflow extracts that tar into
   an isolated temporary directory and runs `tests/bundle_smoke.py` against the
   extracted app before uploading the tar.
 - Windows: the workflow runs `tests/bundle_smoke.py` directly against
-  `Draftgoblin-unsigned-windows.exe` and uploads that `.exe` directly.
+  `Draftomen-unsigned-windows.exe` and uploads that `.exe` directly.
 
 ### Manual development artifacts
 
 The uploaded artifact names are:
 
-- `draftgoblin-macos-unsigned-development`;
-- `draftgoblin-windows-unsigned-development`.
+- `draftomen-macos-unsigned-development`;
+- `draftomen-windows-unsigned-development`.
 
 Download these from the **Actions** page: open the manual workflow run and
 download its artifacts from the run summary. They are GitHub Actions run
@@ -165,27 +165,27 @@ artifacts, not GitHub Release assets; they are retained only for the
 repository's configured Actions artifact-retention period and may expire.
 
 The macOS artifact download is a GitHub Actions artifact archive containing
-exactly one file, `Draftgoblin-unsigned-macos.tar`; it is not the `.app`
+exactly one file, `Draftomen-unsigned-macos.tar`; it is not the `.app`
 directory directly. Extract that downloaded artifact archive first, then
 extract the tar into an empty directory. The tar contains exactly one
-top-level directory, `Draftgoblin-unsigned-macos.app`, including its
+top-level directory, `Draftomen-unsigned-macos.app`, including its
 `Contents/` tree and executable mode bits. For example:
 
 ```bash
-unzip draftgoblin-macos-unsigned-development.zip -d macos-download
+unzip draftomen-macos-unsigned-development.zip -d macos-download
 mkdir macos-extracted
-tar -xpf macos-download/Draftgoblin-unsigned-macos.tar -C macos-extracted
+tar -xpf macos-download/Draftomen-unsigned-macos.tar -C macos-extracted
 uv run python tests/bundle_smoke.py \
-  macos-extracted/Draftgoblin-unsigned-macos.app
+  macos-extracted/Draftomen-unsigned-macos.app
 ```
 
 The Windows artifact download contains the direct
-`Draftgoblin-unsigned-windows.exe` file:
+`Draftomen-unsigned-windows.exe` file:
 
 ```powershell
-Expand-Archive draftgoblin-windows-unsigned-development.zip windows-download
+Expand-Archive draftomen-windows-unsigned-development.zip windows-download
 uv run python tests/bundle_smoke.py `
-  windows-download/Draftgoblin-unsigned-windows.exe
+  windows-download/Draftomen-unsigned-windows.exe
 ```
 
 The macOS tar is only a mode-preserving transport envelope; it is not signed
@@ -215,11 +215,11 @@ likewise overwritten when their build jobs are rerun.
 
 The persistent public assets attached to the `v1.2.3` GitHub Release are:
 
-- `draftgoblin-v1.2.3-unsigned-macos.tar`, containing the
-  `Draftgoblin-unsigned-macos.app` bundle;
-- `draftgoblin-v1.2.3-unsigned-windows.exe`, containing the Windows
+- `draftomen-v1.2.3-unsigned-macos.tar`, containing the
+  `Draftomen-unsigned-macos.app` bundle;
+- `draftomen-v1.2.3-unsigned-windows.exe`, containing the Windows
   executable; and
-- `draftgoblin-v1.2.3-unsigned-sha256sums.txt`, containing SHA-256 entries
+- `draftomen-v1.2.3-unsigned-sha256sums.txt`, containing SHA-256 entries
   for those two assets.
 
 The release filenames deliberately include both the tag and `unsigned`.

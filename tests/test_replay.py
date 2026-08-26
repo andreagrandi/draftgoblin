@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from draftgoblin.carddb import CardDatabase, build_card_database_from_bulk_file, refresh_card_database
-from draftgoblin.cli import main
-from draftgoblin.replay import replay_log_file
-from draftgoblin.seventeen import (
+from draftomen.carddb import CardDatabase, build_card_database_from_bulk_file, refresh_card_database
+from draftomen.cli import main
+from draftomen.replay import replay_log_file
+from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
     ColorPairWinRate,

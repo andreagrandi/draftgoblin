@@ -1,52 +1,52 @@
-# Draftgoblin GUI design plan for Google Stitch
+# Draft Omen GUI design plan for Google Stitch
 
 ## Purpose
 
-Create reference mockups for Draftgoblin's planned PySide6 and QML desktop application. The mockups should establish the visual language, information hierarchy, responsive behavior, and principal interaction states before production GUI integration starts.
+Create reference mockups for Draft Omen's planned PySide6 and QML desktop application. The mockups should establish the visual language, information hierarchy, responsive behavior, and principal interaction states before production GUI integration starts.
 
 These designs are references, not an implementation contract. Preserve the product behavior and state described here, but leave exact spacing, type scale, colors, and component polish open to iteration after the mockups are reviewed.
 
 ## How to use this plan in Stitch
 
 1. Upload these repository assets with this document:
-   - `docs/assets/draftgoblin_logo.png`
+   - `docs/assets/draftomen_logo.png`
    - `docs/assets/draft-pick-recommendations.png`
    - `docs/assets/suggested-deck-build.png`
 2. Give Stitch the master prompt below.
-3. Start with two visual variations of **DG-01 — Live draft, wide, ready**. Select and refine one direction before expanding it.
+3. Start with two visual variations of **DO-01 — Live draft, wide, ready**. Select and refine one direction before expanding it.
 4. Ask Stitch to generate the remaining named frames one group at a time, always reusing the selected component library and design tokens.
 5. Export both the wide and narrow variants. Do not approve a direction based on the wide desktop frame alone.
 6. Treat the existing TUI screenshots as information references only. Do not reproduce the terminal layout literally.
 
 ## Exported Stitch references
 
-The selected Stitch exports are checked in under `ui_mockups/stitch_draftgoblin_companion/`:
+The selected Stitch exports are checked in under `ui_mockups/stitch_draftomen_companion/`:
 
 - `tactical_grimoire/DESIGN.md` defines the shared visual system and design tokens.
-- `dg_01_refined_direction_hybrid/` contains the selected live-draft direction and its HTML reference.
-- `dg_06_deck_build_wide/` contains the wide deck-build reference and a complete PNG export.
-- `dg_07_deck_build_narrow/` contains the narrow deck-build reference and its HTML reference.
+- `do_01_refined_direction_hybrid/` contains the selected live-draft direction and its HTML reference.
+- `do_06_deck_build_wide/` contains the wide deck-build reference and a complete PNG export.
+- `do_07_deck_build_narrow/` contains the narrow deck-build reference and its HTML reference.
 
 These exports are visual references only. The issue acceptance criteria, shared session contract, and UI architecture skill remain authoritative for behavior. Do not copy the generated HTML into the QML application or infer unsupported application behavior from the mock data.
 
-The current Stitch drop has two screenshot-export limitations: the DG-01 `screen.png` contains an image-fetch failure placeholder, and the DG-07 `screen.png` is truncated to a header strip. Use their complete `code.html` files as the source references until replacement PNGs are exported.
+The current Stitch drop has two screenshot-export limitations: the DO-01 `screen.png` contains an image-fetch failure placeholder, and the DO-07 `screen.png` is truncated to a header strip. Use their complete `code.html` files as the source references until replacement PNGs are exported.
 
 ## Master prompt for Stitch
 
-Design a polished, modern desktop companion app for **Draftgoblin**, an unofficial, read-only Quick Draft assistant for MTG Arena. Draftgoblin watches Arena's local log, ranks the cards currently offered, explains the evidence behind its recommendation, tracks the drafted pool, and suggests a 40-card deck when the draft is complete.
+Design a polished, modern desktop companion app for **Draft Omen**, an unofficial, read-only Quick Draft assistant for MTG Arena. Draft Omen watches Arena's local log, ranks the cards currently offered, explains the evidence behind its recommendation, tracks the drafted pool, and suggests a 40-card deck when the draft is complete.
 
-Create a cohesive dark-theme desktop product using the supplied Draftgoblin logo as the brand reference. The experience should feel clever, focused, trustworthy, and slightly mischievous, but not childish. Translate the information in the supplied terminal screenshots into a genuinely graphical hierarchy; do not imitate a terminal, MTG Arena, or another tracker product.
+Create a cohesive dark-theme desktop product using the supplied Draft Omen logo as the brand reference. The experience should feel clever, focused, trustworthy, and slightly mischievous, but not childish. Translate the information in the supplied terminal screenshots into a genuinely graphical hierarchy; do not imitate a terminal, MTG Arena, or another tracker product.
 
-The most important user question during a live draft is: **"Which card is recommended, and why?"** Make the top recommendation, its Draftgoblin score, raw 17Lands win rate, grade, color fit, and supporting card details easy to understand at a glance. Secondary statistics remain available without overwhelming the main decision.
+The most important user question during a live draft is: **"Which card is recommended, and why?"** Make the top recommendation, its DO Score, raw 17Lands win rate, grade, color fit, and supporting card details easy to understand at a glance. Secondary statistics remain available without overwhelming the main decision.
 
-Draftgoblin is advisory and read-only. Selecting a row only changes the focused details. Never show a button that claims to pick a card in Arena, modify Arena, or automate gameplay. Use honest state copy such as "Watching Arena", "Waiting for the next pack", and "Recommendation updated".
+Draft Omen is advisory and read-only. Selecting a row only changes the focused details. Never show a button that claims to pick a card in Arena, modify Arena, or automate gameplay. Use honest state copy such as "Watching Arena", "Waiting for the next pack", and "Recommendation updated".
 
 Produce the named wide and narrow frames below, plus a compact component/state sheet. Use reusable components, consistent tokens, strong keyboard focus treatment, accessible contrast, scalable layouts, and restrained motion. All screens should look feasible to implement with Qt Quick Controls and QML.
 
 ## Product principles
 
 - **Recommendation first.** Live drafting is time-sensitive. The suggested card and the reason for the suggestion dominate the view.
-- **Evidence, not authority.** Keep raw 17Lands data visible alongside Draftgoblin's pool-aware score. Confidence language should acknowledge close or early picks rather than overclaim certainty.
+- **Evidence, not authority.** Keep raw 17Lands data visible alongside Draft Omen's pool-aware score. Confidence language should acknowledge close or early picks rather than overclaim certainty.
 - **Read-only companion.** The app observes Arena and presents guidance. The player always makes the actual pick in Arena.
 - **State is always clear.** The user should know whether the app is loading, waiting for Arena, following an active draft, downloading ratings, building a deck, or showing an error.
 - **Progressive disclosure.** Essential facts stay visible; dense statistics, pool detail, and methodology are available without turning the main screen into a spreadsheet.
@@ -69,11 +69,11 @@ Use a dark, low-glare workspace with a tactile fantasy-tool character. The visua
 
 ### Brand cues
 
-- Derive the primary accent from the goblin green in the supplied logo.
+- Derive the primary accent from the omen green in the supplied logo.
 - Use parchment or warm ivory for high-emphasis text and a restrained burnt-orange accent for progress, warnings, and small brand details.
 - Use charcoal and blue-black surfaces with subtle tonal separation rather than heavy outlines everywhere.
 - Reserve the five mana colors for card-color semantics. Do not reuse them as generic navigation or status colors.
-- The full logo is suitable for onboarding, empty states, and About. Use a simplified goblin mark or wordmark in the persistent app shell so branding does not consume working space.
+- The full logo is suitable for onboarding, empty states, and About. Use a simplified Omen mark or wordmark in the persistent app shell so branding does not consume working space.
 - Avoid faux-stone panels, excessive medieval ornament, neon gamer effects, glossy gradients, and constant animation.
 
 ### Typography and density
@@ -85,7 +85,7 @@ Use a dark, low-glare workspace with a tactile fantasy-tool character. The visua
 
 ### Card imagery
 
-- Treat card images as content supplied by Draftgoblin, not as background decoration.
+- Treat card images as content supplied by Draft Omen, not as background decoration.
 - Preserve the card's aspect ratio and never crop rules text in the focused preview.
 - For generated mockups, use neutral framed placeholders labelled with the card name unless supplied reference art is available. Do not synthesize new MTG card art or recreate the Arena interface.
 
@@ -93,7 +93,7 @@ Use a dark, low-glare workspace with a tactile fantasy-tool character. The visua
 
 Use one persistent shell across the main surfaces:
 
-- A compact top app bar with the Draftgoblin mark, current application phase, Arena account selector, and a settings action.
+- A compact top app bar with the Draft Omen mark, current application phase, Arena account selector, and a settings action.
 - Primary navigation for **Live Draft**, **Deck Build**, and **Backtest**. Settings may be a top-bar action rather than a fourth primary destination.
 - A persistent but unobtrusive source/status area that can show the active set, ratings source, and "Data from 17Lands" attribution.
 - Toasts are only for brief confirmations. Loading, download progress, and recoverable errors must also have a durable location in the relevant screen.
@@ -131,13 +131,13 @@ Use realistic data so the layout is tested against the actual product shape:
 - Draft position: `Pack 1 · Pick 1`
 - Pool: `0 / 42 cards`
 - Inferred pair: `Open`
-- Active ranking: `DG Score`
+- Active ranking: `DO Score`
 - Confidence: `Early/open pick — stay flexible`
 - Ratings source: `Quick Draft`
 
 Example recommendation rows:
 
-| Rank | Card | Colors | DG | 17L WR | Grade | Fit | ALSA | MV | Source |
+| Rank | Card | Colors | DO | 17L WR | Grade | Fit | ALSA | MV | Source |
 | --- | --- | --- | ---: | ---: | --- | --- | ---: | ---: | --- |
 | 1 | Outcaster Trailblazer | G | 99 | 63.6% | A- | Open | 1.30 | 3 | Quick |
 | 2 | Beastbond Outcaster | G | 87 | 61.6% | B+ | Open | 3.87 | 3 | Quick |
@@ -152,7 +152,7 @@ Long names, duplicate quantities, missing ratings, multicolor cards, and `6+` ma
 
 ## Screen and frame brief
 
-### DG-01 — Live draft, wide, ready
+### DO-01 — Live draft, wide, ready
 
 Create the primary 1440 x 900 frame.
 
@@ -160,18 +160,18 @@ The top of the workspace should show:
 
 - `Pack 1 · Pick 1`
 - `14 cards available`
-- Ranking selector: **DG Score**, **17L WR**, **ALSA**, **Mana value**
+- Ranking selector: **DO Score**, **17L WR**, **ALSA**, **Mana value**
 - Confidence copy: `Early/open pick — stay flexible`
 - Passive live state: `Watching Arena · Waiting for your pick`
 
 The main workspace should contain:
 
 1. **Recommendation list** as the dominant region.
-   - Make rank, card name, DG score, 17L WR, grade, and color fit immediately scannable.
+   - Make rank, card name, DO score, 17L WR, grade, and color fit immediately scannable.
    - Allow ALSA, mana value, and source to be visually subordinate or shown in an expanded details mode.
    - Give rank 1 a clear `Recommended` treatment without making lower rows look disabled.
    - Selecting or focusing a row updates the card detail panel only.
-2. **Focused card panel** with full card image, name, colors, type, mana value, DG score, 17L WR, grade, ALSA, fit, and source.
+2. **Focused card panel** with full card image, name, colors, type, mana value, DO score, 17L WR, grade, ALSA, fit, and source.
    - Add a brief explanation block such as `Highest pool-aware score; colors are still open.`
    - This explanation is descriptive, not a guarantee.
 3. **Pool summary** with pool count, inferred color pair, commitment, color distribution, mana curve, and recent picks.
@@ -179,18 +179,18 @@ The main workspace should contain:
 
 The current account, active set, data source, and 17Lands attribution must be available without competing with the recommendation.
 
-### DG-02 — Live draft, narrow, ready
+### DO-02 — Live draft, narrow, ready
 
-Create the 760 x 900 version of DG-01.
+Create the 760 x 900 version of DO-01.
 
 - Use vertical recommendation rows rather than a horizontally compressed table.
-- Each row should keep rank, card name, colors, DG score, 17L WR, grade, and fit visible.
+- Each row should keep rank, card name, colors, DO score, 17L WR, grade, and fit visible.
 - Put ALSA, mana value, and source in an expandable secondary line or the details pane.
 - Use a compact selector for ranking modes.
 - Place **Card details** and **Pool** behind an obvious two-option segmented control beneath or beside the list. Do not make either destination hover-only.
 - Demonstrate a focused row and a visible card preview without obscuring the pack list.
 
-### DG-03 — Waiting and readiness, wide
+### DO-03 — Waiting and readiness, wide
 
 Design the state before an active pack is available. This should feel useful, not like a blank loading screen.
 
@@ -202,7 +202,7 @@ Show a readiness checklist or status stack for:
 - Draft: `Waiting for a Quick Draft`
 - Ratings: `Set will be detected when the draft starts`
 
-Use concise supporting copy: `Start Draftgoblin before entering a Quick Draft. The app follows Arena automatically and never writes to the game.`
+Use concise supporting copy: `Start Draft Omen before entering a Quick Draft. The app follows Arena automatically and never writes to the game.`
 
 Include a small brand illustration or logo treatment, but keep the operational state more prominent than marketing copy.
 
@@ -210,17 +210,17 @@ Also design variants for:
 
 - Initial card metadata loading, with indeterminate progress.
 - No Arena account detected yet.
-- A recovered in-progress draft, clearly explaining that Draftgoblin resumed it automatically.
+- A recovered in-progress draft, clearly explaining that Draft Omen resumed it automatically.
 - Multiple known Arena accounts, using the account selector without exposing raw identifiers as the primary label.
 
-### DG-04 — Ratings missing and download progress
+### DO-04 — Ratings missing and download progress
 
 Create two related state variants, which may be presented as a modal and an inline progress panel.
 
 **Missing ratings confirmation**
 
 - Title: `Download ratings for OTJ?`
-- Explain that Draftgoblin is temporarily using neutral-prior scores.
+- Explain that Draft Omen is temporarily using neutral-prior scores.
 - Explain that Quick Draft ratings and Premier fallback data will be cached.
 - Primary action: **Download ratings**
 - Secondary action: **Not now**
@@ -233,7 +233,7 @@ Create two related state variants, which may be presented as a modal and an inli
 - Explain: `The current pack will be rescored automatically when data is ready.`
 - The rest of the app should remain readable. Do not use a blocking full-screen spinner.
 
-### DG-05 — Live draft, building colors and close pick
+### DO-05 — Live draft, building colors and close pick
 
 Create a wide variant later in a draft to exercise states that P1P1 does not show:
 
@@ -247,7 +247,7 @@ Create a wide variant later in a draft to exercise states that P1P1 does not sho
 - Make the top two recommendations visually close while still preserving their exact ranks.
 - Add a short explanation of why the recommendation fits the current pool.
 
-### DG-06 — Deck build, wide
+### DO-06 — Deck build, wide
 
 Create a 1440 x 900 completed-draft build screen.
 
@@ -279,16 +279,16 @@ Include:
 
 Do not imply that the deck can be imported into Arena. Use copy such as `Suggested deck — recreate this build in Arena.`
 
-### DG-07 — Deck build, narrow
+### DO-07 — Deck build, narrow
 
-Create the 760 x 900 version of DG-06.
+Create the 760 x 900 version of DO-06.
 
 - Keep deck size, pair, validation, and rebuild controls visible before the long card list.
 - Use collapsible sections for **Spells**, **Lands**, **Bench**, and **Why this pair**.
 - Keep the mana curve horizontally readable and labelled.
 - Demonstrate how focused card details open without permanently consuming half the narrow window.
 
-### DG-08 — Backtest report
+### DO-08 — Backtest report
 
 Create a desktop report for comparing persisted picks with what the active ranking would recommend.
 
@@ -309,13 +309,13 @@ Also provide empty and failure variants:
 - `Some pick history is missing; available picks can still be compared.`
 - Recoverable error with **Retry** and **Dismiss** actions.
 
-### DG-09 — Settings
+### DO-09 — Settings
 
 Create a focused desktop settings surface with clear groups and concise explanations.
 
 **Draft guidance**
 
-- Default ranking: DG Score, 17L WR, ALSA, or mana value.
+- Default ranking: DO Score, 17L WR, ALSA, or mana value.
 - Splash recommendations toggle with explanatory copy.
 
 **Display**
@@ -339,7 +339,7 @@ Create a focused desktop settings surface with clear groups and concise explanat
 
 Use autosave only when the saved state is clear. Otherwise provide **Save** and **Cancel**. Do not expose filesystem mutation, network implementation details, or terminal-only preferences in the UI.
 
-### DG-10 — Recoverable errors and empty states sheet
+### DO-10 — Recoverable errors and empty states sheet
 
 Create a compact state sheet demonstrating consistent visual and copy patterns for:
 
@@ -369,7 +369,7 @@ The visual prototype should communicate these behaviors:
 | Request backtest | Progress appears, followed by a structured comparison report. |
 | Retry or dismiss an error | The app publishes a new state; the UI does not mutate an error list locally. |
 
-Avoid speculative actions outside the planned product, including picking a card in Arena, dragging cards into a deck, editing card scores, social sharing, user accounts for Draftgoblin, cloud sync, marketplace features, or AI chat.
+Avoid speculative actions outside the planned product, including picking a card in Arena, dragging cards into a deck, editing card scores, social sharing, user accounts for Draft Omen, cloud sync, marketplace features, or AI chat.
 
 ## Accessibility requirements
 
@@ -404,11 +404,11 @@ Ask Stitch to include reusable examples of:
 
 Deliver:
 
-1. Two initial DG-01 visual variations for direction selection.
+1. Two initial DO-01 visual variations for direction selection.
 2. After one direction is selected, all ten named frame groups with consistent wide and narrow variants where requested.
 3. One shared component/state sheet.
 4. A small token sheet covering colors, typography, spacing, corner radii, elevation, focus, and motion.
 5. Short annotations for responsive behavior and non-obvious interactions.
 6. Export-ready mockups suitable for later use as visual references during QML implementation.
 
-Do not provide application code yet. The purpose of this Stitch pass is to review and record the visual direction before Draftgoblin's production GUI is connected to live services.
+Do not provide application code yet. The purpose of this Stitch pass is to review and record the visual direction before Draft Omen's production GUI is connected to live services.

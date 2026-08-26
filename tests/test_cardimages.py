@@ -8,8 +8,8 @@ from types import TracebackType
 
 import pytest
 
-from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.cardimages import CardImageError, CardImageService
+from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.cardimages import CardImageError, CardImageService
 
 
 class _ImageResponse:

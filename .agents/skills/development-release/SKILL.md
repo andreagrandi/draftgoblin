@@ -1,12 +1,12 @@
 ---
 name: development-release
 description: >-
-  Build and publish the rolling GitHub prerelease for a native Draftgoblin
+  Build and publish the rolling GitHub prerelease for a native Draft Omen
   development build. Use when the user says "make a new dev release" or asks
   for a new development/native prerelease build.
 ---
 
-# Make a development release
+# Make a Draft Omen development release
 
 An explicit request to make a new dev release authorizes the remote workflow
 dispatch and release verification below, but not commits, pushes, stable
@@ -15,7 +15,7 @@ those actions.
 
 Use `gh` for every GitHub operation. Set the repository once:
 ```sh
-repo=andreagrandi/draftgoblin
+repo=andreagrandi/draftomen
 ```
 ## Preflight and dispatch
 1. Run `gh auth status` and stop if authentication is unavailable.
@@ -97,19 +97,19 @@ expected_changes="${expected_changes}"$'\n'
 release_json=$(gh release view development --repo "$repo" --json tagName,isPrerelease,name,body,assets,url)
 release_url=$(printf '%s' "$release_json" | jq -r .url)
 release_title=$(printf '%s' "$release_json" | jq -r .name)
-release_date=$(printf '%s' "$release_title" | jq -Rr 'capture("^Draftgoblin v.+ development build (?<date>[0-9]{4}-[0-9]{2}-[0-9]{2}) #[0-9]+$") | .date')
+release_date=$(printf '%s' "$release_title" | jq -Rr 'capture("^Draft Omen v.+ development build (?<date>[0-9]{4}-[0-9]{2}-[0-9]{2}) #[0-9]+$") | .date')
 [ -n "$release_date" ] || { echo "Release title has no YYYY-MM-DD date." >&2; exit 1; }
 utc_date=${release_date//-/}; build_id="v${version}-dev.${utc_date}.${run_number}"
-expected_title="Draftgoblin v${version} development build ${release_date} #${run_number}"
+expected_title="Draft Omen v${version} development build ${release_date} #${run_number}"
 changes_heading="## Changes since previous release"
 expected_changes_section="${changes_heading}"$'\n\n'"${expected_changes}"
 if ! printf '%s' "$release_json" | jq -e \
   --arg title "$expected_title" --arg build "$build_id" \
   --arg workflow "$workflow_url" --arg run "$run_id" --arg commit "$head_sha" \
   --arg changes_section "$expected_changes_section" \
-  --arg macos "draftgoblin-${build_id}-unsigned-macos.tar" \
-  --arg windows "draftgoblin-${build_id}-unsigned-windows.exe" \
-  --arg checksums "draftgoblin-${build_id}-unsigned-sha256sums.txt" \
+  --arg macos "draftomen-${build_id}-unsigned-macos.tar" \
+  --arg windows "draftomen-${build_id}-unsigned-windows.exe" \
+  --arg checksums "draftomen-${build_id}-unsigned-sha256sums.txt" \
   '(.tagName == "development") and (.isPrerelease == true) and
    (.name == $title) and ((.body // "") | contains($build)) and
    ((.body // "") | contains($workflow)) and ((.body // "") | contains($run)) and

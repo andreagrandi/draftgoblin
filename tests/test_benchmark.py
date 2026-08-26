@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from draftgoblin.benchmark import (
+from draftomen.benchmark import (
     build_pick_benchmark_report_from_rows,
     format_pick_benchmark_report,
 )
-from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.cli import main
-from draftgoblin.seventeen import (
+from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.cli import main
+from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
     RatingSampleCounts,
     SeventeenCardStats,
@@ -23,7 +23,7 @@ from draftgoblin.seventeen import (
 )
 
 
-def test_pick_benchmark_compares_wr_and_dg_score_by_phase() -> None:
+def test_pick_benchmark_compares_wr_and_do_score_by_phase() -> None:
     report = build_pick_benchmark_report_from_rows(
         set_code="TST",
         event_format=PREMIER_DRAFT_FORMAT,
@@ -51,7 +51,7 @@ def test_pick_benchmark_compares_wr_and_dg_score_by_phase() -> None:
     assert report.comparison.worse_count == 0
     assert "Ranking comparison:" in output
     assert "17L WR" in output
-    assert "DG Score" in output
+    assert "DO Score" in output
     assert "Top-1" in output
     assert "Top-3" in output
     assert "Top-5" in output
@@ -59,8 +59,8 @@ def test_pick_benchmark_compares_wr_and_dg_score_by_phase() -> None:
     assert "Phase breakdown:" in output
     assert "open" in output
     assert "locked" in output
-    assert "DG vs 17L actual-pick rank: better 1 (33.3%)" in output
-    assert "Default ranking decision: DG Score is the default" in output
+    assert "DO vs 17L actual-pick rank: better 1 (33.3%)" in output
+    assert "Default ranking decision: DO Score is the default" in output
     assert "Non-ML heuristic candidate from misses" in output
 
 
@@ -92,11 +92,11 @@ def test_benchmark_picks_cli_reads_local_public_draft_data(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Draftgoblin trophy pick benchmark" in captured.out
+    assert "Draft Omen trophy pick benchmark" in captured.out
     assert "Set: TST" in captured.out
     assert "Format: PremierDraft" in captured.out
     assert "Rows: 3 compared, 0 skipped" in captured.out
-    assert "DG vs 17L actual-pick rank" in captured.out
+    assert "DO vs 17L actual-pick rank" in captured.out
     assert "benchmark-picks: loading 17Lands ratings" in captured.err
     assert "benchmark-picks: scoring public draft rows" in captured.err
     assert "benchmark-picks: done" in captured.err

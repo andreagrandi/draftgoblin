@@ -25,8 +25,8 @@ EXPECTED_EXCLUDED_QML_PLUGINS = {
     "QtTest",
     "QtWebEngine",
 }
-EXPECTED_PRODUCT_NAME = "Draftgoblin"
-EXPECTED_BUNDLE_IDENTIFIER = "io.github.andreagrandi.draftgoblin"
+EXPECTED_PRODUCT_NAME = "Draft Omen"
+EXPECTED_BUNDLE_IDENTIFIER = "io.github.andreagrandi.draftomen"
 
 
 def _read_spec(*, path: Path) -> configparser.ConfigParser:
@@ -46,7 +46,7 @@ def _create_macos_bundle(
     metadata: object,
     executable_name: str | None = "qt_gui",
 ) -> Path:
-    bundle_path = root / "Draftgoblin.app"
+    bundle_path = root / "Draftomen.app"
     executable_directory = bundle_path / "Contents" / "MacOS"
     executable_directory.mkdir(parents=True)
     if executable_name is not None:
@@ -62,7 +62,7 @@ def test_bundle_smoke_main_configures_launch_timeout(
 ) -> None:
     """The bundle smoke timeout is strict by default and configurable for CI."""
 
-    bundle_path = tmp_path / "Draftgoblin.exe"
+    bundle_path = tmp_path / "Draftomen.exe"
     bundle_path.write_bytes(b"executable")
     calls: list[dict[str, object]] = []
 
@@ -118,7 +118,7 @@ def test_macos_bundle_resolution_rejects_invalid_metadata(
 def test_macos_bundle_resolution_rejects_missing_metadata(tmp_path: Path) -> None:
     """An app without Info.plist cannot be resolved."""
 
-    bundle_path = tmp_path / "Draftgoblin.app"
+    bundle_path = tmp_path / "Draftomen.app"
     (bundle_path / "Contents" / "MacOS").mkdir(parents=True)
 
     with pytest.raises(RuntimeError, match="Missing macOS bundle metadata"):
@@ -141,7 +141,7 @@ def test_macos_bundle_resolution_rejects_missing_executable(tmp_path: Path) -> N
 def test_macos_bundle_resolution_rejects_malformed_plist(tmp_path: Path) -> None:
     """An unreadable Info.plist cannot supply an executable name."""
 
-    bundle_path = tmp_path / "Draftgoblin.app"
+    bundle_path = tmp_path / "Draftomen.app"
     contents_directory = bundle_path / "Contents"
     (contents_directory / "MacOS").mkdir(parents=True)
     (contents_directory / "Info.plist").write_bytes(b"not a plist")
@@ -153,9 +153,9 @@ def test_macos_bundle_resolution_rejects_malformed_plist(tmp_path: Path) -> None
 def test_windows_bundle_resolution_uses_exe_directly(tmp_path: Path) -> None:
     """Windows bundles continue to resolve their direct executable path."""
 
-    executable = tmp_path / "Draftgoblin.EXE"
+    executable = tmp_path / "Draftomen.EXE"
     executable.write_bytes(b"executable")
-    (tmp_path / "Draftgoblin.dll").write_bytes(b"library")
+    (tmp_path / "Draftomen.dll").write_bytes(b"library")
 
     assert _resolve_bundle_executable(bundle_path=executable) == executable
 
@@ -167,7 +167,7 @@ def test_native_specs_preserve_project_metadata() -> None:
     project_version = project["version"]
     assert project_version == "0.2.0"
     expected_common_args = {
-        "--company-name=Draftgoblin",
+        "--company-name=Draft Omen",
         f"--product-name={EXPECTED_PRODUCT_NAME}",
         f"--file-version={project_version}",
         f"--product-version={project_version}",
@@ -197,7 +197,7 @@ def test_native_specs_enumerate_runtime_inputs() -> None:
     with (PROJECT_ROOT / "pyproject.toml").open(mode="rb") as project_file:
         project_files = tomllib.load(project_file)["tool"]["pyside6-project"]["files"]
     expected_qml_files = {
-        path for path in project_files if path.startswith("draftgoblin/qml/")
+        path for path in project_files if path.startswith("draftomen/qml/")
     }
 
     for platform, spec_path in SPEC_PATHS.items():
@@ -207,7 +207,7 @@ def test_native_specs_enumerate_runtime_inputs() -> None:
         qt = spec["qt"]
         nuitka = spec["nuitka"]
 
-        assert app["title"] == f"Draftgoblin-unsigned-{platform}"
+        assert app["title"] == f"Draftomen-unsigned-{platform}"
         assert "unsigned" in app["exec_directory"]
         assert (PROJECT_ROOT / app["icon"]).is_file()
         assert app["project_file"] == "pyproject.toml"
@@ -239,18 +239,18 @@ def test_project_metadata_includes_package_sources_logo_and_no_fonts() -> None:
     declared_python_files = {
         path
         for path in project_files
-        if Path(path).parent == Path("draftgoblin") and Path(path).suffix == ".py"
+        if Path(path).parent == Path("draftomen") and Path(path).suffix == ".py"
     }
     actual_python_files = {
         path.relative_to(PROJECT_ROOT).as_posix()
-        for path in (PROJECT_ROOT / "draftgoblin").glob("*.py")
+        for path in (PROJECT_ROOT / "draftomen").glob("*.py")
     }
     assert declared_python_files == actual_python_files
 
-    assert "draftgoblin/assets/draftgoblin_logo.png" in project_files
+    assert "draftomen/assets/draftomen_logo.png" in project_files
     assert not any("font" in path.lower() for path in project_files)
     for path in project_files:
         assert (PROJECT_ROOT / path).is_file(), path
 
-    assert (PROJECT_ROOT / "draftgoblin/assets/draftgoblin.icns").read_bytes()[:4] == b"icns"
-    assert (PROJECT_ROOT / "draftgoblin/assets/draftgoblin.ico").read_bytes()[:4] == b"\x00\x00\x01\x00"
+    assert (PROJECT_ROOT / "draftomen/assets/draftomen.icns").read_bytes()[:4] == b"icns"
+    assert (PROJECT_ROOT / "draftomen/assets/draftomen.ico").read_bytes()[:4] == b"\x00\x00\x01\x00"

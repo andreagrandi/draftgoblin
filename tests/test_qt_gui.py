@@ -10,11 +10,11 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from draftgoblin import __version__
-from draftgoblin.audit import load_draft_audit_records
-from draftgoblin.carddb import CardDatabase
-from draftgoblin.pool import load_draft_state
-from draftgoblin.qt_gui import (
+from draftomen import __version__
+from draftomen.audit import load_draft_audit_records
+from draftomen.carddb import CardDatabase
+from draftomen.pool import load_draft_state
+from draftomen.qt_gui import (
     APPLICATION_NAME,
     _configure_application_metadata,
     _live_session_factory,
@@ -74,8 +74,8 @@ def test_gui_metadata_uses_canonical_version_and_logo_resource() -> None:
         "version": __version__,
         "organization": APPLICATION_NAME,
     }
-    source_logo = PROJECT_ROOT / "docs" / "assets" / "draftgoblin_logo.png"
-    runtime_logo = files("draftgoblin").joinpath("assets/draftgoblin_logo.png")
+    source_logo = PROJECT_ROOT / "docs" / "assets" / "draftomen_logo.png"
+    runtime_logo = files("draftomen").joinpath("assets/draftomen_logo.png")
     assert runtime_logo.is_file()
     assert runtime_logo.read_bytes() == source_logo.read_bytes()
 
@@ -88,7 +88,7 @@ def test_live_gui_uses_shared_metadata_augmenting_factory(
     factory_calls: list[tuple[CardDatabase, Path | None, bool]] = []
 
     monkeypatch.setattr(
-        "draftgoblin.qt_gui.load_or_refresh_card_database",
+        "draftomen.qt_gui.load_or_refresh_card_database",
         lambda *, app_dir: database,
     )
 
@@ -104,7 +104,7 @@ def test_live_gui_uses_shared_metadata_augmenting_factory(
         return lambda set_code, progress_callback: None
 
     monkeypatch.setattr(
-        "draftgoblin.qt_gui.metadata_augmenting_ratings_progress_loader",
+        "draftomen.qt_gui.metadata_augmenting_ratings_progress_loader",
         shared_loader_factory,
     )
     app_dir = tmp_path / "app"
@@ -132,7 +132,7 @@ def test_production_gui_processes_representative_arena_log_offscreen(
         [
             sys.executable,
             "-m",
-            "draftgoblin.qt_gui",
+            "draftomen.qt_gui",
             "--log-path",
             str(FIXTURE_LOG_PATH),
             "--app-dir",
@@ -191,12 +191,12 @@ from PySide6.QtQuick import QQuickItem
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
 
-from draftgoblin import __version__
-from draftgoblin.carddb import build_card_database_from_bulk_file
-from draftgoblin.cardimages import CardImageService
-from draftgoblin.qt_adapter import GuiPreferencesAdapter, LiveSessionAdapter
-from draftgoblin.qt_gui import _fixed_font_family
-from draftgoblin.session import LiveSession
+from draftomen import __version__
+from draftomen.carddb import build_card_database_from_bulk_file
+from draftomen.cardimages import CardImageService
+from draftomen.qt_adapter import GuiPreferencesAdapter, LiveSessionAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.session import LiveSession
 
 
 def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
@@ -254,7 +254,7 @@ def metadata_opener(request, timeout):
 def image_opener(request, timeout):
     del request, timeout
     return _Response(
-        (project_root / "draftgoblin" / "assets" / "draftgoblin_logo.png").read_bytes()
+        (project_root / "draftomen" / "assets" / "draftomen_logo.png").read_bytes()
     )
 
 
@@ -271,7 +271,7 @@ def load_image_database():
 
 
 project_root = Path.cwd()
-app_dir = Path(os.environ["DRAFTGOBLIN_E2E_APP_DIR"])
+app_dir = Path(os.environ["DRAFTOMEN_E2E_APP_DIR"])
 fixture_log_path = project_root / "tests" / "fixtures" / "quick-draft-msh-player.log"
 fixture_log_lines = fixture_log_path.read_text(encoding="utf-8").splitlines(keepends=True)
 log_path = app_dir / "Player.log"
@@ -303,12 +303,12 @@ application = QGuiApplication([])
 provider = LiveSessionAdapter(session_factory=factory, poll_interval_ms=10)
 preferences = GuiPreferencesAdapter(app_dir=app_dir)
 engine = QQmlApplicationEngine()
-qml_directory = project_root / "draftgoblin" / "qml"
+qml_directory = project_root / "draftomen" / "qml"
 engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
 context.setContextProperty("fixedFontFamily", _fixed_font_family())
 context.setContextProperty("sessionProvider", provider)
-context.setContextProperty("applicationTitle", "Draftgoblin")
+context.setContextProperty("applicationTitle", "Draft Omen")
 context.setContextProperty("applicationVersion", __version__)
 context.setContextProperty("guiPreferences", preferences)
 context.setContextProperty("initialSurface", "live")
@@ -450,7 +450,7 @@ finally:
     completed = _run_qml_probe(
         probe,
         timeout=20,
-        environment={"DRAFTGOBLIN_E2E_APP_DIR": str(app_dir)},
+        environment={"DRAFTOMEN_E2E_APP_DIR": str(app_dir)},
     )
 
     assert completed.returncode == 0, completed.stderr
@@ -471,10 +471,10 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from draftgoblin.mock_session import MockLiveSession
-from draftgoblin.qt_adapter import GuiPreferencesAdapter
-from draftgoblin.qt_mock import MockSessionAdapter
-from draftgoblin.session import ApplicationPhase
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_mock import MockSessionAdapter
+from draftomen.session import ApplicationPhase
 
 
 def wait_until(predicate, description):
@@ -508,12 +508,12 @@ with TemporaryDirectory() as preferences_dir:
         parent=application,
     )
     engine = QQmlApplicationEngine()
-    qml_directory = Path.cwd() / "draftgoblin" / "qml"
+    qml_directory = Path.cwd() / "draftomen" / "qml"
     engine.addImportPath(str(qml_directory))
     context = engine.rootContext()
     context.setContextProperty("fixedFontFamily", "monospace")
     context.setContextProperty("sessionProvider", provider)
-    context.setContextProperty("applicationTitle", "Draftgoblin")
+    context.setContextProperty("applicationTitle", "Draft Omen")
     context.setContextProperty("applicationVersion", "0.0")
     context.setContextProperty("guiPreferences", preferences)
     context.setContextProperty("initialSurface", "build")
@@ -570,10 +570,10 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from draftgoblin.mock_session import MockLiveSession
-from draftgoblin.qt_adapter import GuiPreferencesAdapter
-from draftgoblin.qt_mock import MockSessionAdapter
-from draftgoblin.session import ApplicationPhase, LiveSessionCommand, RequestBuild
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_mock import MockSessionAdapter
+from draftomen.session import ApplicationPhase, LiveSessionCommand, RequestBuild
 
 
 class RecordingMockSession(MockLiveSession):
@@ -615,12 +615,12 @@ with TemporaryDirectory() as preferences_dir:
         parent=application,
     )
     engine = QQmlApplicationEngine()
-    qml_directory = Path.cwd() / "draftgoblin" / "qml"
+    qml_directory = Path.cwd() / "draftomen" / "qml"
     engine.addImportPath(str(qml_directory))
     context = engine.rootContext()
     context.setContextProperty("fixedFontFamily", "monospace")
     context.setContextProperty("sessionProvider", provider)
-    context.setContextProperty("applicationTitle", "Draftgoblin")
+    context.setContextProperty("applicationTitle", "Draft Omen")
     context.setContextProperty("applicationVersion", "0.0")
     context.setContextProperty("guiPreferences", preferences)
     context.setContextProperty("initialSurface", "build")
@@ -693,12 +693,12 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from draftgoblin import __version__
-from draftgoblin.mock_session import MockLiveSession
-from draftgoblin.qt_adapter import GuiPreferencesAdapter
-from draftgoblin.qt_gui import _fixed_font_family
-from draftgoblin.qt_mock import MockSessionAdapter
-from draftgoblin.session import ChooseAccount, RequestRatingsDownload
+from draftomen import __version__
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.qt_mock import MockSessionAdapter
+from draftomen.session import ChooseAccount, RequestRatingsDownload
 
 
 class RecordingProvider(MockSessionAdapter):
@@ -717,12 +717,12 @@ provider = RecordingProvider()
 preference_dir = TemporaryDirectory()
 preferences = GuiPreferencesAdapter(app_dir=preference_dir.name)
 engine = QQmlApplicationEngine()
-qml_directory = Path.cwd() / "draftgoblin" / "qml"
+qml_directory = Path.cwd() / "draftomen" / "qml"
 engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
 context.setContextProperty("fixedFontFamily", _fixed_font_family())
 context.setContextProperty("sessionProvider", provider)
-context.setContextProperty("applicationTitle", "Draftgoblin")
+context.setContextProperty("applicationTitle", "Draft Omen")
 context.setContextProperty("applicationVersion", __version__)
 context.setContextProperty("guiPreferences", preferences)
 context.setContextProperty("initialSurface", "live")
@@ -813,11 +813,11 @@ from PySide6.QtQuick import QQuickItem
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
 
-from draftgoblin import __version__
-from draftgoblin.mock_session import MockLiveSession
-from draftgoblin.qt_adapter import GuiPreferencesAdapter
-from draftgoblin.qt_gui import _fixed_font_family
-from draftgoblin.qt_mock import MockSessionAdapter
+from draftomen import __version__
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.qt_mock import MockSessionAdapter
 
 
 def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
@@ -928,12 +928,12 @@ preferences_dir = TemporaryDirectory()
 provider = MockSessionAdapter(session=MockLiveSession(scenario="warning"))
 preferences = GuiPreferencesAdapter(app_dir=preferences_dir.name)
 engine = QQmlApplicationEngine()
-qml_directory = Path.cwd() / "draftgoblin" / "qml"
+qml_directory = Path.cwd() / "draftomen" / "qml"
 engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
 context.setContextProperty("fixedFontFamily", _fixed_font_family())
 context.setContextProperty("sessionProvider", provider)
-context.setContextProperty("applicationTitle", "Draftgoblin")
+context.setContextProperty("applicationTitle", "Draft Omen")
 context.setContextProperty("applicationVersion", __version__)
 context.setContextProperty("guiPreferences", preferences)
 context.setContextProperty("initialSurface", "live")
@@ -970,7 +970,7 @@ assert wide_row.property("stateText") == "Recommended"
 assert second_row.property("stateText") == "Selected"
 assert third_row.property("stateText") == "Keyboard focused"
 
-image_path = Path.cwd() / "draftgoblin" / "assets" / "draftgoblin_logo.png"
+image_path = Path.cwd() / "draftomen" / "assets" / "draftomen_logo.png"
 image_url = QUrl.fromLocalFile(str(image_path)).toString()
 missing_image_url = QUrl.fromLocalFile(
     str(Path(preferences_dir.name) / "missing-card-image.png")
@@ -1373,12 +1373,12 @@ from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from draftgoblin import __version__
-from draftgoblin.mock_session import MockLiveSession
-from draftgoblin.qt_adapter import GuiPreferencesAdapter
-from draftgoblin.qt_gui import _fixed_font_family
-from draftgoblin.qt_mock import MockSessionAdapter
-from draftgoblin.session import FocusBuildCard, RequestBacktest, RequestBuild
+from draftomen import __version__
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.qt_mock import MockSessionAdapter
+from draftomen.session import FocusBuildCard, RequestBacktest, RequestBuild
 
 def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
     if item.objectName() == object_name:
@@ -1441,13 +1441,13 @@ provider = RecordingProvider()
 preferences = GuiPreferencesAdapter(app_dir=preferences_dir.name)
 preferences.setCardPreview(False)
 engine = QQmlApplicationEngine()
-qml_directory = Path.cwd() / "draftgoblin" / "qml"
+qml_directory = Path.cwd() / "draftomen" / "qml"
 engine.addImportPath(str(qml_directory))
 context = engine.rootContext()
 context.setContextProperty("fixedFontFamily", _fixed_font_family())
 context.setContextProperty("sessionProvider", provider)
 context.setContextProperty("guiPreferences", preferences)
-context.setContextProperty("applicationTitle", "Draftgoblin")
+context.setContextProperty("applicationTitle", "Draft Omen")
 context.setContextProperty("applicationVersion", __version__)
 context.setContextProperty("initialSurface", "settings")
 context.setContextProperty("initialWindowWidth", 1440)
@@ -1459,13 +1459,13 @@ application.processEvents()
 assert root.property("desktopApplicationVersion") == __version__
 version_label = root.findChild(QObject, "applicationVersionLabel")
 assert version_label is not None and version_label.property("text") == "v" + __version__
-logo = find_visual_item(root.contentItem(), "draftgoblinLogo")
+logo = find_visual_item(root.contentItem(), "draftomenLogo")
 app_bar_title = root.findChild(QObject, "appBarBrandTitle")
 assert logo is not None and logo.isVisible()
 assert app_bar_title is not None and app_bar_title.isVisible() is False
 accessible_logo = QAccessible.queryAccessibleInterface(logo)
 assert accessible_logo is not None
-assert accessible_logo.text(QAccessible.Text.Name) == "Draftgoblin logo"
+assert accessible_logo.text(QAccessible.Text.Name) == "Draft Omen logo"
 
 preview_switch = root.findChild(QObject, "settingsCardPreviewSwitch")
 assert preview_switch is not None and preview_switch.property("checked") is False

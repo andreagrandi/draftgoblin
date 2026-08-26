@@ -10,7 +10,7 @@ models to presentation-only QML.
 Install the optional GUI dependency and launch the live provider:
 
 ```bash
-uv run --extra gui draftgoblin-gui
+uv run --extra gui draftomen-gui
 ```
 
 The live provider follows Arena's standard `Player.log` location and loads the
@@ -21,17 +21,17 @@ Select the deterministic provider for visual development without filesystem or
 network dependencies:
 
 ```bash
-uv run --extra gui draftgoblin-gui --provider mock
+uv run --extra gui draftomen-gui --provider mock
 ```
 
-The legacy `draftgoblin-gui-mockup` command remains an equivalent mock-only
-entry point. Use the selectors to open a specific surface, representative
-state, or responsive target:
+The `draftomen-gui --provider mock` command is the mock-only entry point. Use
+the selectors to open a specific surface, representative state, or responsive
+target:
 
 ```bash
-uv run --extra gui draftgoblin-gui --provider mock --surface build --width 1440 --height 900
-uv run --extra gui draftgoblin-gui --provider mock --surface live --width 760 --height 900
-uv run --extra gui draftgoblin-gui --provider mock --surface backtest --scenario error
+uv run --extra gui draftomen-gui --provider mock --surface build --width 1440 --height 900
+uv run --extra gui draftomen-gui --provider mock --surface live --width 760 --height 900
+uv run --extra gui draftomen-gui --provider mock --surface backtest --scenario error
 ```
 
 The mock-only top-bar selector switches between `loading`, `ready`, `empty`,
@@ -40,7 +40,7 @@ Build, and Backtest. Settings remains available from the top bar in both
 provider modes.
 
 For an automated launch and render check, use `--smoke-test`. Add
-`--screenshot /tmp/draftgoblin-gui.png` to capture the rendered window before
+`--screenshot /tmp/draftomen-gui.png` to capture the rendered window before
 the process exits.
 
 ## Responsive behavior
@@ -55,7 +55,7 @@ Resize the running window across the breakpoint to review both arrangements; no 
 The implementation follows the checked-in **Tactical Grimoire** design system and the selected Stitch references recorded in `gui-design-plan.md`:
 
 - low-glare charcoal and blue-black tonal surfaces;
-- goblin green reserved for recommendations, active navigation, and successful status;
+- omen green reserved for recommendations, active navigation, and successful status;
 - burnt orange for warnings and progress, with warm ivory primary text;
 - compact, desktop-native information density with crisp outlines and restrained radii;
 - visibly distinct recommended, selected, and keyboard-focus treatments;

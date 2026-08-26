@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from draftgoblin.mock_session import CARDS, MOCK_SCENARIOS, MockLiveSession
-from draftgoblin.session import (
+from draftomen.mock_session import CARDS, MOCK_SCENARIOS, MockLiveSession
+from draftomen.session import (
     ApplicationPhase,
     ChangeRanking,
     ChangeSplashPreference,

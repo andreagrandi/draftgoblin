@@ -26,7 +26,7 @@ Use `authenticateResponse.clientId` as the MTGA account key for current logs and
 [Accounts - Login] Logged in successfully. Display Name: FixturePlayer#12345
 ```
 
-Draftgoblin stores the latest verified display name in a separate per-account
+Draft Omen stores the latest verified display name in a separate per-account
 profile in its app data directory. That profile labels every recovered draft for
 that account, including legacy snapshots written before display-name support.
 When Arena emits a login line without its matching authentication response, the

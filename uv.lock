@@ -63,7 +63,7 @@ wheels = [
 ]
 
 [[package]]
-name = "draftgoblin"
+name = "draftomen"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [

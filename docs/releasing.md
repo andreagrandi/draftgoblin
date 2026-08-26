@@ -1,6 +1,6 @@
-# Releasing Draftgoblin
+# Releasing Draft Omen
 
-Stable Draftgoblin releases publish a Python wheel and source distribution to
+Stable Draft Omen releases publish a Python wheel and source distribution to
 PyPI, generate, install, test, and publish a Homebrew formula to
 `andreagrandi/homebrew-tap`, and create a public GitHub Release with the
 version's native bundle assets and changelog body. Releases use GitHub Actions
@@ -44,7 +44,7 @@ that changelog promotion with the version change before merging and tagging.
 
 Development releases are native-only builds for manual testing. The workflow creates or updates the GitHub prerelease with the mutable tag `development`; it does not create a version tag or invoke the stable release workflow. The rolling prerelease is always available at the stable URL:
 
-<https://github.com/andreagrandi/draftgoblin/releases/tag/development>
+<https://github.com/andreagrandi/draftomen/releases/tag/development>
 
 Each build uses this identifier:
 
@@ -57,7 +57,7 @@ v<VERSION>-dev.<YYYYMMDD>.<RUN_NUMBER>
 progresses monotonically, and does not change when that run is rerun. The
 release title and notes identify the same version, UTC date, and progressive
 run number. For example, run 7 for version `0.2.0` on 2026-08-25 uses
-`v0.2.0-dev.20260825.7` and the title `Draftgoblin v0.2.0 development build
+`v0.2.0-dev.20260825.7` and the title `Draft Omen v0.2.0 development build
 2026-08-25 #7`.
 
 The rolling prerelease notes retain this build metadata and then include the
@@ -70,9 +70,9 @@ extracted changelog content.
 The rolling prerelease contains exactly three unsigned assets for the current
 build:
 
-- `draftgoblin-<build-id>-unsigned-macos.tar`
-- `draftgoblin-<build-id>-unsigned-windows.exe`
-- `draftgoblin-<build-id>-unsigned-sha256sums.txt`
+- `draftomen-<build-id>-unsigned-macos.tar`
+- `draftomen-<build-id>-unsigned-windows.exe`
+- `draftomen-<build-id>-unsigned-sha256sums.txt`
 
 The checksum file contains SHA-256 checksums for the macOS and Windows assets.
 Development releases do not publish Python packages to PyPI, update
@@ -81,19 +81,19 @@ Homebrew, or replace an immutable stable release.
 ## One-time setup
 
 1. Sign in to PyPI and create a pending Trusted Publisher with:
-   - PyPI project name: `draftgoblin`
+   - PyPI project name: `draftomen`
    - GitHub owner: `andreagrandi`
-   - GitHub repository: `draftgoblin`
+   - GitHub repository: `draftomen`
    - Workflow filename: `release.yml`
    - Environment name: `pypi`
 2. Create a GitHub environment named `pypi`.
 3. Configure the `pypi` environment to require manual approval before deployment.
 4. Add a write-enabled SSH deploy key to `andreagrandi/homebrew-tap`.
-5. Store its private key in `andreagrandi/draftgoblin` as an Actions secret named `HOMEBREW_TAP_DEPLOY_KEY`.
+5. Store its private key in `andreagrandi/draftomen` as an Actions secret named `HOMEBREW_TAP_DEPLOY_KEY`.
 
 Once configured, tagged releases update the Homebrew formula automatically. No manual formula generation or tap update is required.
 
-The pending publisher creates the PyPI project on the first successful release. If PyPI rejects the project name, choose a new distribution name in `pyproject.toml` while retaining the `draftgoblin` console command.
+The pending publisher creates the PyPI project on the first successful release. If PyPI rejects the project name, choose a new distribution name in `pyproject.toml` while retaining the `draftomen` console command.
 
 ## Publish a release
 
@@ -129,7 +129,7 @@ gate, builds and validates both distributions, installs and smoke-tests the
 wheel on macOS and Windows, and waits for approval before publishing. After
 PyPI succeeds, it resolves the immutable source archive, pins all Python
 resources, installs and tests the generated formula, pushes
-`Formula/draftgoblin.rb` to the Homebrew tap, and creates or updates the public
+`Formula/draftomen.rb` to the Homebrew tap, and creates or updates the public
 GitHub Release with the dated changelog body and native bundle assets.
 
 ## Verify the published release
@@ -137,10 +137,10 @@ GitHub Release with the dated changelog body and native bundle assets.
 Install the exact published version in an isolated environment:
 
 ```bash
-uvx draftgoblin@<version> --version
+uvx draftomen@<version> --version
 brew update
-brew install andreagrandi/tap/draftgoblin
-draftgoblin --version
+brew install andreagrandi/tap/draftomen
+draftomen --version
 ```
 
 The public GitHub Release for `v<version>` must be published with the promoted

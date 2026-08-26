@@ -1,10 +1,10 @@
-# PRD — Draftgoblin (CLI/TUI)
+# PRD — Draft Omen (CLI/TUI)
 
 *An unofficial Quick Draft assistant for MTG Arena.*
 
 | | |
 |---|---|
-| **Name** | Draftgoblin — binary/command: `draftgoblin` |
+| **Name** | Draft Omen — binary/command: `draftomen` |
 | **Status** | Draft v1.2 |
 | **Date** | 2026-07-03 |
 | **Platform** | macOS (primary target); cross-platform capable (Python) — Windows supported best-effort |
@@ -154,7 +154,7 @@ Both defaults derive from the running OS user's home directory, which is what gu
 - FR-3.3 Fallback chain: QuickDraft data → PremierDraft data (flagged in UI) → neutral prior.
 - FR-3.4 Color-pair win rates for the set (10 two-color pairs) fetched and cached on the same cadence.
 - FR-3.5 Attribution line "Card data from 17Lands (17lands.com)" visible in the TUI footer and on build sheets.
-- FR-3.6 All caches and state live under a single app data directory (e.g., `~/.draftgoblin/`), with per-account subdirectories for draft state.
+- FR-3.6 All caches and state live under a single app data directory (e.g., `~/.draftomen/`), with per-account subdirectories for draft state.
 - FR-3.7 Before P1P1, show exactly one set-level 0–100 reliability value derived from aggregate Quick Draft coverage, Premier fallback coverage, and sample depth. Hide it when the first pack appears. This value is presentation-only and must never enter card scoring, ranking, fallback resolution, color commitment, backtests, benchmarks, or deck building.
 
 ### FR-4 Pick engine & pick display
@@ -186,7 +186,7 @@ Both defaults derive from the running OS user's home directory, which is what gu
 
 - FR-6.1 **Live mode is a TUI** (full-screen terminal app): pack panel (score-sorted table, FR-4.6), sidebar with pool summary (color distribution bar, mana curve sparkline, last picks), footer status bar (account, pair, pick counter, data source, 17lands attribution).
 - FR-6.2 On draft completion, the TUI switches to the **build view** (build sheet + bench), with a keybind to force a rebuild with another pair.
-- FR-6.3 Minimal keybindings: quit, toggle secondary stat columns, cycle ranking (17L WR / DG score / ALSA / MV), open build view, rebuild with pair override, and reopen the missing-ratings download offer.
+- FR-6.3 Minimal keybindings: quit, toggle secondary stat columns, cycle ranking (17L WR / DO score / ALSA / MV), open build view, rebuild with pair override, and reopen the missing-ratings download offer.
 - FR-6.4 `replay <logfile>` and `build --pool <file>` run in **plain-text mode** (deterministic, pipe-friendly, no TUI) for testing and scripting. `watch --plain` also available for minimal environments.
 - FR-6.5 Graceful degradation on narrow terminals (hide secondary columns first).
 
@@ -225,7 +225,7 @@ Both defaults derive from the running OS user's home directory, which is what gu
 ### 7.2 Modules
 
 ```
-draftgoblin/
+draftomen/
   paths.py        # FR-1.1 / NFR-8: per-OS log path & app-dir resolution
   logfollow.py    # FR-1: offset-persisted poller, rotation handling
   events.py       # FR-2: account detection, quick-draft events, completion detection
@@ -235,7 +235,7 @@ draftgoblin/
   deckbuilder.py  # FR-5: pair selection, constrained fill, mana base, similarity report
   pool.py         # per-(account, draft) state & persistence
   tui.py          # FR-6: Textual app (pack view, build view)
-  cli.py          # `draftgoblin watch | replay | build | refresh-data`
+  cli.py          # `draftomen watch | replay | build | refresh-data`
   config.py       # NFR-7: tunables
 tests/fixtures/   # captured Player.log files (M0 deliverable)
 ```
@@ -318,15 +318,15 @@ M0–M5 are each sized as a weekend-or-less chunk; the TUI (M6) is deliberately 
 
 ## 12. Naming & branding
 
-- **Name:** Draftgoblin. Command/binary, package, and app-dir all use `draftgoblin`. Chosen for memorability, terminal-friendliness, and distance from existing tools in the space (Untapped.gg, Arena Tutor, 17Lands, Draftsim, Draftmancer, MTGA Assistant, etc.). "SnapPick" was considered and rejected (existing iOS app and Chrome extension).
+- **Name:** Draft Omen. Command/binary, package, and app-dir all use `draftomen`. Chosen for memorability, terminal-friendliness, and distance from existing tools in the space (Untapped.gg, Arena Tutor, 17Lands, Draftsim, Draftmancer, MTGA Assistant, etc.). "SnapPick" was considered and rejected (existing iOS app and Chrome extension).
 - **Trademark constraint:** per WotC's Fan Content Policy, Wizards trademarks (including "Magic: The Gathering," "MTG," "Magic," and Arena branding) must not be incorporated into the project name or logo. They may be used descriptively in prose (e.g., the tagline "an unofficial Quick Draft assistant for MTG Arena"), which is nominative use.
 - **No confusion:** nothing in the branding may imply endorsement by, or affiliation with, Wizards of the Coast or 17Lands.
 - **Required disclaimer** (README, `--version` output, and any published page):
 
-  > Draftgoblin is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC. Card data from 17Lands (17lands.com); 17Lands does not endorse this tool.
+  > Draft Omen is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC. Card data from 17Lands (17lands.com); 17Lands does not endorse this tool.
 
 - **Before first publication:** re-verify name availability on GitHub/PyPI and register the PyPI name early.
 
 ---
 
-*Draftgoblin is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC. Card data from 17Lands (17lands.com); this tool is unaffiliated with and not endorsed by 17Lands.*
+*Draft Omen is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC. Card data from 17Lands (17lands.com); this tool is unaffiliated with and not endorsed by 17Lands.*

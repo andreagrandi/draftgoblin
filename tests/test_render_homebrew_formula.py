@@ -13,7 +13,7 @@ from scripts.render_homebrew_formula import (
 )
 
 SOURCE_URL = (
-    "https://files.pythonhosted.org/packages/example/draftgoblin-0.3.0.tar.gz"
+    "https://files.pythonhosted.org/packages/example/draftomen-0.3.0.tar.gz"
 )
 SOURCE_SHA256 = "a" * 64
 
@@ -63,7 +63,7 @@ def test_resolve_source_distribution_returns_the_unique_sdist() -> None:
                 "urls": [
                     {
                         "packagetype": "sdist",
-                        "url": "https://example.com/draftgoblin.tar.gz",
+                        "url": "https://example.com/draftomen.tar.gz",
                         "digests": {"sha256": SOURCE_SHA256},
                     }
                 ],
@@ -84,8 +84,8 @@ def test_resolve_source_distribution_rejects_invalid_metadata(
 
 
 def test_render_formula_replaces_source_placeholders(tmp_path: Path) -> None:
-    template_path = tmp_path / "draftgoblin.rb.in"
-    output_path = tmp_path / "draftgoblin.rb"
+    template_path = tmp_path / "draftomen.rb.in"
+    output_path = tmp_path / "draftomen.rb"
     template_path.write_text(
         data="url \"$PYPI_URL\"\nsha256 \"$PYPI_SHA256\"\n",
         encoding="utf-8",

@@ -1,8 +1,8 @@
 # ML-based pick recommendations
 
 This document evaluates a future machine-learning recommendation track for
-Draftgoblin. It is a research and architecture decision, not a claim that the
-current heuristic should be replaced. DG Score remains the production default
+Draft Omen. It is a research and architecture decision, not a claim that the
+current heuristic should be replaced. DO Score remains the production default
 and the existing trophy-draft benchmark remains the baseline.
 
 ## Decision
@@ -15,8 +15,8 @@ prototype because the data is tabular, packs have variable sizes, training can
 group candidates by pick, and prediction produces one score per candidate.
 
 The model must begin as an offline comparison only. It may advance to a separate
-runtime-integration issue only after it beats DG Score on held-out data under the
-evaluation gate below. Even then, Draftgoblin should add a model-neutral
+runtime-integration issue only after it beats DO Score on held-out data under the
+evaluation gate below. Even then, Draft Omen should add a model-neutral
 recommendation layer and retain the heuristic as an automatic fallback. The ML
 model should augment the current engine before it is considered as a
 replacement.
@@ -78,11 +78,11 @@ day-one model for unseen cards.
 - 17Lands replay data is much larger and describes game actions rather than the
   decision context needed for pick ranking. Revisit it only for a later
   gameplay-aware research question.
-- The card-ratings and color-ratings endpoints already used by Draftgoblin
+- The card-ratings and color-ratings endpoints already used by Draft Omen
   remain inputs to the heuristic baseline. They should not be scraped into a
   training corpus: 17Lands discourages automated API scraping and does not
   guarantee stable endpoint shapes.
-- Local Draftgoblin histories are suitable for private, user-controlled
+- Local Draft Omen histories are suitable for private, user-controlled
   backtests, but they are too small and potentially identifiable for a shared
   training corpus. They must not be uploaded or collected automatically.
 
@@ -152,7 +152,7 @@ skill:
 
 Aggregate card statistics may be tested only if they are recomputed strictly
 from the training window. The primary experiment should omit them so the
-comparison cannot benefit from post-cutoff information. DG Score should use one
+comparison cannot benefit from post-cutoff information. DO Score should use one
 frozen ratings snapshot across the comparison, matching the existing
 retrospective benchmark; the report must identify that snapshot and note that
 this is calibration rather than a time-causal simulation.
@@ -164,7 +164,7 @@ Use LightGBM's
 with the `lambdarank` objective. Pass pack sizes as the ranking groups and
 evaluate NDCG at ranks 1, 3, and 5 during training. Use a fixed seed, early
 stopping on the validation window, and record all parameters. LightGBM is a
-research-only dependency at this stage and must not be added to Draftgoblin's
+research-only dependency at this stage and must not be added to Draft Omen's
 runtime dependency group.
 
 Each future model artifact needs a manifest containing:
@@ -175,7 +175,7 @@ Each future model artifact needs a manifest containing:
 - source URLs, retrieval dates, and licenses;
 - feature names and preprocessing rules;
 - model parameters, random seed, and evaluation metrics;
-- model checksum and the minimum compatible Draftgoblin version.
+- model checksum and the minimum compatible Draft Omen version.
 
 Artifacts should be local and deterministic. Runtime inference must not call a
 hosted model or upload draft state.
@@ -191,7 +191,7 @@ testing whether one model generalizes to unseen cards.
 Score the exact same eligible test picks with:
 
 1. raw 17Lands win-rate ranking;
-2. the current DG Score `PickEngine`;
+2. the current DO Score `PickEngine`;
 3. the ML ranker.
 
 Report top-1, top-3, and top-5 historical-pick agreement, mean actual-pick rank,
@@ -202,20 +202,20 @@ presenting those correlations as causal.
 
 Use paired bootstrap resampling clustered by `draft_id` so all picks from a
 draft stay together. Publish the point estimate and 95% confidence interval for
-the ML-minus-DG difference.
+the ML-minus-DO difference.
 
 The ML model may advance to runtime-integration work only when:
 
-- its test-set mean reciprocal rank improvement over DG Score has a paired 95%
+- its test-set mean reciprocal rank improvement over DO Score has a paired 95%
   confidence interval excluding zero on at least two set/format datasets;
 - no `open`, `building`, or `locked` phase loses more than one percentage point
   of top-3 agreement;
 - skipped and unresolved-row rates are reported and are comparable between
   models;
-- local prediction for one pack fits within Draftgoblin's 1.5-second display
+- local prediction for one pack fits within Draft Omen's 1.5-second display
   latency budget.
 
-Failing the gate is a useful result. It means DG Score remains the default and
+Failing the gate is a useful result. It means DO Score remains the default and
 the research report should identify the largest error strata before proposing a
 more complex model.
 
@@ -261,7 +261,7 @@ The future contract should contain:
 A heuristic adapter should wrap the current `PickEngine`; an ML adapter should
 load only an exact set/format and feature-schema match; and a hybrid adapter may
 blend or select between them only after separate evaluation. Missing artifacts,
-schema mismatches, load failures, or prediction errors must fall back to DG
+schema mismatches, load failures, or prediction errors must fall back to DO
 Score without interrupting live drafting. The active source and fallback must
 remain visible, and 17Lands attribution must remain present.
 
@@ -278,5 +278,5 @@ the first artifact's size and license are known.
 | Historical sources and constraints | Use public draft dumps, optionally join public game data, reuse existing card metadata, and enforce the licensing and privacy rules above. |
 | Candidate model inputs | Use only current pack, pre-pick pool, position, set/format, and available card metadata; exclude identifiers and future information. |
 | Labels and risks | Use the human pick as an imitation label, keep outcomes secondary, and report the listed human, survivor, skill, outcome, drift, and format biases. |
-| Offline comparison | Compare raw 17L WR, DG Score, and ML on identical chronological draft-level holdouts with clustered confidence intervals and the explicit promotion gate. |
-| Future architecture | Add a model-neutral recommender boundary only after the gate, augment first, and retain DG Score as the automatic fallback. |
+| Offline comparison | Compare raw 17L WR, DO Score, and ML on identical chronological draft-level holdouts with clustered confidence intervals and the explicit promotion gate. |
+| Future architecture | Add a model-neutral recommender boundary only after the gate, augment first, and retain DO Score as the automatic fallback. |

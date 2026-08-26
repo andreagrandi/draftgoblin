@@ -8,14 +8,14 @@ from typing import NoReturn
 
 import pytest
 
-from draftgoblin import __version__
-from draftgoblin import config
-from draftgoblin import cli
-from draftgoblin.audit import load_draft_audit_records
-from draftgoblin.carddb import CardDatabase
-from draftgoblin.cli import build_parser, main
-from draftgoblin.pool import DraftState, load_draft_state, save_draft_state
-from draftgoblin.seventeen import (
+from draftomen import __version__
+from draftomen import config
+from draftomen import cli
+from draftomen.audit import load_draft_audit_records
+from draftomen.carddb import CardDatabase
+from draftomen.cli import build_parser, main
+from draftomen.pool import DraftState, load_draft_state, save_draft_state
+from draftomen.seventeen import (
     SeventeenLandsError,
     seventeen_lands_structure_targets_cache_path,
 )
@@ -31,7 +31,7 @@ FIXTURE_DRAFT_ID = "00000000-0000-4000-8000-000000000004"
 
 
 def test_package_version_matches_installed_distribution_metadata() -> None:
-    assert __version__ == version(distribution_name="draftgoblin")
+    assert __version__ == version(distribution_name="draftomen")
 
 
 def test_version_output_includes_required_disclaimer(
@@ -42,9 +42,9 @@ def test_version_output_includes_required_disclaimer(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert f"draftgoblin {__version__}" in captured.out
+    assert f"draftomen {__version__}" in captured.out
     assert (
-        "Draftgoblin is unofficial Fan Content permitted under the Fan Content Policy."
+        "Draft Omen is unofficial Fan Content permitted under the Fan Content Policy."
         in captured.out
     )
     assert "17Lands does not endorse this tool." in captured.out

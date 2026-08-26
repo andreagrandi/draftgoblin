@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-import draftgoblin.preferences as preferences_module
-from draftgoblin.preferences import (
+import draftomen.preferences as preferences_module
+from draftomen.preferences import (
     GuiDisplayPreferences,
     TuiVisibilityPreferences,
     gui_preferences_path,

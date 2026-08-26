@@ -10,17 +10,17 @@ from pathlib import Path
 
 import pytest
 
-import draftgoblin.session as session_module
-from draftgoblin.audit import load_draft_audit_records
-from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.cardimages import CardImageService
-from draftgoblin.events import (
+import draftomen.session as session_module
+from draftomen.audit import load_draft_audit_records
+from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.cardimages import CardImageService
+from draftomen.events import (
     AccountEvent,
     DraftStartedEvent,
     PackOfferedEvent,
     QuickDraftDetectedEvent,
 )
-from draftgoblin.pool import (
+from draftomen.pool import (
     DraftPick,
     DraftPoolStore,
     DraftState,
@@ -28,7 +28,7 @@ from draftgoblin.pool import (
     load_draft_state,
     save_draft_state,
 )
-from draftgoblin.session import (
+from draftomen.session import (
     AccountIdentity,
     ApplicationPhase,
     ApplicationStatus,
@@ -67,7 +67,7 @@ from draftgoblin.session import (
     RetryError,
     SessionError,
 )
-from draftgoblin.seventeen import (
+from draftomen.seventeen import (
     DownloadProgressCallback,
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
@@ -89,7 +89,7 @@ def test_default_live_session_snapshot_has_neutral_initial_state() -> None:
 
     assert snapshot.status == ApplicationStatus(
         phase=ApplicationPhase.STARTING,
-        message="Starting Draftgoblin.",
+        message="Starting Draft Omen.",
     )
     assert snapshot.accounts == ()
     assert snapshot.active_account is None
@@ -295,7 +295,7 @@ def test_live_session_commands_capture_explicit_user_intentions() -> None:
 
 
 def test_session_contract_does_not_import_frontend_frameworks() -> None:
-    source = (PROJECT_ROOT / "draftgoblin" / "session.py").read_text(
+    source = (PROJECT_ROOT / "draftomen" / "session.py").read_text(
         encoding="utf-8"
     )
     tree = ast.parse(source)
@@ -669,7 +669,7 @@ def test_live_session_loads_cached_ratings_scores_all_ranking_modes_and_audits_c
         recommendation.explanation for recommendation in recommendations
     )
     assert all(
-        explanation is not None and "DG-point candidate" in explanation
+        explanation is not None and "DO-point candidate" in explanation
         for explanation in explanations
     )
     top_recommendation = recommendations[0]
