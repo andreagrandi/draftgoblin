@@ -6,7 +6,7 @@ The `build` subcommand runs the v1 deck-builder stages that are available in pla
 2. Select deck spells for the chosen pair under cached empirical targets or Limited fallback defaults.
 3. Add a mana base and print a 40-card build sheet with bench cards.
 
-`replay` and `watch --plain` also run these stages automatically when a draft completion event is parsed. Running `draftomen` with no subcommand starts watch mode and scans startup logs by default, so a just-finished draft should open directly into the build view.
+`draftomen-tui replay` and `draftomen-tui watch --plain` also run these stages automatically when a draft completion event is parsed. Running `draftomen-tui` with no subcommand starts watch mode and scans startup logs by default, so a just-finished draft should open directly into the build view.
 
 ## Eligible spells
 

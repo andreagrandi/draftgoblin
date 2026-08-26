@@ -50,8 +50,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Sync GUI dependencies
-        run: uv sync --locked --extra gui
+      - name: Sync dependencies
+        run: uv sync --locked
 
       - name: Install pinned Nuitka deployment dependency
         run: uv pip install "Nuitka==4.1.3"

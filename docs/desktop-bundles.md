@@ -67,10 +67,10 @@ Nuitka's required ad-hoc signature.
 
 ## Local build and inspection
 
-Install the locked GUI dependencies and the pinned deployment dependency:
+Install the locked project dependencies and the pinned deployment dependency:
 
 ```bash
-uv sync --locked --extra gui
+uv sync --locked
 uv pip install "Nuitka==4.1.3"
 ```
 
@@ -142,7 +142,7 @@ runtime caches, so the bundle can be visually inspected without live services.
   and ordinary pushes or merges do not trigger native builds.
 
 The workflow runs separate `macos-latest` and `windows-latest` jobs. It syncs
-the locked GUI environment, installs Nuitka 4.1.3, builds with the platform
+the locked project environment, installs Nuitka 4.1.3, builds with the platform
 spec, and smoke-tests the same payload shape that it uploads:
 
 - macOS: the completed `Draftomen-unsigned-macos.app` is placed in a

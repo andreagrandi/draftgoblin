@@ -179,29 +179,33 @@ async def _assert_one_set_reliability_value_only_before_p1p1(
     tmp_path: Path,
 ) -> None:
     app = _tui_app(tmp_path=tmp_path, ratings_loader=_graded_ratings_data)
+    expected_reliability = (
+        "17Lands reliability for MSH — Marvel Super Heroes Quick Draft: "
+        "Medium — 58/100"
+    )
 
     async with app.run_test(size=(120, 24)) as pilot:
         app.process_lines(lines=_first_pack_lines()[:3])
-        for _ in range(10):
+        readiness = app.query_one("#pre-draft-readiness", Static)
+        for _ in range(40):
             await pilot.pause(0.05)
-            if "MSH" not in app.loading_rating_sets:
+            readiness_text = str(readiness.render())
+            if expected_reliability in readiness_text:
                 break
 
-        readiness = app.query_one("#pre-draft-readiness", Static)
         readiness_text = str(readiness.render())
         assert readiness.display
-        assert (
-            "17Lands reliability for MSH — Marvel Super Heroes Quick Draft: "
-            "Medium — 58/100"
-            in readiness_text
-        )
+        assert expected_reliability in readiness_text
         assert readiness_text.count("/100") == 1
-        assert app.query_one("#pack-table", DataTable).display is False
+        table = app.query_one("#pack-table", DataTable)
+        assert table.display is False
 
         app.process_lines(lines=_first_pack_lines()[3:])
-        await pilot.pause()
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if readiness.display is False and table.display and table.row_count == 14:
+                break
 
-        table = app.query_one("#pack-table", DataTable)
         assert readiness.display is False
         assert table.display
         assert table.row_count == 14
@@ -2028,7 +2032,7 @@ async def _assert_card_metadata_load_failure_is_visible(tmp_path: Path) -> None:
         assert not table.loading
         assert table.row_count == 0
         assert "Card metadata failed to load: Scryfall is unavailable" in status
-        assert "Run `draftomen refresh-data`" in status
+        assert "Run `draftomen-tui refresh-data`" in status
 
 
 def test_tui_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:

@@ -103,3 +103,25 @@ def test_render_formula_replaces_source_placeholders(tmp_path: Path) -> None:
     assert output_path.read_text(encoding="utf-8") == (
         f"url \"{SOURCE_URL}\"\nsha256 \"{SOURCE_SHA256}\"\n"
     )
+
+
+def test_render_formula_preserves_homebrew_pyside_dependency_contract(
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "draftomen.rb"
+
+    render_formula(
+        template_path=PROJECT_ROOT / ".github/homebrew/draftomen.rb.in",
+        output_path=output_path,
+        source_distribution=SourceDistribution(
+            url=SOURCE_URL,
+            sha256=SOURCE_SHA256,
+        ),
+    )
+
+    rendered_formula = output_path.read_text(encoding="utf-8")
+    assert 'depends_on "pyside"' in rendered_formula
+    assert (
+        'pypi_packages package_name:     "draftomen",\n'
+        '                exclude_packages: ["pillow", "pyside6"]'
+    ) in rendered_formula

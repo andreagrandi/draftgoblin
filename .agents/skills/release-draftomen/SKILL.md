@@ -111,8 +111,10 @@ and retry publication. If PyPI contains `X.Y.Z`, never move or delete
 ## Verify the public release
 
 Use fresh temporary uv cache and tool directories to install
-`draftomen==X.Y.Z` from PyPI, then run `draftomen --version`. Update the tap,
-install or upgrade the Homebrew formula, and check its version separately.
+`draftomen==X.Y.Z` from PyPI, then run `draftomen-tui --version` and a
+deterministic `draftomen --provider mock --smoke-test`. Update the tap, install
+or upgrade the Homebrew formula, and check its `draftomen-tui --version`
+output separately.
 Inspect `gh release view vX.Y.Z` and confirm it is published, its body contains
 the promoted dated changelog entries, and its native assets and checksum file
 are present. Confirm:
@@ -121,7 +123,7 @@ are present. Confirm:
 - the public GitHub Release for `vX.Y.Z` exists with the expected changelog body;
 - the public PyPI version page exists;
 - `andreagrandi/homebrew-tap` contains `Formula/draftomen.rb` for the release;
-- the installed command reports exactly `X.Y.Z`;
+- the installed `draftomen-tui` command reports exactly `X.Y.Z`;
 - local `master` is clean and synchronized.
 
 Report the version, tag, workflow URL, GitHub Release URL, PyPI URL, and PyPI

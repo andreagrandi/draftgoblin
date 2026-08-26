@@ -9,7 +9,7 @@ Draft Omen can benchmark pick recommendations against 17Lands public draft data 
 3. Run the benchmark against the local dump:
 
    ```bash
-   uv run draftomen benchmark-picks \
+   uv run draftomen-tui benchmark-picks \
      --set-code TMT \
      --format PremierDraft \
      --draft-data-file path/to/draft_data_public.TMT.PremierDraft.csv.gz
@@ -20,8 +20,8 @@ Draft Omen can benchmark pick recommendations against 17Lands public draft data 
 Run at least two set/format pairs before changing recommendation defaults again, for example one PremierDraft dump and one TradDraft dump:
 
 ```bash
-uv run draftomen benchmark-picks --set-code TMT --format PremierDraft --draft-data-file path/to/draft_data_public.TMT.PremierDraft.csv.gz
-uv run draftomen benchmark-picks --set-code TMT --format TradDraft --draft-data-file path/to/draft_data_public.TMT.TradDraft.csv.gz
+uv run draftomen-tui benchmark-picks --set-code TMT --format PremierDraft --draft-data-file path/to/draft_data_public.TMT.PremierDraft.csv.gz
+uv run draftomen-tui benchmark-picks --set-code TMT --format TradDraft --draft-data-file path/to/draft_data_public.TMT.TradDraft.csv.gz
 ```
 
 The command filters to trophy drafts by default: seven wins for Premier/Quick-style drafts and three wins for Traditional drafts. Use `--include-non-trophy` only for exploratory comparisons.
@@ -29,7 +29,7 @@ The command filters to trophy drafts by default: seven wins for Premier/Quick-st
 Full public draft dumps are large, so the scoring step can take a few minutes. For a quick smoke test before the full run, add `--max-drafts 200`:
 
 ```bash
-uv run draftomen benchmark-picks \
+uv run draftomen-tui benchmark-picks \
   --set-code TMT \
   --format PremierDraft \
   --draft-data-file path/to/draft_data_public.TMT.PremierDraft.csv.gz \

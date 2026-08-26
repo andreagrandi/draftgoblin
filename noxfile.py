@@ -15,7 +15,7 @@ QML_DIRECTORY = PROJECT_ROOT / "draftomen" / "qml"
 
 @nox.session(python=False)
 def gui(session: nox.Session) -> None:
-    session.run("uv", "sync", "--locked", "--extra", "gui", external=True)
+    session.run("uv", "sync", "--locked", external=True)
     session.run(
         "uv",
         "run",
@@ -39,7 +39,7 @@ def gui(session: nox.Session) -> None:
     session.run(
         "uv",
         "run",
-        "draftomen-gui",
+        "draftomen",
         "--provider",
         "mock",
         "--smoke-test",
@@ -51,7 +51,7 @@ def gui(session: nox.Session) -> None:
 def ci(session: nox.Session) -> None:
     session.run("uv", "run", "pytest", external=True)
     _run_replay_regressions(session=session)
-    session.run("uv", "run", "draftomen", "--version", external=True)
+    session.run("uv", "run", "draftomen-tui", "--version", external=True)
     session.run("git", "diff", "--check", external=True)
 
 
@@ -72,7 +72,7 @@ def _run_replay_regressions(*, session: nox.Session) -> None:
             actual_output = session.run(
                 "uv",
                 "run",
-                "draftomen",
+                "draftomen-tui",
                 "replay",
                 str(logfile),
                 "--bulk-file",

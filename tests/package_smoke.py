@@ -1,5 +1,5 @@
 """Smoke-test an installable Draftomen distribution artifact.
-Exercise the packaged console command in an isolated uv tool environment.
+Exercise both packaged entry points in an isolated uv tool environment.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     with TemporaryDirectory(prefix="draftomen-package-smoke-") as temporary_dir:
         temporary_path = Path(temporary_dir)
         environment = os.environ.copy()
+        environment["QT_QPA_PLATFORM"] = "offscreen"
         environment["UV_TOOL_DIR"] = str(temporary_path / "tools")
         environment["UV_TOOL_BIN_DIR"] = str(temporary_path / "bin")
 
@@ -69,22 +70,41 @@ def main(argv: Sequence[str] | None = None) -> int:
             env=environment,
         )
 
-        executable_path = temporary_path / "bin" / _executable_name()
+        gui_executable_path = _executable_path(
+            temporary_path=temporary_path,
+            command="draftomen",
+        )
+        tui_executable_path = _executable_path(
+            temporary_path=temporary_path,
+            command="draftomen-tui",
+        )
+        _run_command(
+            command=[
+                str(gui_executable_path),
+                "--provider",
+                "mock",
+                "--smoke-test",
+                "--app-dir",
+                str(temporary_path / "gui-app"),
+            ],
+            environment=environment,
+        )
+
         version_output = _run_command(
-            command=[str(executable_path), "--version"],
+            command=[str(tui_executable_path), "--version"],
             environment=environment,
         )
         _check_version(output=version_output)
 
         replay_output = _run_command(
             command=[
-                str(executable_path),
+                str(tui_executable_path),
                 "replay",
                 str(REPLAY_FIXTURE_PATH),
                 "--bulk-file",
                 str(BULK_FIXTURE_PATH),
                 "--app-dir",
-                str(temporary_path / "app"),
+                str(temporary_path / "tui-app"),
             ],
             environment=environment,
         )
@@ -130,15 +150,13 @@ def _resolve_artifact(*, pattern: str) -> Path:
     return matches[0].resolve()
 
 
-def _executable_name() -> str:
-    """Return the installed console-script filename.
+def _executable_path(*, temporary_path: Path, command: str) -> Path:
+    """Return an installed console-script path.
     Include the Windows executable suffix when required.
     """
 
-    if os.name == "nt":
-        return "draftomen.exe"
-
-    return "draftomen"
+    suffix = ".exe" if os.name == "nt" else ""
+    return temporary_path / "bin" / f"{command}{suffix}"
 
 
 def _run_command(*, command: Sequence[str], environment: dict[str, str]) -> str:
@@ -165,7 +183,7 @@ def _check_version(*, output: str) -> None:
         project = tomllib.load(project_file)
     expected_version = project["project"]["version"]
 
-    if f"draftomen {expected_version}\n" not in output:
+    if f"draftomen-tui {expected_version}\n" not in output:
         raise RuntimeError("Packaged command reports an unexpected version.")
     if "Draft Omen is unofficial Fan Content" not in output:
         raise RuntimeError("Packaged command omitted the Fan Content disclaimer.")

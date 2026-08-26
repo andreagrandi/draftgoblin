@@ -71,8 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     """
 
     parser = argparse.ArgumentParser(
-        prog="draftomen",
-        description="Unofficial Quick Draft assistant for MTG Arena.",
+        prog="draftomen-tui",
+        description="Unofficial Quick Draft assistant for MTG Arena (TUI).",
     )
     parser.add_argument(
         "--version",
@@ -446,11 +446,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def format_version() -> str:
-    """Format the version banner.
+    """Format the TUI version banner.
     Include the required Fan Content and 17Lands disclaimer block.
     """
 
-    return f"draftomen {__version__}\n\n{DISCLAIMER}"
+    return f"draftomen-tui {__version__}\n\n{DISCLAIMER}"
 
 
 def handle_watch(args: argparse.Namespace) -> int:

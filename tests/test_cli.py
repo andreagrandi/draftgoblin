@@ -34,7 +34,7 @@ def test_package_version_matches_installed_distribution_metadata() -> None:
     assert __version__ == version(distribution_name="draftomen")
 
 
-def test_version_output_includes_required_disclaimer(
+def test_tui_version_output_includes_required_disclaimer(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     exit_code = main(argv=["--version"])
@@ -42,12 +42,25 @@ def test_version_output_includes_required_disclaimer(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert f"draftomen {__version__}" in captured.out
+    assert f"draftomen-tui {__version__}" in captured.out
     assert (
         "Draft Omen is unofficial Fan Content permitted under the Fan Content Policy."
         in captured.out
     )
     assert "17Lands does not endorse this tool." in captured.out
+
+
+def test_tui_parser_uses_tui_command_name(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args(args=["--help"])
+
+    captured = capsys.readouterr()
+
+    assert error.value.code == 0
+    assert "usage: draftomen-tui" in captured.out
+    assert "Unofficial Quick Draft assistant for MTG Arena (TUI)." in captured.out
 
 
 @pytest.mark.parametrize(
