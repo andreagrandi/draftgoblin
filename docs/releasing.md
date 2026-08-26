@@ -3,10 +3,11 @@
 Stable Draft Omen releases publish a Python wheel and source distribution to
 PyPI, generate, install, test, and publish a Homebrew formula to
 `andreagrandi/homebrew-tap`, and create a public GitHub Release with the
-version's native bundle assets and changelog body. Releases use GitHub Actions
-and PyPI Trusted Publishing, so the repository does not store a long-lived
-PyPI token. Development releases are a separate GitHub prerelease path and
-never publish to PyPI or Homebrew.
+version's native bundle assets and changelog body. The installed `draftomen`
+command launches the live PySide6/QML GUI; `draftomen-tui` provides the
+terminal workflow. Releases use GitHub Actions and PyPI Trusted Publishing, so
+the repository does not store a long-lived PyPI token. Development releases
+are a separate GitHub prerelease path and never publish to PyPI or Homebrew.
 
 ## Release trigger
 
@@ -93,7 +94,7 @@ Homebrew, or replace an immutable stable release.
 
 Once configured, tagged releases update the Homebrew formula automatically. No manual formula generation or tap update is required.
 
-The pending publisher creates the PyPI project on the first successful release. If PyPI rejects the project name, choose a new distribution name in `pyproject.toml` while retaining the `draftomen` console command.
+If PyPI rejects the project name, choose a new distribution name in `pyproject.toml` while retaining the `draftomen` command.
 
 ## Publish a release
 
@@ -137,10 +138,12 @@ GitHub Release with the dated changelog body and native bundle assets.
 Install the exact published version in an isolated environment:
 
 ```bash
-uvx draftomen@<version> --version
+uvx --from "draftomen==<version>" draftomen-tui --version
+uvx --from "draftomen==<version>" draftomen --provider mock --smoke-test
 brew update
 brew install andreagrandi/tap/draftomen
-draftomen --version
+draftomen-tui --version
+QT_QPA_PLATFORM=offscreen draftomen --provider mock --smoke-test
 ```
 
 The public GitHub Release for `v<version>` must be published with the promoted

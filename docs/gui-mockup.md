@@ -1,37 +1,42 @@
 # Desktop GUI
 
-The PySide6/QML desktop application uses the same immutable session state and
-explicit commands as the terminal frontends. A Qt adapter schedules live
-session work outside the GUI thread and publishes plain Qt values and item
-models to presentation-only QML.
+The PySide6/QML desktop application is Draft Omen's default interface. It
+uses the same immutable session state and explicit commands as the terminal
+frontend. A Qt adapter schedules live session work outside the GUI thread and
+publishes plain Qt values and item models to presentation-only QML.
 
 ## Launch
 
-Install the optional GUI dependency and launch the live provider:
+Install Draft Omen and launch the live provider:
 
 ```bash
-uv run --extra gui draftomen-gui
+uv run draftomen
 ```
 
 The live provider follows Arena's standard `Player.log` location and loads the
 same card and ratings services as the terminal application. Use `--log-path`
 to override the platform default.
 
-Select the deterministic provider for visual development without filesystem or
-network dependencies:
+Select the deterministic provider for an automated smoke check without
+filesystem or network dependencies:
 
 ```bash
-uv run --extra gui draftomen-gui --provider mock
+uv run draftomen --provider mock --smoke-test
 ```
 
-The `draftomen-gui --provider mock` command is the mock-only entry point. Use
-the selectors to open a specific surface, representative state, or responsive
-target:
+For visual development, use the explicit forced-mock entry point:
 
 ```bash
-uv run --extra gui draftomen-gui --provider mock --surface build --width 1440 --height 900
-uv run --extra gui draftomen-gui --provider mock --surface live --width 760 --height 900
-uv run --extra gui draftomen-gui --provider mock --surface backtest --scenario error
+uv run draftomen-gui-mockup
+```
+
+Use the selectors to open a specific surface, representative state, or
+responsive target:
+
+```bash
+uv run draftomen-gui-mockup --surface build --width 1440 --height 900
+uv run draftomen-gui-mockup --surface live --width 760 --height 900
+uv run draftomen-gui-mockup --surface backtest --scenario error
 ```
 
 The mock-only top-bar selector switches between `loading`, `ready`, `empty`,
@@ -39,9 +44,8 @@ The mock-only top-bar selector switches between `loading`, `ready`, `empty`,
 Build, and Backtest. Settings remains available from the top bar in both
 provider modes.
 
-For an automated launch and render check, use `--smoke-test`. Add
-`--screenshot /tmp/draftomen-gui.png` to capture the rendered window before
-the process exits.
+To capture a screenshot during the smoke check, add
+`--screenshot /tmp/draftomen-smoke.png` before the process exits.
 
 ## Responsive behavior
 

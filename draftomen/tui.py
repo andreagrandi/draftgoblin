@@ -1450,7 +1450,7 @@ class DraftomenTuiApp(App[None]):
             "."
         )
         self._card_database_error = (
-            f"{detail}. Run `draftomen refresh-data` after checking your "
+            f"{detail}. Run `draftomen-tui refresh-data` after checking your "
             "network connection and local card-data cache."
         )
 

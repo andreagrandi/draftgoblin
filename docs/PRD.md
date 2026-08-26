@@ -1,4 +1,4 @@
-# PRD — Draft Omen (CLI/TUI)
+# PRD — Draft Omen (GUI + CLI/TUI)
 
 *An unofficial Quick Draft assistant for MTG Arena.*
 
@@ -8,14 +8,14 @@
 | **Status** | Draft v1.2 |
 | **Date** | 2026-07-03 |
 | **Platform** | macOS (primary target); cross-platform capable (Python) — Windows supported best-effort |
-| **Interface** | Terminal TUI (live), plain CLI output for replay/scripting |
+| **Interface** | PySide6/QML GUI (live default), `draftomen-tui` terminal interface, and plain CLI output for replay/scripting |
 | **Target user** | Single user (personal tool), Quick Draft player on MTG Arena; may use multiple Arena accounts on the same computer |
 
 ---
 
 ## 1. Summary
 
-A terminal tool that assists a player during **MTG Arena Quick Drafts**. While a draft is in progress, the tool watches Arena's local log file, identifies the cards offered in each pack, and displays a live **score-ranked list** (highest → lowest) of the pack's cards based on **17lands QuickDraft statistics**, progressively biasing scores toward the player's committed colors (target: a two-color deck). When the last pick is made, the **deck builder triggers automatically** and proposes a 40-card deck: chosen color pair, 23 spells balanced between creatures and other spells with a sane mana curve, and a mana base (drafted nonbasic lands + basic land counts) — with deck structure informed by what winning 17lands decks look like.
+A desktop application that assists a player during **MTG Arena Quick Drafts**. The live PySide6/QML interface watches Arena's local log file, identifies the cards offered in each pack, and displays a live **score-ranked list** (highest → lowest) of the pack's cards based on **17lands QuickDraft statistics**, progressively biasing scores toward the player's committed colors (target: a two-color deck). The stable `draftomen-tui` terminal command provides the same live workflow and plain CLI modes. When the last pick is made, the **deck builder triggers automatically** and proposes a 40-card deck: chosen color pair, 23 spells balanced between creatures and other spells with a sane mana curve, and a mana base (drafted nonbasic lands + basic land counts) — with deck structure informed by what winning 17lands decks look like.
 
 The tool reads data; it never writes to, injects into, or automates the game client.
 
@@ -55,7 +55,6 @@ Two distinct notions of "account," both handled:
 ### Non-Goals (v1)
 
 - Premier Draft, Traditional Draft, Sealed, Cube.
-- Native GUI, overlay, or menu-bar app (terminal only; a native UI may come later once the parser is stable).
 - Screen reading / OCR.
 - Match tracking, collection tracking, win-rate dashboards.
 - Automatic deck import into Arena (the client does not support Limited decklist import; the build sheet is applied manually).
@@ -235,7 +234,7 @@ draftomen/
   deckbuilder.py  # FR-5: pair selection, constrained fill, mana base, similarity report
   pool.py         # per-(account, draft) state & persistence
   tui.py          # FR-6: Textual app (pack view, build view)
-  cli.py          # `draftomen watch | replay | build | refresh-data`
+  cli.py          # `draftomen-tui watch | replay | build | refresh-data`
   config.py       # NFR-7: tunables
 tests/fixtures/   # captured Player.log files (M0 deliverable)
 ```

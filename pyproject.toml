@@ -25,26 +25,22 @@ classifiers = [
     "Topic :: Games/Entertainment",
 ]
 dependencies = [
+    "pyside6>=6.9,<7",
     "textual>=8.2.8",
     "textual-image>=0.13.2",
 ]
 
-[project.optional-dependencies]
-gui = [
-    "pyside6>=6.9,<7",
-]
+[project.scripts]
+draftomen-gui-mockup = "draftomen.qt_mock:main"
+draftomen-tui = "draftomen.cli:main"
+
+[project.gui-scripts]
+draftomen = "draftomen.qt_gui:main"
 
 [project.urls]
 Homepage = "https://github.com/andreagrandi/draftomen"
 Repository = "https://github.com/andreagrandi/draftomen"
 Issues = "https://github.com/andreagrandi/draftomen/issues"
-
-[project.scripts]
-draftomen = "draftomen.cli:main"
-draftomen-gui-mockup = "draftomen.qt_mock:main"
-
-[project.gui-scripts]
-draftomen-gui = "draftomen.qt_gui:main"
 
 [dependency-groups]
 dev = [

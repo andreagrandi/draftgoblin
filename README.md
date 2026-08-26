@@ -4,7 +4,7 @@
 
 # Draft Omen
 
-Draft Omen is an unofficial terminal draft assistant for MTG Arena Quick Drafts. It reads Arena's local `Player.log`, recognizes each pack and pick, and ranks the available cards while you draft. When the draft is complete, it also suggests a 40-card deck from your pool.
+Draft Omen is an unofficial desktop draft assistant for MTG Arena Quick Drafts. Its PySide6/QML application reads Arena's local `Player.log`, recognizes each pack and pick, and ranks the available cards while you draft. When the draft is complete, it also suggests a 40-card deck from your pool. A terminal interface with the same draft behavior is available as `draftomen-tui`.
 
 Draft Omen is read-only: it does not write to, inject into, or automate MTG Arena. Card details come from [Scryfall](https://scryfall.com/) and draft statistics come from [17Lands](https://www.17lands.com/).
 
@@ -66,23 +66,52 @@ Start Draft Omen before entering a Quick Draft:
 draftomen
 ```
 
-The app loads card metadata when needed, watches Arena's standard log location, detects the set, and follows the draft automatically. If 17Lands ratings are not cached for that set, it offers to download them. Use the arrow keys or `j`/`k` to browse cards, `s` to change the ranking, `b` to open the current build, `c` to configure the view and optional splash recommendations, and `q` to quit.
+The PySide6/QML desktop application loads card metadata when needed, watches
+Arena's standard log location, detects the set, and follows the draft
+automatically. If 17Lands ratings are not cached for that set, it offers to
+download them.
+
+### Terminal interface
+
+For a terminal workflow, use the stable `draftomen-tui` command. It preserves
+the watch, replay, build, backtest, benchmark, and data-refresh subcommands,
+including plain-text mode:
+
+```bash
+draftomen-tui
+draftomen-tui watch --plain
+```
+
+Use the arrow keys or `j`/`k` to browse cards, `s` to change the ranking,
+`b` to open the current build, `c` to configure the view and optional splash
+recommendations, and `q` to quit.
+
+### Visual development
+
+For deterministic visual development, launch the explicit forced-mock entry
+point:
+
+```bash
+draftomen-gui-mockup
+```
+
+For an automated, non-interactive GUI smoke check, use the default command
+with its mock provider and bounded smoke flag:
+
+```bash
+QT_QPA_PLATFORM=offscreen draftomen --provider mock --smoke-test
+```
+
+See the [desktop GUI guide](docs/gui-mockup.md) for live and mock launch
+options, selectable states, and responsive review targets. For reproducible
+unsigned development bundles, see the [desktop bundle guide](docs/desktop-bundles.md).
 
 Live recommendations currently support Quick Draft. Windows support is best-effort.
 
-## Desktop GUI
-
-Install the optional `gui` dependencies and run `draftomen-gui` for the live
-PySide6/QML application. The deterministic mock provider remains available for
-visual development with `draftomen-gui --provider mock`. See the
-[desktop GUI guide](docs/gui-mockup.md) for live and mock launch options,
-selectable states, and responsive review targets. For reproducible unsigned
-development bundles, see the [desktop bundle guide](docs/desktop-bundles.md).
-
 ## Local draft audit data
 
-Live TUI and `watch --plain` sessions keep an independent, append-only JSONL
-audit log for every draft under
+Live sessions started with `draftomen-tui`, including `watch --plain`, keep an
+independent, append-only JSONL audit log for every draft under
 `~/.draftomen/audit/drafts/<account-id>/<draft-id>.jsonl`. Each record includes
 the offered pack, pool snapshot, ratings source, scoring configuration, complete
 candidate calculations, splash eligibility and mana-source reasoning, all

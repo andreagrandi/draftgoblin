@@ -24,7 +24,7 @@ Rows show a `Fit` marker: `On` for cards inside the inferred pair, `Off!` for of
 
 ## Splash recommendations
 
-Splash recommendations are enabled by default. Open the TUI configuration with `c` to disable them persistently, or start a session with `watch --no-splash`. Replay and backtest also accept `--no-splash`.
+Splash recommendations are enabled by default. Open the TUI configuration with `c` to disable them persistently, or start a session with `draftomen-tui watch --no-splash`. `draftomen-tui replay` and `draftomen-tui backtest` also accept `--no-splash`.
 
 The splash policy is deliberately narrower than general three-color drafting:
 

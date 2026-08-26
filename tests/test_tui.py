@@ -2028,7 +2028,7 @@ async def _assert_card_metadata_load_failure_is_visible(tmp_path: Path) -> None:
         assert not table.loading
         assert table.row_count == 0
         assert "Card metadata failed to load: Scryfall is unavailable" in status
-        assert "Run `draftomen refresh-data`" in status
+        assert "Run `draftomen-tui refresh-data`" in status
 
 
 def test_tui_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
