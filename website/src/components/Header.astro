@@ -1,0 +1,65 @@
+---
+const githubUrl = 'https://github.com/andreagrandi/draftomen';
+const currentPath = Astro.url.pathname;
+const navigation = [
+  { href: '/', label: 'Home' },
+  { href: '/about/', label: 'About' },
+  { href: '/docs/', label: 'Docs' },
+  { href: '/privacy/', label: 'Privacy' },
+];
+
+function isCurrent(href: string): boolean {
+  return href === '/' ? currentPath === '/' : currentPath.startsWith(href);
+}
+---
+
+<header class="site-header">
+  <div class="shell header-inner">
+    <a class="brand" href="/" aria-label="Draft Omen home">
+      <img src="/favicon.png" alt="" width="40" height="40" />
+      <span>Draft <em>Omen</em></span>
+    </a>
+
+    <nav class="desktop-nav" aria-label="Main navigation">
+      {navigation.map((item) => (
+        <a
+          class="nav-link"
+          href={item.href}
+          aria-current={isCurrent(item.href) ? 'page' : undefined}
+        >
+          {item.label}
+        </a>
+      ))}
+    </nav>
+
+    <a
+      class="header-github"
+      href={githubUrl}
+      aria-label="Draft Omen source on GitHub"
+    >
+      <span aria-hidden="true">↗</span>
+      GitHub
+    </a>
+
+    <details class="mobile-nav">
+      <summary>Menu</summary>
+      <nav aria-label="Mobile navigation">
+        {navigation.map((item) => (
+          <a
+            class="nav-link"
+            href={item.href}
+            aria-current={isCurrent(item.href) ? 'page' : undefined}
+          >
+            {item.label}
+          </a>
+        ))}
+        <a
+          class="nav-link"
+          href={githubUrl}
+        >
+          GitHub <span aria-hidden="true">↗</span>
+        </a>
+      </nav>
+    </details>
+  </div>
+</header>

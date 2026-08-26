@@ -1,0 +1,103 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+const auditPath = '~/.draftomen/audit/drafts/<account-id>/<draft-id>.jsonl';
+---
+
+<BaseLayout
+  title="Privacy — Draft Omen"
+  description="How Draft Omen handles local Arena logs, draft audit data, third-party data requests, and this static website."
+  canonicalPath="/privacy/"
+>
+  <section class="page-intro">
+    <div class="shell">
+      <p class="eyebrow">Privacy and data handling</p>
+      <h1>Your draft data stays close to the draft.</h1>
+      <p class="intro-lede">
+        Draft Omen is a local application. This page describes what it reads,
+        what it stores, and when it reaches out for public card or draft data.
+      </p>
+    </div>
+  </section>
+
+  <section class="section pt-0" aria-labelledby="privacy-heading">
+    <div class="shell content-grid">
+      <aside class="content-aside">
+        <p class="eyebrow">The short version</p>
+        <h2 class="content-heading">Local by default.</h2>
+        <p>
+          The static website has no account system. Draft Omen itself reads Arena
+          data from the computer where you run it.
+        </p>
+      </aside>
+
+      <div class="content-stack">
+        <section id="privacy-heading" aria-labelledby="local-heading">
+          <h2 id="local-heading">Local Arena and draft data</h2>
+          <p>
+            Draft Omen reads the local MTG Arena <code>Player.log</code> when
+            Detailed Logs are enabled. The application uses the account identity
+            it finds in that log to keep drafts for separate Arena accounts from
+            being mixed together. Draft state and draft details are processed on
+            the local computer.
+          </p>
+          <p>
+            Live TUI and plain-watch sessions also write an append-only JSONL audit
+            record for each draft at:
+          </p>
+          <p><code class="path-code">{auditPath}</code></p>
+          <p>
+            Audit records can include offered packs, pool snapshots, rating
+            sources, scoring configuration, candidate calculations, splash and
+            mana reasoning, the visible recommendation, and the card chosen.
+            They are local evidence for later investigation; they are not sent to
+            this website. Draft Omen does <strong>not upload audit logs</strong> or{" "}
+            <strong>automatically delete them</strong>. Offline replay, deck
+            building, and benchmarking do not write audit records.
+          </p>
+        </section>
+
+        <section aria-labelledby="network-heading">
+          <h2 id="network-heading">Public data requests and local caches</h2>
+          <p>
+            When local data is unavailable or a refresh is requested, the
+            application can make third-party requests or downloads to{" "}
+            <a class="text-link" href="https://www.17lands.com/">17Lands</a>{" "}
+            for draft ratings, color-pair context, and public draft data;{" "}
+            <a class="text-link" href="https://scryfall.com/">Scryfall</a>{" "}
+            for card metadata and images; and{" "}
+            <a class="text-link" href="https://mtgjson.com/">MTGJSON</a>{" "}
+            for set metadata used in card mapping.
+          </p>
+          <p>
+            Downloaded ratings, card metadata, images, and their request/cache
+            metadata are kept in the application's local data directory so the
+            tool can reuse them and avoid unnecessary requests. The app does not
+            send its local audit history to those services as an audit upload.
+            Each third party has its own terms and privacy practices; Draft Omen
+            does not control them.
+          </p>
+        </section>
+
+        <section aria-labelledby="website-heading">
+          <h2 id="website-heading">This website</h2>
+          <p>
+            This site is a static collection of pages and local assets. No site
+            analytics, advertising trackers, account cookies, or preference
+            cookies are enabled here. The download and repository buttons link to
+            GitHub, and external data-service links above lead to their respective
+            sites; those destinations may handle requests under their own policies.
+          </p>
+        </section>
+
+        <section aria-labelledby="contact-heading">
+          <h2 id="contact-heading">Questions or corrections</h2>
+          <p>
+            For a privacy question or a data-handling issue, please open a{" "}
+            <a class="text-link" href="https://github.com/andreagrandi/draftomen/issues">GitHub Issue</a>.{" "}
+            Include only details you are comfortable sharing publicly.
+          </p>
+        </section>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

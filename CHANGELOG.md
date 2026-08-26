@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Add a static Draft Omen website with product overview, docs, downloads, and privacy details.
 
 - Add an accessible About dialog with runtime version, project information, and website link.
 
