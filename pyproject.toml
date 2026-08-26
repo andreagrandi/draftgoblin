@@ -68,7 +68,7 @@ draftomen = [
 ]
 [tool.pyside6-project]
 # Keep the deployment project input explicit: Python sources, QML module files,
-# and the logo used by NavigationRail.qml. No fonts are bundled.
+# and the logo used by NavigationRail.qml and AboutDialog.qml. No fonts are bundled.
 files = [
     "draftomen/__init__.py",
     "draftomen/audit.py",
@@ -97,6 +97,7 @@ files = [
     "draftomen/splash.py",
     "draftomen/tui.py",
     "draftomen/watch.py",
+    "draftomen/qml/AboutDialog.qml",
     "draftomen/qml/AppBar.qml",
     "draftomen/qml/BacktestView.qml",
     "draftomen/qml/BuildView.qml",

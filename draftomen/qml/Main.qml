@@ -65,6 +65,16 @@ ApplicationWindow {
     footer: StatusStrip {
         sessionState: window.sessionState
         applicationVersion: window.desktopApplicationVersion
+        narrow: window.narrow
+        onAboutRequested: opener => {
+            aboutDialog.returnFocusItem = opener
+            aboutDialog.open()
+        }
+    }
+
+    AboutDialog {
+        id: aboutDialog
+        applicationVersion: window.desktopApplicationVersion
     }
 
     RowLayout {
