@@ -40,6 +40,7 @@ Rectangle {
 
         ColumnLayout {
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
             spacing: 2
 
             Label {
@@ -55,6 +56,8 @@ Rectangle {
                     : "No active draft"
                 color: Theme.textMuted
                 font.pixelSize: 11
+                Layout.fillWidth: true
+                elide: Text.ElideRight
             }
         }
 
