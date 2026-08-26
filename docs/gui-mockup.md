@@ -52,11 +52,11 @@ Resize the running window across the breakpoint to review both arrangements; no 
 
 ## Recorded visual direction
 
-The implementation follows the checked-in **Tactical Grimoire** design system and the selected Stitch references recorded in `gui-design-plan.md`:
+The implementation follows the checked-in **Draft Omen** design system and the selected Stitch references recorded in `gui-design-plan.md`:
 
-- low-glare charcoal and blue-black tonal surfaces;
-- omen green reserved for recommendations, active navigation, and successful status;
-- burnt orange for warnings and progress, with warm ivory primary text;
+- deep midnight-navy tonal surfaces;
+- luminous periwinkle reserved for recommendations, active navigation, and successful status;
+- champagne gold for warnings and accents, with warm ivory primary text;
 - compact, desktop-native information density with crisp outlines and restrained radii;
 - visibly distinct recommended, selected, and keyboard-focus treatments;
 - persistent read-only status and 17Lands attribution;

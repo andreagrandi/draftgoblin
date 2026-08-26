@@ -136,7 +136,7 @@ Rectangle {
             Layout.alignment: root.detailedIntel ? Qt.AlignTop : Qt.AlignHCenter
             Layout.preferredWidth: root.imageFrameWidth
             Layout.preferredHeight: root.imageFrameHeight
-            color: "#171817"
+            color: Theme.background
             border.color: root.imageLoading ? Theme.warning : Theme.outline
             border.width: 2
             radius: 10

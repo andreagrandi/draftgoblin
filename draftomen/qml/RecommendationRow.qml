@@ -125,7 +125,7 @@ FocusScope {
                 Layout.maximumWidth: 50
                 Layout.minimumHeight: 0
                 Layout.fillHeight: true
-                color: "#171817"
+                color: Theme.background
                 border.color: Theme.outline
                 border.width: 1
                 radius: 6

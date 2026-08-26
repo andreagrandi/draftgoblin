@@ -209,7 +209,7 @@ Item {
                         }
                         width: ListView.view.width
                         height: root.narrow ? (root.displayPreferences.secondaryStats ? 108 : 76) : 48
-                        color: backtestRow.skipped ? "#30291f" : Theme.surface
+                        color: backtestRow.skipped ? Theme.warningDark : Theme.surface
                         border.color: Theme.outline
                         border.width: 1
                         radius: Theme.radius
