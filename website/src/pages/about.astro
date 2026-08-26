@@ -1,0 +1,74 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout
+  title="About Draft Omen"
+  description="Learn who maintains Draft Omen, why it stays read-only, and which services provide its card and draft data."
+  canonicalPath="/about/"
+>
+  <section class="page-intro">
+    <div class="shell">
+      <p class="eyebrow">About the project</p>
+      <h1>A calm companion for complicated picks.</h1>
+      <p class="intro-lede">
+        Draft Omen is an unofficial project by <strong>Andrea Grandi</strong>.
+        It is made for drafters who want useful context while keeping the final
+        pick—and the play experience—in their own hands.
+      </p>
+    </div>
+  </section>
+
+  <section class="section pt-0" aria-labelledby="about-heading">
+    <div class="shell content-grid">
+      <aside class="content-aside">
+        <p class="eyebrow">The short version</p>
+        <h2 class="content-heading">Read-only by design.</h2>
+        <p>
+          Draft Omen watches a local log and presents guidance. It does not read
+          the screen, send game input, or automate MTG Arena.
+        </p>
+      </aside>
+
+      <div class="content-stack">
+        <section id="about-heading">
+          <h2>What Draft Omen is</h2>
+          <p>
+            Draft Omen follows MTG Arena Quick Draft events through Arena's local{" "}
+            <code>Player.log</code>. It identifies offered packs and picks, joins
+            card metadata to public data, and keeps the score inputs visible as a
+            draft develops. When the draft is complete, it can propose a 40-card
+            build that you recreate in Arena yourself.
+          </p>
+          <p>
+            Andrea Grandi maintains the Python application, its terminal and
+            desktop interfaces, and the methodology documentation in the{" "}
+            <a class="text-link" href="https://github.com/andreagrandi/draftomen">public repository</a>.
+          </p>
+        </section>
+
+        <section aria-labelledby="ack-heading">
+          <h2 id="ack-heading">Acknowledgments</h2>
+          <p>
+            Card identity and card details are supported by{" "}
+            <a class="text-link" href="https://scryfall.com/">Scryfall</a>.{" "}
+            Draft statistics and color-pair context come from{" "}
+            <a class="text-link" href="https://www.17lands.com/">17Lands</a>.{" "}
+            Their data makes the recommendation context possible; neither service
+            endorses Draft Omen.
+          </p>
+        </section>
+
+        <section aria-labelledby="status-heading">
+          <h2 id="status-heading">Unofficial status</h2>
+          <div class="disclaimer">
+            <p>
+              Draft Omen is not affiliated with, sponsored by, approved by, or endorsed by Wizards of the Coast, Scryfall, or 17Lands.<br /><br />
+              Draft Omen is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC. Card data from Scryfall and 17Lands; neither service endorses this tool.
+            </p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

@@ -1,0 +1,150 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const repositoryUrl = 'https://github.com/andreagrandi/draftomen';
+const releaseUrl = 'https://github.com/andreagrandi/draftomen/releases/latest';
+---
+
+<BaseLayout
+  title="Draft Omen — A clearer signal for MTG Arena drafts"
+  description="Draft Omen is a local, read-only assistant for MTG Arena Quick Drafts. It reads Player.log, explains each pick, and suggests a 40-card build."
+  canonicalPath="/"
+>
+  <section class="hero">
+    <div class="shell hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow">Local draft intelligence</p>
+        <h1>Draft with a <span>clearer signal.</span></h1>
+        <p class="hero-lede">
+          Draft Omen reads Arena's local <code>Player.log</code>, ranks each pack
+          with visible data, and helps turn a completed pool into a playable deck.
+        </p>
+        <div class="download-group" aria-label="Download Draft Omen">
+          <a class="btn btn-primary download-button" href={releaseUrl}>
+            <span aria-hidden="true">⌘</span>
+            <span>Download for macOS<small>Latest release</small></span>
+          </a>
+          <a class="btn btn-secondary download-button" href={releaseUrl}>
+            <span aria-hidden="true">⊞</span>
+            <span>Download for Windows<small>Latest release</small></span>
+          </a>
+        </div>
+        <p class="install-note">
+          Choose the matching OS asset on GitHub. Prefer the terminal? See the{" "}
+          <a href="/docs/">setup and mechanism docs</a>.
+        </p>
+      </div>
+
+      <div class="hero-art">
+        <img
+          src="/images/draft-omen-banner.webp"
+          alt="Draft Omen logo: an eye inside a card frame beside the Draft Omen wordmark"
+          width="2172"
+          height="724"
+        />
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-muted" aria-labelledby="why-heading">
+    <div class="shell">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Built for the pick in front of you</p>
+          <h2 id="why-heading">Useful context, without the black box.</h2>
+        </div>
+        <p>
+          A focused companion for Quick Draft: local-first, read-only, and honest
+          about where every recommendation comes from.
+        </p>
+      </div>
+      <div class="feature-grid">
+        <article class="card feature-card">
+          <div class="card-body">
+            <span class="feature-icon" aria-hidden="true">01</span>
+            <h3>Reads the log</h3>
+            <p>Follows complete Arena Player.log lines instead of reading the screen or automating input.</p>
+          </div>
+        </article>
+        <article class="card feature-card">
+          <div class="card-body">
+            <span class="feature-icon" aria-hidden="true">02</span>
+            <h3>Shows the inputs</h3>
+            <p>Keep raw 17Lands GIH win rate, grade, source, ALSA, and the pool-aware score in view.</p>
+          </div>
+        </article>
+        <article class="card feature-card">
+          <div class="card-body">
+            <span class="feature-icon" aria-hidden="true">03</span>
+            <h3>Stays open early</h3>
+            <p>Color fit ramps from open picks toward a supported pair, with a deliberately conservative splash policy.</p>
+          </div>
+        </article>
+        <article class="card feature-card">
+          <div class="card-body">
+            <span class="feature-icon" aria-hidden="true">04</span>
+            <h3>Builds to 40</h3>
+            <p>After the draft, a staged suggestion starts with 23 spells and 17 lands, then explains any compromises.</p>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="views-heading">
+    <div class="shell">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">See the reasoning</p>
+          <h2 id="views-heading">A draft view that stays legible.</h2>
+        </div>
+        <p>
+          The live table and build view keep recommendations, source data, and
+          your options close together.
+        </p>
+      </div>
+      <div class="showcase-grid">
+        <figure class="showcase-card">
+          <img
+            src="/images/draft-omen-pick-view.webp"
+            alt="Draft Omen live pick view showing ranked cards, DO Score, 17Lands win rate, grade, colors, and fit"
+            width="2704"
+            height="1518"
+            loading="lazy"
+          />
+          <figcaption>
+            <strong>Pick view</strong>
+            <span>Compare the recommendation with raw ratings and pool-aware fit.</span>
+          </figcaption>
+        </figure>
+        <figure class="showcase-card">
+          <img
+            src="/images/draft-omen-deck-view.webp"
+            alt="Draft Omen build view showing a 40-card deck suggestion with 23 spells, 17 lands, curve, mana base, and pair"
+            width="2704"
+            height="1520"
+            loading="lazy"
+          />
+          <figcaption>
+            <strong>Build view</strong>
+            <span>See the color pair, curve, mana base, and nearest cuts at a glance.</span>
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-muted" aria-label="Learn more">
+    <div class="shell">
+      <div class="callout">
+        <p>
+          <strong>Want the mechanism, not a marketing promise?</strong><br />
+          Read how Player.log events, ratings fallbacks, color fit, and deck
+          constraints are handled in the repository docs.{" "}
+          <a class="text-link" href={repositoryUrl}>View source on GitHub ↗</a>
+        </p>
+        <a class="btn btn-outline" href="/docs/">Read the docs <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

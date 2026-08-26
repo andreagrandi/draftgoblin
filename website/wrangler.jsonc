@@ -1,0 +1,19 @@
+{
+  "$schema": "https://developers.cloudflare.com/workers/wrangler/config-schema.json",
+  "name": "draftomen",
+  "compatibility_date": "2026-08-26",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "www.draftomen.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "draftomen.com",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "./dist"
+  }
+}
