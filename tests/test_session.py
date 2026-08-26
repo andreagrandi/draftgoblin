@@ -50,6 +50,7 @@ from draftomen.session import (
     DraftIdentity,
     FocusBuildCard,
     LiveSession,
+    LOG_SETUP_GUIDANCE,
     LiveSessionCommand,
     LiveSessionEvent,
     LiveSessionSnapshot,
@@ -316,6 +317,169 @@ def test_session_contract_does_not_import_frontend_frameworks() -> None:
     )
 
 
+@pytest.mark.parametrize("unreadable", (False, True))
+def test_live_session_guides_when_player_log_is_missing_or_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unreadable: bool,
+) -> None:
+    log_path = tmp_path / "Player.log"
+    if unreadable:
+        log_path.touch()
+        monkeypatch.setattr(
+            session_module,
+            "is_log_readable",
+            lambda *, path: False,
+        )
+
+    session = LiveSession(log_path=log_path, app_dir=tmp_path / "app")
+    status = session.snapshot.status
+
+    assert status.phase == ApplicationPhase.WAITING_FOR_DRAFT
+    assert status.setup_guidance is True
+    assert status.message == LOG_SETUP_GUIDANCE
+    for requirement in (
+        "No draft or readable Player.log",
+        "Detailed Logs (Plugin Support)",
+        "Account settings",
+        "platform or Arena version",
+        "Restart Arena if required",
+        "return to Draft Omen and try again while Arena is running",
+    ):
+        assert requirement in status.message
+    assert str(log_path) not in status.message
+
+
+def test_live_session_uses_ordinary_waiting_for_readable_empty_log(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+
+    session = LiveSession(log_path=log_path, app_dir=tmp_path / "app")
+
+    assert session.snapshot.status == ApplicationStatus(
+        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+        message="Waiting for a Quick Draft.",
+        setup_guidance=False,
+    )
+
+
+@pytest.mark.parametrize("unreadable", (False, True))
+def test_live_session_clears_log_guidance_when_log_becomes_readable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unreadable: bool,
+) -> None:
+    log_path = tmp_path / "Player.log"
+    if unreadable:
+        log_path.touch()
+        monkeypatch.setattr(
+            session_module,
+            "is_log_readable",
+            lambda *, path: False,
+        )
+    session = LiveSession(log_path=log_path, app_dir=tmp_path / "app")
+    assert session.snapshot.status.setup_guidance is True
+
+    log_path.write_text("", encoding="utf-8")
+    if unreadable:
+        monkeypatch.setattr(
+            session_module,
+            "is_log_readable",
+            lambda *, path: True,
+        )
+    snapshot = session.poll_once()
+
+    assert snapshot.status == ApplicationStatus(
+        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+        message="Waiting for a Quick Draft.",
+        setup_guidance=False,
+    )
+
+
+def test_live_session_poll_refresh_preserves_concurrent_command_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+    session = LiveSession(log_path=log_path, app_dir=tmp_path / "app")
+    command_started = False
+
+    def unreadable_after_command(*, path: Path) -> bool:
+        nonlocal command_started
+        if not command_started:
+            command_started = True
+            session.dispatch(command=ChangeRanking(ranking_mode="win_rate"))
+        return False
+
+    monkeypatch.setattr(
+        session_module,
+        "is_log_readable",
+        unreadable_after_command,
+    )
+    monkeypatch.setattr(
+        session.follower,
+        "poll",
+        lambda: pytest.fail("setup guidance should skip strict follower polling"),
+    )
+
+    snapshot = session.poll_once()
+
+    assert snapshot.status.setup_guidance is True
+    assert snapshot.recommendations.ranking_mode == "win_rate"
+    assert session.snapshot is snapshot
+
+
+def test_live_session_refreshes_setup_guidance_after_neutral_login_context(
+    tmp_path: Path,
+) -> None:
+    session = LiveSession(log_path=tmp_path / "Player.log", app_dir=tmp_path / "app")
+    session.process_lines(
+        lines=(
+            _auth_line(account_id="first-account", screen_name="First"),
+            _course_line(event_name="QuickDraft_ONE_20260823", course_id="first-draft"),
+        )
+    )
+
+    session.process_lines(
+        lines=(
+            "[Accounts - Login] Logged in successfully. Display Name: Second#12345",
+            _auth_line(account_id="second-account", screen_name="Second"),
+        )
+    )
+    session.dispatch(command=ChooseAccount(account_id="second-account"))
+
+    assert session.snapshot.status == ApplicationStatus(
+        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+        message="Waiting for a Quick Draft.",
+    )
+    snapshot = session.poll_once()
+
+    assert snapshot.status.setup_guidance is True
+    assert snapshot.active_account == AccountIdentity(
+        account_id="second-account",
+        screen_name="Second",
+    )
+
+
+def test_live_session_draft_event_overrides_log_setup_guidance(
+    tmp_path: Path,
+) -> None:
+    session = LiveSession(log_path=tmp_path / "Player.log", app_dir=tmp_path / "app")
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+
+    snapshot = session.process_lines(lines=fixture_lines[:3])
+
+    assert snapshot.status == ApplicationStatus(
+        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+        message="Preparing Quick Draft data for MSH.",
+        setup_guidance=False,
+    )
+    assert session.poll_once() is snapshot
+
+
 def test_live_session_polling_and_rotation_publish_complete_persisted_lifecycle(
     tmp_path: Path,
 ) -> None:
@@ -429,6 +593,35 @@ def test_live_session_startup_scan_processes_previous_then_current_once(
         app_dir=app_dir,
     )
     assert len(audit_records) == 44
+
+
+def test_live_session_startup_scan_refreshes_setup_for_account_only_previous_log(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "Player.log"
+    previous_log_path = tmp_path / "Player-prev.log"
+    _write_lines(
+        path=previous_log_path,
+        lines=[_auth_line(account_id="account-1", screen_name="Player")],
+    )
+    session = LiveSession(
+        log_path=log_path,
+        app_dir=tmp_path / "app",
+        previous_log_path=previous_log_path,
+    )
+
+    snapshot = session.scan_startup_files()
+
+    assert snapshot.active_account == AccountIdentity(
+        account_id="account-1",
+        screen_name="Player",
+    )
+    assert snapshot.draft is None
+    assert snapshot.status == ApplicationStatus(
+        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+        message=LOG_SETUP_GUIDANCE,
+        setup_guidance=True,
+    )
 
 
 def test_live_session_login_change_clears_prior_account_context(

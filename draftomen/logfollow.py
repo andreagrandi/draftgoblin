@@ -222,7 +222,10 @@ class LogFollower:
                 finally:
                     previous_opened.handle.close()
 
-        current_opened = _open_log(path=self.log_path)
+        try:
+            current_opened = _open_log(path=self.log_path)
+        except OSError:
+            return tuple(lines)
         if current_opened is None:
             return tuple(lines)
 
@@ -354,6 +357,18 @@ def _open_log(*, path: Path) -> _OpenedLog | None:
         ),
         size=int(stat_result.st_size),
     )
+
+
+def is_log_readable(*, path: PathInput) -> bool:
+    """Return whether a Player.log path can currently be opened for reading.
+    Filesystem errors are reported as unavailable instead of escaping.
+    """
+
+    try:
+        with Path(path).expanduser().resolve(strict=False).open("rb"):
+            return True
+    except OSError:
+        return False
 
 
 def _read_complete_lines(*, handle: BinaryIO, offset: int) -> _ReadResult:

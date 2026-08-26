@@ -41,7 +41,7 @@ from draftomen.events import (
     PickMadeEvent,
     QuickDraftDetectedEvent,
 )
-from draftomen.logfollow import LogFollower
+from draftomen.logfollow import LogFollower, is_log_readable
 from draftomen.pool import (
     AccountProfile,
     DraftPoolError,
@@ -85,9 +85,16 @@ RatingsProgressLoaderFactory: TypeAlias = Callable[
     RatingsProgressLoader,
 ]
 RatingsCacheChecker: TypeAlias = Callable[[str], bool]
+
+LOG_SETUP_GUIDANCE = (
+    "No draft or readable Player.log was detected. Enable Detailed Logs "
+    "(Plugin Support) in Arena's Account settings (usually Settings → Account; "
+    "the exact path may vary by platform or Arena version). Restart Arena if "
+    "required, then return to Draft Omen and try again while Arena is running."
+)
+
+WAITING_FOR_DRAFT_MESSAGE = "Waiting for a Quick Draft."
 RECENT_PICK_LIMIT = 24
-
-
 
 
 class ApplicationPhase(StrEnum):
@@ -134,6 +141,7 @@ class ApplicationStatus:
 
     phase: ApplicationPhase = ApplicationPhase.STARTING
     message: str = "Starting Draft Omen."
+    setup_guidance: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -619,6 +627,7 @@ class LiveSession:
             raise ValueError("Configure exactly one ratings loader or loader factory.")
 
         self.log_path = Path(log_path).expanduser().resolve(strict=False)
+        initial_log_readable = is_log_readable(path=self.log_path)
         self.follower = LogFollower(
             log_path=self.log_path,
             app_dir=app_dir,
@@ -684,10 +693,7 @@ class LiveSession:
             card_data = CardDataState()
         ratings_state = self._initial_ratings_state()
         self._snapshot = LiveSessionSnapshot(
-            status=ApplicationStatus(
-                phase=ApplicationPhase.WAITING_FOR_DRAFT,
-                message="Waiting for a Quick Draft.",
-            ),
+            status=_waiting_for_draft_status(setup_guidance=not initial_log_readable),
             accounts=self._known_accounts(),
             card_data=card_data,
             ratings=ratings_state,
@@ -873,7 +879,34 @@ class LiveSession:
         Frontends decide whether this call runs on a worker or event-loop callback.
         """
 
-        return self.process_lines(lines=self.follower.poll())
+        snapshot = self._refresh_log_setup_status()
+        if snapshot.status.setup_guidance:
+            return snapshot
+
+        lines = self.follower.poll()
+        self.process_lines(lines=lines)
+        return self._refresh_log_setup_status()
+
+    def _refresh_log_setup_status(self) -> LiveSessionSnapshot:
+        """Refresh neutral waiting guidance without overriding draft activity.
+        Draft-specific statuses retain their normal event-driven state even if a
+        later poll cannot open the log.
+        """
+
+        log_readable = is_log_readable(path=self.log_path)
+        with self._state_lock:
+            snapshot = self.snapshot
+            if not _log_setup_refresh_is_eligible(snapshot=snapshot):
+                return snapshot
+
+            next_status = _waiting_for_draft_status(
+                setup_guidance=not log_readable,
+            )
+            if snapshot.status == next_status:
+                return snapshot
+
+            self._publish(snapshot=replace(snapshot, status=next_status))
+            return self.snapshot
 
     def scan_startup_files(
         self,
@@ -885,12 +918,13 @@ class LiveSession:
         The follower advances its offset so later polling does not replay current lines.
         """
 
-        return self.process_lines(
+        self.process_lines(
             lines=self.follower.scan_startup_files(
                 include_previous=include_previous,
             ),
             include_pre_draft_detection=include_pre_draft_detection,
         )
+        return self._refresh_log_setup_status()
 
     def process_lines(
         self,
@@ -3181,6 +3215,29 @@ class LiveSession:
                 scored_pack=scored_pack,
             )
         )
+
+
+def _waiting_for_draft_status(*, setup_guidance: bool) -> ApplicationStatus:
+    return ApplicationStatus(
+        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+        message=LOG_SETUP_GUIDANCE if setup_guidance else WAITING_FOR_DRAFT_MESSAGE,
+        setup_guidance=setup_guidance,
+    )
+
+
+def _log_setup_refresh_is_eligible(
+    *,
+    snapshot: LiveSessionSnapshot,
+) -> bool:
+    status = snapshot.status
+    return (
+        snapshot.draft is None
+        and status.phase == ApplicationPhase.WAITING_FOR_DRAFT
+        and (
+            status.setup_guidance
+            or status.message == WAITING_FOR_DRAFT_MESSAGE
+        )
+    )
 
 
 def _draft_coordinates(

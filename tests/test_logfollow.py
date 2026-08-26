@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+import draftomen.logfollow as logfollow_module
 from draftomen.logfollow import LogFollower, log_offset_path
 
 
@@ -112,7 +115,136 @@ def test_startup_scan_reads_player_prev_then_current_and_advances_offset(
 
     with log_path.open("a", encoding="utf-8") as log_file:
         log_file.write("\ncurrent three\n")
-
     assert follower.poll() == ("current two", "current three")
     assert follower.poll() == ()
+
+
+def test_poll_preserves_rotated_tail_when_previous_log_open_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir = tmp_path / "app"
+    log_path = tmp_path / "Player.log"
+    previous_log_path = tmp_path / "Player-prev.log"
+    log_path.write_text("one\n", encoding="utf-8")
+    follower = LogFollower(log_path=log_path, app_dir=app_dir)
+
+    assert follower.poll() == ("one",)
+    offset_path = log_offset_path(log_path=log_path, app_dir=app_dir)
+    saved_state = offset_path.read_bytes()
+
+    with log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write("two\n")
+    log_path.rename(previous_log_path)
+    log_path.write_text("three\n", encoding="utf-8")
+
+    original_open = logfollow_module.Path.open
+
+    def fail_previous_open(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        if path == previous_log_path:
+            raise OSError("temporary previous-log read failure")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(logfollow_module.Path, "open", fail_previous_open)
+    with pytest.raises(OSError, match="temporary previous-log read failure"):
+        follower.poll()
+
+    assert offset_path.read_bytes() == saved_state
+
+    monkeypatch.setattr(logfollow_module.Path, "open", original_open)
+    assert follower.poll() == ("two", "three")
+
+
+def test_open_log_propagates_non_missing_open_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_path = tmp_path / "Player.log"
+    log_path.touch()
+    original_open = logfollow_module.Path.open
+
+    def fail_open(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        raise OSError("temporary log-open failure")
+
+    monkeypatch.setattr(logfollow_module.Path, "open", fail_open)
+    with pytest.raises(OSError, match="temporary log-open failure"):
+        logfollow_module._open_log(path=log_path)
+
+    monkeypatch.setattr(logfollow_module.Path, "open", original_open)
+
+
+def test_open_log_propagates_non_missing_stat_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_path = tmp_path / "Player.log"
+    log_path.touch()
+
+    def fail_fstat(file_descriptor: int) -> object:
+        raise OSError("temporary log-stat failure")
+
+    monkeypatch.setattr(logfollow_module.os, "fstat", fail_fstat)
+    with pytest.raises(OSError, match="temporary log-stat failure"):
+        logfollow_module._open_log(path=log_path)
+
+
+def test_startup_scan_skips_unreadable_current_log_but_keeps_previous_lines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir = tmp_path / "app"
+    log_path = tmp_path / "Player.log"
+    previous_log_path = tmp_path / "Player-prev.log"
+    previous_log_path.write_text("previous line\n", encoding="utf-8")
+    log_path.write_text("current line\n", encoding="utf-8")
+    follower = LogFollower(log_path=log_path, app_dir=app_dir)
+    original_open = logfollow_module.Path.open
+
+    def fail_current_open(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        if path == log_path:
+            raise OSError("temporary current-log read failure")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(logfollow_module.Path, "open", fail_current_open)
+    assert follower.scan_startup_files() == ("previous line",)
+
+    assert not log_offset_path(log_path=log_path, app_dir=app_dir).exists()
+
+
+def test_startup_scan_does_not_suppress_unreadable_previous_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir = tmp_path / "app"
+    log_path = tmp_path / "Player.log"
+    previous_log_path = tmp_path / "Player-prev.log"
+    previous_log_path.write_text("previous line\n", encoding="utf-8")
+    log_path.write_text("current line\n", encoding="utf-8")
+    follower = LogFollower(log_path=log_path, app_dir=app_dir)
+    original_open = logfollow_module.Path.open
+
+    def fail_previous_open(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        if path == previous_log_path:
+            raise OSError("temporary previous-log read failure")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(logfollow_module.Path, "open", fail_previous_open)
+    with pytest.raises(OSError, match="temporary previous-log read failure"):
+        follower.scan_startup_files()
 

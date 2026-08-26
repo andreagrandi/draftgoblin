@@ -22,6 +22,9 @@ Item {
     readonly property bool hasRecommendations: sessionState.recommendations
         && sessionState.recommendations.cards
         && sessionState.recommendations.cards.length > 0
+    readonly property bool hasSetupGuidance: Boolean(
+        sessionState.status && sessionState.status.setup_guidance
+    )
     readonly property string confidenceSummary: {
         const recommendations = sessionState.recommendations
         return recommendations && recommendations.confidence_summary
@@ -30,8 +33,11 @@ Item {
 
     readonly property string draftHeading: {
         const draft = sessionState.draft
-        if (!draft)
+        if (!draft) {
+            if (root.hasSetupGuidance)
+                return "Arena setup needed"
             return sessionState.status.message
+        }
         if (draft.completed)
             return "Draft complete"
         if (draft.pack_number === null || draft.pick_number === null)
@@ -44,6 +50,8 @@ Item {
             return "Draft complete"
         if (sessionState.status.phase === "starting")
             return "Loading live draft data"
+        if (root.hasSetupGuidance)
+            return "Arena setup needed"
         return "Ready for your next Quick Draft"
     }
     readonly property var selectedRecommendation: {
@@ -174,6 +182,7 @@ Item {
                 spacing: 14
 
                 Label {
+                    objectName: "preDraftHeading"
                     Layout.fillWidth: true
                     text: root.emptyHeading
                     color: Theme.text
@@ -183,9 +192,12 @@ Item {
                 }
 
                 Label {
+                    objectName: "preDraftGuidance"
                     Layout.fillWidth: true
-                    text: "Draft Omen follows Arena automatically and never writes to the game."
-                    color: Theme.textMuted
+                    text: root.hasSetupGuidance
+                        ? root.sessionState.status.message
+                        : "Draft Omen follows Arena automatically and never writes to the game."
+                    color: root.hasSetupGuidance ? Theme.text : Theme.textMuted
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
                 }
