@@ -1428,6 +1428,149 @@ assert_modal_cycle(
     assert completed.returncode == 0, completed.stderr
 
 
+def test_qml_about_dialog_is_accessible_and_preserves_provider_state_offscreen() -> None:
+    probe = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QObject, QUrl, Qt, Slot
+from PySide6.QtGui import QAccessible, QDesktopServices, QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtTest import QTest
+
+from draftomen import __version__
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.qt_mock import MockSessionAdapter
+
+
+class UrlHandler(QObject):
+    def __init__(self) -> None:
+        super().__init__()
+        self.urls: list[str] = []
+
+    @Slot(QUrl)
+    def openUrl(self, url: QUrl) -> None:
+        self.urls.append(url.toString())
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+provider = MockSessionAdapter(session=MockLiveSession(scenario="warning"))
+preferences_dir = TemporaryDirectory()
+preferences = GuiPreferencesAdapter(app_dir=preferences_dir.name)
+engine = QQmlApplicationEngine()
+qml_directory = Path.cwd() / "draftomen" / "qml"
+engine.addImportPath(str(qml_directory))
+context = engine.rootContext()
+context.setContextProperty("fixedFontFamily", _fixed_font_family())
+context.setContextProperty("sessionProvider", provider)
+context.setContextProperty("applicationTitle", "Draft Omen")
+context.setContextProperty("applicationVersion", __version__)
+context.setContextProperty("guiPreferences", preferences)
+context.setContextProperty("initialSurface", "live")
+context.setContextProperty("initialWindowWidth", 680)
+context.setContextProperty("initialWindowHeight", 640)
+engine.setInitialProperties({"provider": provider})
+engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+assert engine.rootObjects()
+root = engine.rootObjects()[0]
+root.resize(680, 640)
+application.processEvents()
+
+about_link = root.findChild(QObject, "aboutLink")
+status_strip = root.findChild(QObject, "statusStrip")
+assert about_link is not None and status_strip is not None
+assert about_link.isVisible()
+assert about_link.property("activeFocusOnTab") is True
+accessible_about_link = QAccessible.queryAccessibleInterface(about_link)
+assert accessible_about_link is not None
+assert accessible_about_link.text(QAccessible.Text.Name) == "Open About dialog"
+assert root.property("narrow") is True
+assert about_link.width() > 0
+assert status_strip.width() <= root.width()
+before_state = provider.state.copy()
+
+url_handler = UrlHandler()
+QDesktopServices.setUrlHandler("https", url_handler, "openUrl")
+try:
+    about_link.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+
+    dialog = root.findChild(QObject, "aboutDialog")
+    title = root.findChild(QObject, "aboutDialogTitle")
+    logo = root.findChild(QObject, "aboutDialogLogo")
+    version = root.findChild(QObject, "aboutDialogVersion")
+    author = root.findChild(QObject, "aboutDialogAuthor")
+    website = root.findChild(QObject, "aboutDialogWebsite")
+    close = root.findChild(QObject, "aboutDialogCloseButton")
+    assert dialog is not None and dialog.property("visible") is True
+    assert dialog.property("modal") is True
+    window_width = float(root.property("width"))
+    window_height = float(root.property("height"))
+    dialog_x = float(dialog.property("x"))
+    dialog_y = float(dialog.property("y"))
+    dialog_width = float(dialog.property("width"))
+    dialog_height = float(dialog.property("height"))
+    dialog_margin = 16.0
+    assert dialog_width > 0 and dialog_height > 0
+    assert dialog_width <= window_width - 2 * dialog_margin
+    assert dialog_height <= window_height - 2 * dialog_margin
+    assert dialog_margin <= dialog_x <= window_width - dialog_width - dialog_margin
+    assert dialog_margin <= dialog_y <= window_height - dialog_height - dialog_margin
+    assert abs(dialog_x - (window_width - dialog_width) / 2) <= 1.0
+    assert abs(dialog_y - (window_height - dialog_height) / 2) <= 1.0
+    assert title is not None and title.property("text") == "Draft Omen"
+    assert logo is not None and logo.isVisible() and logo.width() >= 180
+    assert version is not None and version.property("text") == "Version " + __version__
+    assert author is not None and author.property("text") == "Created by Andrea Grandi"
+    assert website is not None and website.property("text") == "Project website"
+    assert close is not None and close.property("text") == "Close"
+    logo_source = logo.property("source")
+    assert isinstance(logo_source, QUrl)
+    logo_context = QQmlEngine.contextForObject(logo)
+    assert logo_context is not None
+    resolved_logo_source = logo_context.baseUrl().resolved(logo_source)
+    assert resolved_logo_source.path().endswith("/assets/draftomen_logo.png")
+    if resolved_logo_source.isLocalFile():
+        assert Path(resolved_logo_source.toLocalFile()).resolve() == (
+            Path.cwd() / "draftomen" / "assets" / "draftomen_logo.png"
+        ).resolve()
+    assert provider.state == before_state
+
+    website.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert url_handler.urls == ["https://github.com/andreagrandi/draftomen"]
+    assert provider.state == before_state
+
+    close.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert dialog.property("visible") is False
+    assert about_link.property("activeFocus") is True
+    assert provider.state == before_state
+
+    about_link.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert dialog.property("visible") is True
+    QTest.keyClick(root, Qt.Key_Escape)
+    application.processEvents()
+    assert dialog.property("visible") is False
+    assert about_link.property("activeFocus") is True
+    assert provider.state == before_state
+finally:
+    QDesktopServices.unsetUrlHandler("https")
+"""
+    completed = _run_qml_probe(probe)
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_qml_preferences_build_backtest_and_responsive_states_offscreen() -> None:
     probe = """
 from tempfile import TemporaryDirectory

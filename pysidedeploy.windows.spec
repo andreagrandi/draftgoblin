@@ -15,8 +15,9 @@ packages = Nuitka==4.1.3
 
 [qt]
 # Every QML file and the module manifest are listed deliberately. The deploy tool
-# also preserves draftomen/assets/ so NavigationRail.qml can resolve the logo.
-qml_files = draftomen/qml/AppBar.qml,draftomen/qml/BacktestView.qml,draftomen/qml/BuildView.qml,draftomen/qml/CardPreview.qml,draftomen/qml/LiveDraftView.qml,draftomen/qml/Main.qml,draftomen/qml/NavigationRail.qml,draftomen/qml/PoolSummaryPanel.qml,draftomen/qml/RecentPickThumbnail.qml,draftomen/qml/RecentPicksGallery.qml,draftomen/qml/RecommendationRow.qml,draftomen/qml/SettingsView.qml,draftomen/qml/StateBanner.qml,draftomen/qml/StatusStrip.qml,draftomen/qml/Theme.qml,draftomen/qml/qmldir
+# also preserves draftomen/assets/ so NavigationRail.qml and AboutDialog.qml can
+# resolve the logo.
+qml_files = draftomen/qml/AboutDialog.qml,draftomen/qml/AppBar.qml,draftomen/qml/BacktestView.qml,draftomen/qml/BuildView.qml,draftomen/qml/CardPreview.qml,draftomen/qml/LiveDraftView.qml,draftomen/qml/Main.qml,draftomen/qml/NavigationRail.qml,draftomen/qml/PoolSummaryPanel.qml,draftomen/qml/RecentPickThumbnail.qml,draftomen/qml/RecentPicksGallery.qml,draftomen/qml/RecommendationRow.qml,draftomen/qml/SettingsView.qml,draftomen/qml/StateBanner.qml,draftomen/qml/StatusStrip.qml,draftomen/qml/Theme.qml,draftomen/qml/qmldir
 excluded_qml_plugins = QtCharts,QtQuick3D,QtSensors,QtTest,QtWebEngine
 modules = Core,Gui,Qml,Quick,QuickControls2
 plugins = imageformats,platforms,platformthemes,styles
