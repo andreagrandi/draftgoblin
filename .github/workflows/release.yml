@@ -34,6 +34,12 @@ jobs:
             exit 1
           fi
 
+      - name: Validate release changelog
+        run: >-
+          python3 scripts/extract_changelog.py
+          --section "${GITHUB_REF_NAME#v}"
+          --output "$RUNNER_TEMP/release-notes.md"
+
       - name: Run checks
         run: uv run nox -s ci
 
@@ -130,6 +136,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Extract release changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/extract_changelog.py \
+            --section "${GITHUB_REF_NAME#v}" \
+            --output release-notes.md
+
       - name: Download macOS native bundle
         uses: actions/download-artifact@v8
         with:
@@ -174,7 +191,11 @@ jobs:
               --draft \
               --verify-tag \
               --title "${RELEASE_TAG}" \
-              --generate-notes
+              --notes-file release-notes.md
+          else
+            gh release edit "${RELEASE_TAG}" \
+              --title "${RELEASE_TAG}" \
+              --notes-file release-notes.md
           fi
           gh release upload "${RELEASE_TAG}" \
             "release-assets/published/draftgoblin-${RELEASE_TAG}-unsigned-macos.tar" \

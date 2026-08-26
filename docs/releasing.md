@@ -1,12 +1,44 @@
 # Releasing Draftgoblin
 
-Stable Draftgoblin releases publish a Python wheel and source distribution to PyPI, then generate, install, test, and publish a Homebrew formula to `andreagrandi/homebrew-tap`. Releases use GitHub Actions and PyPI Trusted Publishing, so the repository does not store a long-lived PyPI token. Development releases are a separate GitHub prerelease path and never publish to PyPI or Homebrew.
+Stable Draftgoblin releases publish a Python wheel and source distribution to
+PyPI, generate, install, test, and publish a Homebrew formula to
+`andreagrandi/homebrew-tap`, and create a public GitHub Release with the
+version's native bundle assets and changelog body. Releases use GitHub Actions
+and PyPI Trusted Publishing, so the repository does not store a long-lived
+PyPI token. Development releases are a separate GitHub prerelease path and
+never publish to PyPI or Homebrew.
 
 ## Release trigger
 
-Normal pushes and merges to `master` run CI but do not publish a stable release. A stable release starts only when a tag matching `v*` is pushed, and the workflow rejects tags that do not match the version in `pyproject.toml`.
+Normal pushes and merges to `master` run CI but do not publish a stable release.
+A stable release starts only when a tag matching `v*` is pushed, and the
+workflow rejects tags that do not match the version in `pyproject.toml`.
 
-For a manually requested native development build, ask exactly `make a new dev release`. The repository's development-release skill dispatches `.github/workflows/native-bundles.yml` on `master` with a unique UTC request ID, watches that exact run, verifies the rolling prerelease and its assets, and reports the workflow and release URLs.
+For a manually requested native development build, ask exactly `make a new dev
+release`. The repository's development-release skill dispatches
+`.github/workflows/native-bundles.yml` on `master` with a unique UTC request ID,
+watches that exact run, verifies the rolling prerelease's changelog content and
+assets, and reports the workflow and release URLs.
+
+## Changelog contract
+
+`CHANGELOG.md` always has an exact `## [Unreleased]` heading. Released entries
+use an exact heading in this form:
+
+```text
+## [X.Y.Z] - YYYY-MM-DD
+```
+
+The shared helper command
+`python3 scripts/extract_changelog.py --section SECTION --output PATH` reads the
+root changelog and writes the non-empty body under the exact section through
+the next `## ` heading, with one trailing newline. Missing, duplicate, or empty
+sections fail the command.
+
+Before preparing a stable version PR, use the UTC release date to promote the
+Unreleased entries unchanged into `## [X.Y.Z] - YYYY-MM-DD`, then restore an
+empty `## [Unreleased]` heading immediately above the dated section. Include
+that changelog promotion with the version change before merging and tagging.
 
 ## Development releases
 
@@ -27,6 +59,13 @@ release title and notes identify the same version, UTC date, and progressive
 run number. For example, run 7 for version `0.2.0` on 2026-08-25 uses
 `v0.2.0-dev.20260825.7` and the title `Draftgoblin v0.2.0 development build
 2026-08-25 #7`.
+
+The rolling prerelease notes retain this build metadata and then include the
+exact heading `## Changes since previous release` followed by the non-empty
+body extracted from `## [Unreleased]` in `CHANGELOG.md`. A missing, duplicate,
+or empty Unreleased section fails the development workflow before publishing.
+The development-release verification must confirm both the metadata and the
+extracted changelog content.
 
 The rolling prerelease contains exactly three unsigned assets for the current
 build:
@@ -58,14 +97,23 @@ The pending publisher creates the PyPI project on the first successful release. 
 
 ## Publish a release
 
-1. Update the version on a feature branch:
+1. On a feature branch, choose the UTC release date and promote the non-empty
+   body under `## [Unreleased]` unchanged into:
+
+   ```text
+   ## [<version>] - <YYYY-MM-DD>
+   ```
+
+   Restore an empty `## [Unreleased]` heading immediately above that dated
+   section, then bump the package version:
 
    ```bash
    uv version <version>
    uv run nox -s ci
    ```
 
-2. Merge the version change through the normal pull request workflow.
+2. Merge the version and changelog promotion through the normal pull request
+   workflow.
 3. From the updated `master` branch, create and push the matching tag:
 
    ```bash
@@ -73,7 +121,16 @@ The pending publisher creates the PyPI project on the first successful release. 
    git push origin v<version>
    ```
 
-The release workflow rejects mismatched versions, runs the full CI gate, builds and validates both distributions, installs and smoke-tests the wheel on macOS and Windows, and waits for approval before publishing. After PyPI succeeds, it resolves the immutable source archive, pins all Python resources, installs and tests the generated formula, and pushes `Formula/draftgoblin.rb` to the Homebrew tap.
+The stable workflow checks out the tagged repository and runs
+`python3 scripts/extract_changelog.py --section <version> --output PATH`.
+Missing, duplicate, or empty sections fail the workflow instead of publishing
+empty or generated notes. It rejects mismatched versions, runs the full CI
+gate, builds and validates both distributions, installs and smoke-tests the
+wheel on macOS and Windows, and waits for approval before publishing. After
+PyPI succeeds, it resolves the immutable source archive, pins all Python
+resources, installs and tests the generated formula, pushes
+`Formula/draftgoblin.rb` to the Homebrew tap, and creates or updates the public
+GitHub Release with the dated changelog body and native bundle assets.
 
 ## Verify the published release
 
@@ -86,4 +143,8 @@ brew install andreagrandi/tap/draftgoblin
 draftgoblin --version
 ```
 
-The Homebrew formula is updated only after the immutable PyPI release succeeds. If a PyPI release is broken, yank it with a reason and publish a corrected patch release rather than replacing its files.
+The public GitHub Release for `v<version>` must be published with the promoted
+dated changelog body and the two native bundle assets plus checksum file. The
+Homebrew formula is updated only after the immutable PyPI release succeeds. If
+a PyPI release is broken, yank it with a reason and publish a corrected patch
+release rather than replacing its files.

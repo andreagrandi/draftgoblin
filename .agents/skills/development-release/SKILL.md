@@ -63,14 +63,37 @@ if ! gh run watch "$run_id" --repo "$repo" --exit-status; then
   exit 1
 fi
 ```
+
 ## Verify the rolling prerelease
-Read the exact run metadata and package version from its source commit:
+Read the exact run metadata, package version, and Unreleased changelog body
+from its source commit. The release body must include the exact
+`## Changes since previous release` heading before that extracted content:
+
 ```sh
 run_json=$(gh run view "$run_id" --repo "$repo" --json number,headSha,url)
 run_number=$(printf '%s' "$run_json" | jq -r .number)
 head_sha=$(printf '%s' "$run_json" | jq -r .headSha)
 workflow_url=$(printf '%s' "$run_json" | jq -r .url)
 version=$(gh api "repos/$repo/contents/pyproject.toml?ref=$head_sha" --jq '.content | @base64d' | awk -F'"' '/^version[[:space:]]*=/ { version=$2 } END { print version }')
+changelog_file=$(mktemp)
+gh api "repos/$repo/contents/CHANGELOG.md?ref=$head_sha" \
+  --jq '.content | @base64d' > "$changelog_file"
+expected_changes="$(
+  awk '
+    $0 == "## [Unreleased]" { in_section=1; next }
+    in_section && /^## / { exit }
+    in_section { lines[++count] = $0 }
+    END {
+      first = 1
+      while (first <= count && lines[first] ~ /^[[:space:]]*$/) first++
+      last = count
+      while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+      for (line = first; line <= last; line++) print lines[line]
+    }
+  ' "$changelog_file"
+)"
+[ -n "$expected_changes" ] || { echo "Unreleased changelog section is empty." >&2; exit 1; }
+expected_changes="${expected_changes}"$'\n'
 release_json=$(gh release view development --repo "$repo" --json tagName,isPrerelease,name,body,assets,url)
 release_url=$(printf '%s' "$release_json" | jq -r .url)
 release_title=$(printf '%s' "$release_json" | jq -r .name)
@@ -78,19 +101,24 @@ release_date=$(printf '%s' "$release_title" | jq -Rr 'capture("^Draftgoblin v.+ 
 [ -n "$release_date" ] || { echo "Release title has no YYYY-MM-DD date." >&2; exit 1; }
 utc_date=${release_date//-/}; build_id="v${version}-dev.${utc_date}.${run_number}"
 expected_title="Draftgoblin v${version} development build ${release_date} #${run_number}"
+changes_heading="## Changes since previous release"
+expected_changes_section="${changes_heading}"$'\n\n'"${expected_changes}"
 if ! printf '%s' "$release_json" | jq -e \
   --arg title "$expected_title" --arg build "$build_id" \
   --arg workflow "$workflow_url" --arg run "$run_id" --arg commit "$head_sha" \
+  --arg changes_section "$expected_changes_section" \
   --arg macos "draftgoblin-${build_id}-unsigned-macos.tar" \
   --arg windows "draftgoblin-${build_id}-unsigned-windows.exe" \
   --arg checksums "draftgoblin-${build_id}-unsigned-sha256sums.txt" \
   '(.tagName == "development") and (.isPrerelease == true) and
    (.name == $title) and ((.body // "") | contains($build)) and
-   ((.body // "") | contains($workflow)) and ((.body // "") | contains($run)) and ((.body // "") | contains($commit)) and
+   ((.body // "") | contains($workflow)) and ((.body // "") | contains($run)) and
+   ((.body // "") | contains($commit)) and
+   ((.body // "") | contains($changes_section)) and
    (([.assets[].name] | sort) == ([$macos, $windows, $checksums] | sort)) and
    all(.assets[]; (.size > 0) and ((.url // "") | length > 0))'
 then
-  echo "Rolling development release metadata or assets failed verification." >&2
+  echo "Rolling development release metadata, changelog, or assets failed verification." >&2
   exit 1
 fi
 ```
