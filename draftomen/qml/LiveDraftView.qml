@@ -96,6 +96,7 @@ Item {
 
             ColumnLayout {
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 spacing: 2
 
                 Label {
@@ -103,6 +104,8 @@ Item {
                     color: Theme.text
                     font.pixelSize: 22
                     font.bold: true
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
                 }
 
                 Label {
@@ -111,11 +114,15 @@ Item {
                             + " cards available"
                         : root.sessionState.status.message
                     color: Theme.textMuted
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
                 }
             }
 
             ColumnLayout {
                 visible: root.hasRecommendations
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 Layout.alignment: Qt.AlignVCenter
                 spacing: 2
 
@@ -133,6 +140,8 @@ Item {
                     text: root.sessionState.status.message
                     color: Theme.textMuted
                     font.pixelSize: 12
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
                 }
             }
 
