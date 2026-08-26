@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from draftgoblin.events import (
+from draftomen.events import (
     AccountEvent,
     DraftCompletedEvent,
     DraftLogParseError,

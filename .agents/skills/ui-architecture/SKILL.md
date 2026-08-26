@@ -1,16 +1,16 @@
 ---
 name: ui-architecture
 description: >-
-  Preserve Draftgoblin's UI-neutral application boundary when changing the
+  Preserve Draft Omen's UI-neutral application boundary when changing the
   shared live session, TUI or plain-watch adapters, PySide6 adapter, QML,
   frontend tests, or desktop packaging.
 ---
 
-# Draftgoblin UI Architecture
+# Draft Omen UI Architecture
 
 Keep domain behavior in shared Python and make every frontend an adapter over
 the same application contract. The canonical immutable state and command types
-live in `draftgoblin.session`.
+live in `draftomen.session`.
 
 Use this dependency direction:
 
@@ -40,7 +40,7 @@ Never introduce a dependency in the opposite direction.
    and packaged user workflows each have tests at the appropriate boundary.
 9. QML modules, Qt plugins, resources, fonts, icons, and other deployment inputs
    are declared explicitly and verified in packaged builds.
-10. Production GUI integration against live Draftgoblin services requires TUI
+10. Production GUI integration against live Draft Omen services requires TUI
     parity. An isolated runnable PySide6/QML mockup may proceed earlier only
     with deterministic representative mock data and the approved session
     contract.

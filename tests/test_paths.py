@@ -2,7 +2,7 @@ from pathlib import Path, PureWindowsPath
 
 import pytest
 
-from draftgoblin.paths import (
+from draftomen.paths import (
     UnsupportedPlatformError,
     app_data_dir,
     resolve_player_log_path,
@@ -48,5 +48,5 @@ def test_resolve_player_log_path_requires_override_on_unsupported_platform() -> 
 
 def test_app_data_dir_uses_current_user_home() -> None:
     assert app_data_dir(home=Path("/Users/example"), system="Darwin") == Path(
-        "/Users/example/.draftgoblin"
+        "/Users/example/.draftomen"
     )

@@ -1,4 +1,4 @@
-Draftgoblin replay
+Draft Omen replay
 Account: FixturePlayer (FIXTURECLIENTID1234567890)
 Set: MSH
 Event: QuickDraft_MSH_20260702

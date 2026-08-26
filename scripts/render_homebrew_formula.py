@@ -16,7 +16,7 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
-PYPI_RELEASE_URL = "https://pypi.org/pypi/draftgoblin/{version}/json"
+PYPI_RELEASE_URL = "https://pypi.org/pypi/draftomen/{version}/json"
 SHA256_PATTERN = re.compile(pattern=r"[0-9a-f]{64}")
 
 
@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     """
 
     parser = argparse.ArgumentParser(
-        description="Render Draftgoblin's Homebrew formula from PyPI metadata.",
+        description="Render Draftomen's Homebrew formula from PyPI metadata.",
     )
     parser.add_argument("--version", required=True)
     parser.add_argument("--template", required=True, type=Path)
@@ -87,7 +87,7 @@ def fetch_release_metadata(
     url = PYPI_RELEASE_URL.format(version=version)
     request = urllib.request.Request(
         url=url,
-        headers={"User-Agent": "draftgoblin-release-workflow"},
+        headers={"User-Agent": "draftomen-release-workflow"},
     )
     last_error: urllib.error.URLError | None = None
 
@@ -105,7 +105,7 @@ def fetch_release_metadata(
             time.sleep(retry_delay)
 
     raise RuntimeError(
-        f"PyPI metadata for draftgoblin {version} was unavailable after "
+        f"PyPI metadata for draftomen {version} was unavailable after "
         f"{attempts} attempts."
     ) from last_error
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from draftgoblin.logfollow import LogFollower, log_offset_path
+from draftomen.logfollow import LogFollower, log_offset_path
 
 
 def test_partial_lines_are_buffered_and_offset_resumes_across_restarts(

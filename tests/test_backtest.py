@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from draftgoblin.backtest import format_backtest_report, generate_backtest_report
-from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.cli import main
-from draftgoblin.pool import DraftPick, DraftState, draft_state_path, save_draft_state
+from draftomen.backtest import format_backtest_report, generate_backtest_report
+from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.cli import main
+from draftomen.pool import DraftPick, DraftState, draft_state_path, save_draft_state
 
 FIXTURE_NOW = datetime(2026, 7, 3, 12, 0, tzinfo=UTC).isoformat()
 
@@ -51,7 +51,7 @@ def test_backtest_uses_saved_pool_before_pick_for_recommendation() -> None:
     assert report.rows[1].pool_size == 2
     assert report.rows[1].offered_count == 2
     assert report.rows[1].match is True
-    assert "Ranking: DG Score" in output
+    assert "Ranking: DO Score" in output
     assert "Data sources: neutral prior" in output
     assert "Red Temptation [R] (grpId 4)" in output
     assert "White Followup [W] (grpId 3)" in output
@@ -101,8 +101,8 @@ def test_backtest_cli_skips_missing_offered_history_without_mutating_state(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Draftgoblin backtest" in captured.out
-    assert "Ranking: DG Score" in captured.out
+    assert "Draft Omen backtest" in captured.out
+    assert "Ranking: DO Score" in captured.out
     assert "skipped: missing offered-card history" in captured.out
     assert "Summary: no comparable picks; 1 skipped." in captured.out
     assert captured.err == ""

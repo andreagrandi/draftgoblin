@@ -8,14 +8,14 @@ from typing import Any
 
 import pytest
 
-from draftgoblin.carddb import (
+from draftomen.carddb import (
     CardDatabase,
     CardInfo,
     CardMetadataSeed,
     load_card_database,
 )
-from draftgoblin.config import COLOR_PAIRS, PICK_ENGINE
-from draftgoblin.seventeen import (
+from draftomen.config import COLOR_PAIRS, PICK_ENGINE
+from draftomen.seventeen import (
     NEUTRAL_PRIOR_SOURCE,
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
@@ -312,7 +312,7 @@ def test_progress_loader_recovers_and_persists_current_set_card_metadata(
         return CardDatabase(cards={recovered_card.grp_id: recovered_card})
 
     monkeypatch.setattr(
-        "draftgoblin.seventeen.augment_card_database_with_mtgjson_set",
+        "draftomen.seventeen.augment_card_database_with_mtgjson_set",
         recover_metadata,
     )
     app_dir = tmp_path / "app"

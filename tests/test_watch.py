@@ -5,10 +5,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn
 
-from draftgoblin.audit import load_draft_audit_records
-from draftgoblin.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
-from draftgoblin.pool import draft_state_path, load_draft_state
-from draftgoblin.seventeen import (
+from draftomen.audit import load_draft_audit_records
+from draftomen.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
+from draftomen.pool import draft_state_path, load_draft_state
+from draftomen.seventeen import (
     QUICK_DRAFT_FORMAT,
     RatingSampleCounts,
     SeventeenCardStats,
@@ -16,7 +16,7 @@ from draftgoblin.seventeen import (
     SeventeenLandsError,
     SeventeenLandsFormatData,
 )
-from draftgoblin.watch import PlainLogWatcher
+from draftomen.watch import PlainLogWatcher
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
 SCRYFALL_BULK_SAMPLE_PATH = (

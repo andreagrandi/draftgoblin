@@ -4,10 +4,10 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from draftgoblin.mock_session import MOCK_SCENARIOS, MockLiveSession
-from draftgoblin.qt_adapter import _to_qml_value
-from draftgoblin.qt_mock import MockSessionAdapter
-from draftgoblin.session import (
+from draftomen.mock_session import MOCK_SCENARIOS, MockLiveSession
+from draftomen.qt_adapter import _to_qml_value
+from draftomen.qt_mock import MockSessionAdapter
+from draftomen.session import (
     LiveSessionSnapshot,
     OperationKind,
     RequestBacktest,

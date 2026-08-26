@@ -6,7 +6,7 @@ The `build` subcommand runs the v1 deck-builder stages that are available in pla
 2. Select deck spells for the chosen pair under cached empirical targets or Limited fallback defaults.
 3. Add a mana base and print a 40-card build sheet with bench cards.
 
-`replay` and `watch --plain` also run these stages automatically when a draft completion event is parsed. Running `draftgoblin` with no subcommand starts watch mode and scans startup logs by default, so a just-finished draft should open directly into the build view.
+`replay` and `watch --plain` also run these stages automatically when a draft completion event is parsed. Running `draftomen` with no subcommand starts watch mode and scans startup logs by default, so a just-finished draft should open directly into the build view.
 
 ## Eligible spells
 
@@ -20,7 +20,7 @@ Conservative splashing is on by default and can be disabled with `--no-splash` o
 
 ## Structural defaults
 
-All tunables live in `draftgoblin/config.py` under `DeckBuilderConfig`:
+All tunables live in `draftomen/config.py` under `DeckBuilderConfig`:
 
 - `deck_size = 40`
 - `target_spell_count = 23`

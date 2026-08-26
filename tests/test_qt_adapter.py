@@ -13,14 +13,14 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QCoreApplication, QObject, QTimer, QUrl, Slot
 
-from draftgoblin.mock_session import MockLiveSession
-from draftgoblin.qt_adapter import (
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import (
     GuiPreferencesAdapter,
     LiveSessionAdapter,
     RecommendationListModel,
     SessionAdapter,
 )
-from draftgoblin.session import (
+from draftomen.session import (
     ChangeRanking,
     ChangeSplashPreference,
     ChooseAccount,

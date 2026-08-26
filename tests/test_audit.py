@@ -6,18 +6,18 @@ from pathlib import Path
 
 import pytest
 
-import draftgoblin.audit as audit_module
-from draftgoblin.audit import (
+import draftomen.audit as audit_module
+from draftomen.audit import (
     DraftAuditError,
     DraftAuditStore,
     draft_audit_path,
     load_draft_audit_records,
 )
-from draftgoblin.carddb import CardDatabase, CardInfo
-from draftgoblin.config import PICK_ENGINE
-from draftgoblin.events import DraftCompletedEvent, PackOfferedEvent, PickMadeEvent
-from draftgoblin.pickengine import PickEngine
-from draftgoblin.pool import DraftState
+from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.config import PICK_ENGINE
+from draftomen.events import DraftCompletedEvent, PackOfferedEvent, PickMadeEvent
+from draftomen.pickengine import PickEngine
+from draftomen.pool import DraftState
 
 ACCOUNT_ID = "account-a"
 DRAFT_ID = "draft-a"

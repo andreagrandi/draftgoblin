@@ -17,17 +17,17 @@ from textual.containers import VerticalScroll
 from textual.pilot import Pilot
 from textual.widgets import DataTable, ProgressBar, Select, Static, Switch
 
-from draftgoblin.audit import load_draft_audit_records
-from draftgoblin.carddb import (
+from draftomen.audit import load_draft_audit_records
+from draftomen.carddb import (
     CardDatabase,
     CardDatabaseError,
     CardInfo,
     build_card_database_from_bulk_file,
 )
-from draftgoblin.cardimages import CardImageService, card_image_cache_dir
-from draftgoblin.preferences import TuiVisibilityPreferences, tui_preferences_path
-from draftgoblin.pickengine import ScoredCard
-from draftgoblin.pool import (
+from draftomen.cardimages import CardImageService, card_image_cache_dir
+from draftomen.preferences import TuiVisibilityPreferences, tui_preferences_path
+from draftomen.pickengine import ScoredCard
+from draftomen.pool import (
     DraftPick,
     DraftPoolStore,
     DraftState,
@@ -35,7 +35,7 @@ from draftgoblin.pool import (
     draft_state_path,
     save_draft_state,
 )
-from draftgoblin.seventeen import (
+from draftomen.seventeen import (
     QUICK_DRAFT_FORMAT,
     RatingSampleCounts,
     SeventeenCardStats,
@@ -43,12 +43,12 @@ from draftgoblin.seventeen import (
     SeventeenLandsDownloadProgress,
     SeventeenLandsFormatData,
 )
-from draftgoblin.session import ApplicationPhase, DataLoadPhase, OperationKind
-from draftgoblin.splash import SplashAssessment
-from draftgoblin.tui import (
+from draftomen.session import ApplicationPhase, DataLoadPhase, OperationKind
+from draftomen.splash import SplashAssessment
+from draftomen.tui import (
     MANA_CARD_TYPE_GLYPHS,
     MANA_ICON_GLYPHS,
-    DraftgoblinTuiApp,
+    DraftomenTuiApp,
     MissingRatingsScreen,
     _format_card_colors,
     _format_card_types,
@@ -233,7 +233,7 @@ async def _assert_fixture_stream_updates_pack_panel(tmp_path: Path) -> None:
         assert snapshot.current_pack_event is not None
         assert snapshot.current_pack_event.account_id == FIXTURE_ACCOUNT_ID
         assert snapshot.current_scored_pack is not None
-        assert DraftgoblinTuiApp.TITLE == "Draft Goblin"
+        assert DraftomenTuiApp.TITLE == "Draft Omen"
         assert any("Fixture Spider" in row for row in _card_cells(rows=rows))
         assert "Account: FixturePlayer" in status
         assert "Pair: open" in status
@@ -944,7 +944,7 @@ async def _assert_accountless_live_path_completes(tmp_path: Path) -> None:
         assert not state_root.exists() or not tuple(state_root.rglob("*.json"))
 
 
-def test_tui_pack_rows_show_17lands_win_rate_grade_and_dg_score(
+def test_tui_pack_rows_show_17lands_win_rate_grade_and_do_score(
     tmp_path: Path,
 ) -> None:
     asyncio.run(_assert_pack_rows_show_17lands_stats(tmp_path=tmp_path))
@@ -1017,9 +1017,9 @@ async def _assert_status_shows_close_pick_confidence(tmp_path: Path) -> None:
         assert app.session.snapshot.ratings.total_cards == 14
         status = _status_text(app=app)
 
-        assert "Ranking: DG Score" in status
+        assert "Ranking: DO Score" in status
         assert "Confidence: early/open close pick" in status
-        assert "DG points" in status
+        assert "DO points" in status
 
 
 def test_tui_warns_when_card_metadata_is_incomplete(tmp_path: Path) -> None:
@@ -1121,7 +1121,7 @@ async def _assert_config_updates_columns_and_rank_cycle(tmp_path: Path) -> None:
         assert "Splash: Off" in _status_text(app=app)
 
         assert app.sort_mode == "score"
-        assert "Ranking: DG Score" in _status_text(app=app)
+        assert "Ranking: DO Score" in _status_text(app=app)
 
         await pilot.press("s")
         assert app.sort_mode == "win_rate"
@@ -1447,7 +1447,7 @@ async def _assert_build_view_collapses_duplicate_selected_spells(
         assert text.count("Copy (G)") == 1
         assert "One (W)" in text
         assert "One (W) x" not in text
-        assert "DG" not in text
+        assert "DO" not in text
         assert "50 Copy (G) x3" in text
         assert "50 One (W)" in text
         assert "Lands: 36" in text
@@ -1562,23 +1562,23 @@ async def _assert_backtest_keybinding_opens_report(tmp_path: Path) -> None:
         build_scroll = app.query_one("#build-scroll", VerticalScroll)
         pool_summary = app.query_one("#pool-summary", Static)
 
-        assert str(title.render()).startswith("Backtest view — DG Score recommendations")
+        assert str(title.render()).startswith("Backtest view — DO Score recommendations")
         assert app.session.snapshot.backtest is not None
         assert table.display is False
         assert build_scroll.display is True
         assert pool_summary.display is False
         assert app.focused == build_scroll
-        assert app.backtest_view_text.startswith("Draftgoblin backtest\n")
-        assert "Ranking: DG Score" in app.backtest_view_text
+        assert app.backtest_view_text.startswith("Draft Omen backtest\n")
+        assert "Ranking: DO Score" in app.backtest_view_text
         assert "Picks: 42 chosen, 42 compared, 0 skipped" in app.backtest_view_text
-        assert "Pack  Pick  Pool  17L WR  DG" in app.backtest_view_text
+        assert "Pack  Pick  Pool  17L WR  DO" in app.backtest_view_text
         assert "Recommended" in app.backtest_view_text
         assert "Actual" in app.backtest_view_text
         assert "Match" in app.backtest_view_text
         assert "Fixture Spider [G] (grpId 105097)" in app.backtest_view_text
         assert "Summary:" in app.backtest_view_text
         assert "View: backtest" in _status_text(app=app)
-        assert "Backtest action: rebuilt DG Score recommendation comparison" in _status_text(
+        assert "Backtest action: rebuilt DO Score recommendation comparison" in _status_text(
             app=app,
         )
         assert state_path.read_text(encoding="utf-8") == before
@@ -1605,7 +1605,7 @@ async def _assert_failed_backtest_refresh_replaces_stale_report(
 
         await pilot.press("t")
         await pilot.pause()
-        assert app.backtest_view_text.startswith("Draftgoblin backtest\n")
+        assert app.backtest_view_text.startswith("Draft Omen backtest\n")
 
         state_path.unlink()
         await pilot.press("s")
@@ -1619,7 +1619,7 @@ async def _assert_failed_backtest_refresh_replaces_stale_report(
 
         assert app.session.snapshot.backtest is None
         assert app.backtest_view_text.startswith("Backtest view unavailable:")
-        assert "Draftgoblin backtest\n" not in app.backtest_view_text
+        assert "Draft Omen backtest\n" not in app.backtest_view_text
         assert "Backtest action: cannot backtest" in _status_text(app=app)
 
 
@@ -1701,7 +1701,7 @@ async def _assert_card_image_preserves_ratio_with_auto_height(
     def successful_opener(*args: object, **kwargs: object) -> BytesIO:
         return BytesIO(b"image")
 
-    monkeypatch.setattr("draftgoblin.tui.TgpImage", FakeTgpImage)
+    monkeypatch.setattr("draftomen.tui.TgpImage", FakeTgpImage)
     fixture_database = _fixture_card_database()
     app = _tui_app(
         tmp_path=tmp_path,
@@ -2004,7 +2004,7 @@ async def _assert_card_metadata_load_failure_is_visible(tmp_path: Path) -> None:
         assert not table.loading
         assert table.row_count == 0
         assert "Card metadata failed to load: Scryfall is unavailable" in status
-        assert "Run `draftgoblin refresh-data`" in status
+        assert "Run `draftomen refresh-data`" in status
 
 
 def test_tui_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
@@ -2468,7 +2468,7 @@ async def _assert_preferences_load_warning_is_visible(tmp_path: Path) -> None:
 
 async def _save_tui_config(
     *,
-    app: DraftgoblinTuiApp,
+    app: DraftomenTuiApp,
     pilot: Pilot,
     **values: bool | str,
 ) -> None:
@@ -2504,8 +2504,8 @@ def _tui_app(
     startup_scan: bool = False,
     poll_interval: float = 1.0,
     visibility_preferences: TuiVisibilityPreferences | None = None,
-) -> DraftgoblinTuiApp:
-    return DraftgoblinTuiApp(
+) -> DraftomenTuiApp:
+    return DraftomenTuiApp(
         log_path=tmp_path / "Player.log",
         card_database=(
             None
@@ -2636,22 +2636,22 @@ def _full_fixture_lines() -> list[str]:
     return FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
 
 
-def _status_text(*, app: DraftgoblinTuiApp) -> str:
+def _status_text(*, app: DraftomenTuiApp) -> str:
     status = app.query_one("#status-bar", Static)
     return str(status.render())
 
 
-def _pool_summary_text(*, app: DraftgoblinTuiApp) -> str:
+def _pool_summary_text(*, app: DraftomenTuiApp) -> str:
     summary = app.query_one("#pool-summary", Static)
     return str(summary.render())
 
 
-def _focused_card_text(*, app: DraftgoblinTuiApp) -> str:
+def _focused_card_text(*, app: DraftomenTuiApp) -> str:
     focused_card = app.query_one("#focused-card", Static)
     return str(focused_card.render())
 
 
-def _card_image_preview_text(*, app: DraftgoblinTuiApp) -> str:
+def _card_image_preview_text(*, app: DraftomenTuiApp) -> str:
     preview = app.query_one("#card-image-preview", Static)
     return str(preview.render())
 

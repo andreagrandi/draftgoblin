@@ -97,7 +97,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/draftgoblin
+      url: https://pypi.org/p/draftomen
     permissions:
       contents: read
       id-token: write
@@ -150,13 +150,13 @@ jobs:
       - name: Download macOS native bundle
         uses: actions/download-artifact@v8
         with:
-          name: draftgoblin-macos-unsigned-development
+          name: draftomen-macos-unsigned-development
           path: release-assets/macos
 
       - name: Download Windows native bundle
         uses: actions/download-artifact@v8
         with:
-          name: draftgoblin-windows-unsigned-development
+          name: draftomen-windows-unsigned-development
           path: release-assets/windows
 
       - name: Rename native bundles and generate checksums
@@ -165,14 +165,14 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          macos_name="draftgoblin-${RELEASE_TAG}-unsigned-macos.tar"
-          windows_name="draftgoblin-${RELEASE_TAG}-unsigned-windows.exe"
-          checksums_name="draftgoblin-${RELEASE_TAG}-unsigned-sha256sums.txt"
+          macos_name="draftomen-${RELEASE_TAG}-unsigned-macos.tar"
+          windows_name="draftomen-${RELEASE_TAG}-unsigned-windows.exe"
+          checksums_name="draftomen-${RELEASE_TAG}-unsigned-sha256sums.txt"
 
           mkdir -p release-assets/published
-          mv release-assets/macos/Draftgoblin-unsigned-macos.tar \
+          mv release-assets/macos/Draftomen-unsigned-macos.tar \
             "release-assets/published/${macos_name}"
-          mv release-assets/windows/Draftgoblin-unsigned-windows.exe \
+          mv release-assets/windows/Draftomen-unsigned-windows.exe \
             "release-assets/published/${windows_name}"
 
           (
@@ -198,8 +198,8 @@ jobs:
               --notes-file release-notes.md
           fi
           gh release upload "${RELEASE_TAG}" \
-            "release-assets/published/draftgoblin-${RELEASE_TAG}-unsigned-macos.tar" \
-            "release-assets/published/draftgoblin-${RELEASE_TAG}-unsigned-windows.exe" \
-            "release-assets/published/draftgoblin-${RELEASE_TAG}-unsigned-sha256sums.txt" \
+            "release-assets/published/draftomen-${RELEASE_TAG}-unsigned-macos.tar" \
+            "release-assets/published/draftomen-${RELEASE_TAG}-unsigned-windows.exe" \
+            "release-assets/published/draftomen-${RELEASE_TAG}-unsigned-sha256sums.txt" \
             --clobber
           gh release edit "${RELEASE_TAG}" --draft=false

@@ -1,4 +1,4 @@
-"""Smoke-test an installable Draftgoblin distribution artifact.
+"""Smoke-test an installable Draftomen distribution artifact.
 Exercise the packaged console command in an isolated uv tool environment.
 """
 
@@ -26,7 +26,7 @@ BULK_FIXTURE_PATH = (
 REPLAY_GOLDEN_PATH = (
     PROJECT_ROOT / "tests" / "golden" / "quick-draft-msh-player.replay.txt"
 )
-RUNTIME_LOGO_PATH = "draftgoblin/assets/draftgoblin_logo.png"
+RUNTIME_LOGO_PATH = "draftomen/assets/draftomen_logo.png"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,7 +48,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     artifact_path = _resolve_artifact(pattern=args.artifact_pattern)
     _check_runtime_logo(artifact_path=artifact_path)
 
-    with TemporaryDirectory(prefix="draftgoblin-package-smoke-") as temporary_dir:
+    with TemporaryDirectory(prefix="draftomen-package-smoke-") as temporary_dir:
         temporary_path = Path(temporary_dir)
         environment = os.environ.copy()
         environment["UV_TOOL_DIR"] = str(temporary_path / "tools")
@@ -63,7 +63,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "3.12",
                 "--from",
                 str(artifact_path),
-                "draftgoblin",
+                "draftomen",
             ],
             check=True,
             env=environment,
@@ -136,9 +136,9 @@ def _executable_name() -> str:
     """
 
     if os.name == "nt":
-        return "draftgoblin.exe"
+        return "draftomen.exe"
 
-    return "draftgoblin"
+    return "draftomen"
 
 
 def _run_command(*, command: Sequence[str], environment: dict[str, str]) -> str:
@@ -165,9 +165,9 @@ def _check_version(*, output: str) -> None:
         project = tomllib.load(project_file)
     expected_version = project["project"]["version"]
 
-    if f"draftgoblin {expected_version}\n" not in output:
+    if f"draftomen {expected_version}\n" not in output:
         raise RuntimeError("Packaged command reports an unexpected version.")
-    if "Draftgoblin is unofficial Fan Content" not in output:
+    if "Draft Omen is unofficial Fan Content" not in output:
         raise RuntimeError("Packaged command omitted the Fan Content disclaimer.")
 
 

@@ -1,15 +1,15 @@
 ---
 name: gh-issue
 description: >-
-  Create a GitHub issue/ticket for the Draftgoblin repo. Use whenever the user
+  Create a GitHub issue/ticket for the Draft Omen repo. Use whenever the user
   wants to file a bug, create a ticket, open an issue, report a problem, or
-  request a feature/enhancement/documentation change for andreagrandi/draftgoblin.
+  request a feature/enhancement/documentation change for andreagrandi/draftomen.
 ---
 
-# Create a GitHub issue for draftgoblin
+# Create a GitHub issue for draftomen
 
-Use this workflow to file issues on `andreagrandi/draftgoblin` and add them
-to the **Draftgoblin** project board:
+Use this workflow to file issues on `andreagrandi/draftomen` and add them
+to the **Draft Omen** project board:
 `https://github.com/users/andreagrandi/projects/3`.
 
 Draft first. Issue creation is outward-facing: show the title, body, labels,
@@ -22,7 +22,7 @@ is not stated, ask before creating the issue.
 
 Apply exactly two labels:
 
-- Repo label: always `draftgoblin`.
+- Repo label: always `draftomen`.
 - Type label: exactly one of `bug`, `enhancement`, or `documentation`.
 
 Do not invent labels. Area belongs in the project Area field, not labels. Other
@@ -33,7 +33,7 @@ Verified label IDs are reference-only; pass label names to `gh issue create`.
 
 | Label | REST ID | Node ID |
 |-------|---------|---------|
-| `draftgoblin` | `11407200945` | `LA_kwDOTMcZ0s8AAAACp-wSsQ` |
+| `draftomen` | `11407200945` | `LA_kwDOTMcZ0s8AAAACp-wSsQ` |
 | `bug` | `11407101817` | `LA_kwDOTMcZ0s8AAAACp-qPeQ` |
 | `documentation` | `11407101837` | `LA_kwDOTMcZ0s8AAAACp-qPjQ` |
 | `enhancement` | `11407101867` | `LA_kwDOTMcZ0s8AAAACp-qPqw` |
@@ -86,20 +86,20 @@ Title: short, imperative or problem-focused, with no component prefix.
 Optional duplicate check:
 
 ```sh
-gh issue list --repo andreagrandi/draftgoblin --search "<keywords>" --state open
+gh issue list --repo andreagrandi/draftomen --search "<keywords>" --state open
 ```
 
 Create the issue:
 
 ```sh
-URL=$(gh issue create --repo andreagrandi/draftgoblin \
+URL=$(gh issue create --repo andreagrandi/draftomen \
   --title "<title>" \
   --body "<body>" \
-  --label "draftgoblin" \
+  --label "draftomen" \
   --label "<bug|enhancement|documentation>")
 ```
 
-Add it to the Draftgoblin project and capture the item ID:
+Add it to the Draft Omen project and capture the item ID:
 
 ```sh
 ITEM_ID=$(gh project item-add 3 --owner andreagrandi \
@@ -153,26 +153,26 @@ The body uses the other issue's database `id`, not its `#number`.
 
 ```sh
 # This issue <N> is blocked by <BLOCKER>.
-BLOCKER_ID=$(gh api repos/andreagrandi/draftgoblin/issues/<BLOCKER> --jq .id)
+BLOCKER_ID=$(gh api repos/andreagrandi/draftomen/issues/<BLOCKER> --jq .id)
 gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" \
-  repos/andreagrandi/draftgoblin/issues/<N>/dependencies/blocked_by \
+  repos/andreagrandi/draftomen/issues/<N>/dependencies/blocked_by \
   -F issue_id="$BLOCKER_ID"
 ```
 
 List or remove blocked-by relationships:
 
 ```sh
-gh api repos/andreagrandi/draftgoblin/issues/<N>/dependencies/blocked_by \
+gh api repos/andreagrandi/draftomen/issues/<N>/dependencies/blocked_by \
   -H "X-GitHub-Api-Version: 2026-03-10" --jq '.[] | "#\(.number) \(.title)"'
 
 gh api --method DELETE -H "X-GitHub-Api-Version: 2026-03-10" \
-  repos/andreagrandi/draftgoblin/issues/<N>/dependencies/blocked_by/<BLOCKER_ID>
+  repos/andreagrandi/draftomen/issues/<N>/dependencies/blocked_by/<BLOCKER_ID>
 ```
 
 ## Notes
 
 - Project fields were verified with `gh project field-list 3 --owner andreagrandi`.
 - If project commands fail because of missing scopes, run `gh auth refresh -s project`.
-- Never create the GitHub issue without adding it to the Draftgoblin project and
+- Never create the GitHub issue without adding it to the Draft Omen project and
   setting Priority, Area, and Status.
 

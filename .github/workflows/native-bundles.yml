@@ -30,16 +30,16 @@ jobs:
           - os: macos-latest
             platform: macos
             config: pysidedeploy.macos.spec
-            bundle: Draftgoblin-unsigned-macos.app
-            artifact: Draftgoblin-unsigned-macos.tar
-            artifact_name: draftgoblin-macos-unsigned-development
+            bundle: Draftomen-unsigned-macos.app
+            artifact: Draftomen-unsigned-macos.tar
+            artifact_name: draftomen-macos-unsigned-development
             smoke_timeout: 60
           - os: windows-latest
             platform: windows
             config: pysidedeploy.windows.spec
-            bundle: Draftgoblin-unsigned-windows.exe
-            artifact: Draftgoblin-unsigned-windows.exe
-            artifact_name: draftgoblin-windows-unsigned-development
+            bundle: Draftomen-unsigned-windows.exe
+            artifact: Draftomen-unsigned-windows.exe
+            artifact_name: draftomen-windows-unsigned-development
             smoke_timeout: 300
     steps:
       - name: Check out repository
@@ -110,7 +110,7 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           set -euo pipefail
-          extracted_bundle="$RUNNER_TEMP/draftgoblin-macos-bundle"
+          extracted_bundle="$RUNNER_TEMP/draftomen-macos-bundle"
           rm -rf "$extracted_bundle"
           mkdir -p "$extracted_bundle"
           tar -xpf \
@@ -160,13 +160,13 @@ jobs:
       - name: Download macOS unsigned development bundle
         uses: actions/download-artifact@v8
         with:
-          name: draftgoblin-macos-unsigned-development
+          name: draftomen-macos-unsigned-development
           path: release-assets/macos
 
       - name: Download Windows unsigned development bundle
         uses: actions/download-artifact@v8
         with:
-          name: draftgoblin-windows-unsigned-development
+          name: draftomen-windows-unsigned-development
           path: release-assets/windows
 
       - name: Derive development build metadata
@@ -178,7 +178,7 @@ jobs:
           utc_date="$(date -u +%Y%m%d)"
           release_date="${utc_date:0:4}-${utc_date:4:2}-${utc_date:6:2}"
           build_identifier="v${package_version}-dev.${utc_date}.${GITHUB_RUN_NUMBER}"
-          release_title="Draftgoblin v${package_version} development build ${release_date} #${GITHUB_RUN_NUMBER}"
+          release_title="Draft Omen v${package_version} development build ${release_date} #${GITHUB_RUN_NUMBER}"
 
           {
             echo "package_version=${package_version}"
@@ -223,13 +223,13 @@ jobs:
             exit 0
           fi
 
-          macos_name="draftgoblin-${BUILD_IDENTIFIER}-unsigned-macos.tar"
-          windows_name="draftgoblin-${BUILD_IDENTIFIER}-unsigned-windows.exe"
-          checksums_name="draftgoblin-${BUILD_IDENTIFIER}-unsigned-sha256sums.txt"
+          macos_name="draftomen-${BUILD_IDENTIFIER}-unsigned-macos.tar"
+          windows_name="draftomen-${BUILD_IDENTIFIER}-unsigned-windows.exe"
+          checksums_name="draftomen-${BUILD_IDENTIFIER}-unsigned-sha256sums.txt"
           mkdir -p release-assets/published
-          mv release-assets/macos/Draftgoblin-unsigned-macos.tar \
+          mv release-assets/macos/Draftomen-unsigned-macos.tar \
             "release-assets/published/${macos_name}"
-          mv release-assets/windows/Draftgoblin-unsigned-windows.exe \
+          mv release-assets/windows/Draftomen-unsigned-windows.exe \
             "release-assets/published/${windows_name}"
           (
             cd release-assets/published
