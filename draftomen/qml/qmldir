@@ -1,5 +1,6 @@
 module Draftomen
 AboutDialog 1.0 AboutDialog.qml
+PrivacyDialog 1.0 PrivacyDialog.qml
 singleton Theme 1.0 Theme.qml
 AppBar 1.0 AppBar.qml
 NavigationRail 1.0 NavigationRail.qml

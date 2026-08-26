@@ -10,6 +10,7 @@ Rectangle {
     required property string applicationVersion
     property bool narrow: false
     signal aboutRequested(var opener)
+    signal privacyRequested(var opener)
 
     color: Theme.surfaceLow
     implicitHeight: 34
@@ -52,6 +53,19 @@ Rectangle {
             Accessible.name: "Open About dialog"
             Accessible.description: "Show Draft Omen information and project website."
             onClicked: root.aboutRequested(aboutButton)
+        }
+
+        Button {
+            id: privacyButton
+            objectName: "privacyLink"
+            Layout.preferredWidth: 64
+            text: "Privacy"
+            activeFocusOnTab: true
+            focusPolicy: Qt.StrongFocus
+            Accessible.role: Accessible.Button
+            Accessible.name: "Open Privacy dialog"
+            Accessible.description: "Show how Draft Omen handles your data."
+            onClicked: root.privacyRequested(privacyButton)
         }
 
         Label {

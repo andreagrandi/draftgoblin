@@ -70,11 +70,19 @@ ApplicationWindow {
             aboutDialog.returnFocusItem = opener
             aboutDialog.open()
         }
+        onPrivacyRequested: opener => {
+            privacyDialog.returnFocusItem = opener
+            privacyDialog.open()
+        }
     }
 
     AboutDialog {
         id: aboutDialog
         applicationVersion: window.desktopApplicationVersion
+    }
+
+    PrivacyDialog {
+        id: privacyDialog
     }
 
     RowLayout {
