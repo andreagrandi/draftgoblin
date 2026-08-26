@@ -19,3 +19,7 @@ When working on the last remaining open ticket belonging to an epic, do not clos
 
 - If any work required by the epic remains, create an additional child ticket covering the missing work and leave the epic open.
 - If the whole epic has been implemented and verified, close the epic only after the final child ticket has been closed.
+
+## Changelog Requirement
+
+Before committing, pushing, or opening or updating a pull request, ensure the changeset includes an appropriate `CHANGELOG.md` entry under `## [Unreleased]`. For a release, move those entries to `## [X.Y.Z] - YYYY-MM-DD`, then restore `## [Unreleased]`.

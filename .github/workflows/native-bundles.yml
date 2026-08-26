@@ -187,6 +187,14 @@ jobs:
             echo "release_title=${release_title}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Extract Unreleased changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/extract_changelog.py \
+            --section Unreleased \
+            --output "$RUNNER_TEMP/development-changelog.md"
+
       - name: Publish rolling development release
         shell: bash
         env:
@@ -232,7 +240,8 @@ jobs:
           git push origin "refs/tags/${RELEASE_TAG}" --force
 
           notes_file="${RUNNER_TEMP}/development-release-notes.md"
-          cat > "${notes_file}" <<EOF
+          {
+            cat <<EOF
           # ${RELEASE_TITLE}
 
           - Build identifier: \`${BUILD_IDENTIFIER}\`
@@ -242,7 +251,12 @@ jobs:
           - Progressive run number: ${GITHUB_RUN_NUMBER}
           - Warning: This is an unsigned native development build.
           - Workflow run: ${WORKFLOW_RUN_URL}
+
+          ## Changes since previous release
+
           EOF
+            cat "${RUNNER_TEMP}/development-changelog.md"
+          } > "${notes_file}"
 
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release edit "${RELEASE_TAG}" \

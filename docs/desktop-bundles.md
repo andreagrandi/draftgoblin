@@ -201,13 +201,17 @@ For a tag such as `v1.2.3`, `release.yml` invokes the reusable native workflow
 with `workflow_call`. The GitHub Release publication job runs only after both
 the existing `publish` job has successfully published the Python distributions
 to PyPI and both native bundle jobs have built and passed their smoke tests.
-It downloads the two native Actions artifacts from that release run, renames
-their payloads, generates SHA-256 checksums, and creates the GitHub Release
-with generated notes.
+It checks out the tagged repository, extracts the non-empty body under the exact
+`## [1.2.3] - YYYY-MM-DD` section in `CHANGELOG.md`, and uses that body as the
+GitHub Release notes. A missing, duplicate, or empty section fails the job
+before release publication. The job downloads the two native Actions artifacts
+from that release run, renames their payloads, generates SHA-256 checksums, and
+creates or updates the GitHub Release with those notes.
+
 Release publication is recoverable: rerunning the job reuses an existing draft
-or release, replaces the three assets, and publishes any draft left by an
-earlier interrupted attempt. Native Actions artifacts are likewise overwritten
-when their build jobs are rerun.
+or release, replaces the three assets and changelog notes, and publishes any
+draft left by an earlier interrupted attempt. Native Actions artifacts are
+likewise overwritten when their build jobs are rerun.
 
 The persistent public assets attached to the `v1.2.3` GitHub Release are:
 
