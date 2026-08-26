@@ -80,35 +80,16 @@ Dialog {
             border.width: 1
         }
 
-        Button {
+        DimensionalButton {
             id: closeButton
             objectName: "privacyDialogCloseButton"
             text: "Close"
+            accented: false
             implicitWidth: 96
-            implicitHeight: 38
             activeFocusOnTab: true
             focusPolicy: Qt.StrongFocus
             Accessible.role: Accessible.Button
             Accessible.name: "Close Privacy dialog"
-
-            contentItem: Text {
-                text: closeButton.text
-                color: Theme.text
-                font: closeButton.font
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-
-            background: Rectangle {
-                radius: Theme.radius
-                color: closeButton.down ? Theme.primaryDark
-                    : closeButton.hovered ? Theme.surfaceHighest
-                    : Theme.surfaceHigh
-                border.color: closeButton.activeFocus
-                    ? Theme.focus : Theme.outline
-                border.width: closeButton.activeFocus ? 2 : 1
-            }
-
             onClicked: root.close()
         }
     }

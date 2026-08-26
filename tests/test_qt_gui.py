@@ -873,7 +873,7 @@ from pathlib import Path
 import time
 from tempfile import TemporaryDirectory
 
-from PySide6.QtCore import QObject, QPointF, Qt, QUrl
+from PySide6.QtCore import QMetaObject, QObject, QPointF, Qt, QUrl
 from PySide6.QtGui import QAccessible, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickItem
@@ -1324,10 +1324,8 @@ root.resize(760, 900)
 application.processEvents()
 narrow_row = find_visual_item(root.contentItem(), "narrowRecommendationRow1")
 narrow_second_row = find_visual_item(root.contentItem(), "narrowRecommendationRow2")
-narrow_third_row = find_visual_item(root.contentItem(), "narrowRecommendationRow3")
 assert narrow_row is not None and narrow_row.isVisible()
 assert narrow_second_row is not None and narrow_second_row.isVisible()
-assert narrow_third_row is not None
 narrow_thumbnail_frame = find_visual_item(
     narrow_row, "recommendationThumbnailFrame"
 )
@@ -1370,6 +1368,23 @@ narrow_missing_label = find_visual_item(
 assert narrow_missing_fallback is not None and narrow_missing_fallback.isVisible()
 assert narrow_missing_label is not None
 assert narrow_missing_label.property("text") == "No image available"
+narrow_recommendation_list = root.findChild(
+    QObject, "narrowRecommendationList"
+)
+narrow_recommendation_list.setProperty("currentIndex", 2)
+assert narrow_recommendation_list.property("currentIndex") == 2
+assert QMetaObject.invokeMethod(narrow_recommendation_list, "positionViewAtEnd")
+wait_until(
+    lambda: float(narrow_recommendation_list.property("contentY")) > 0,
+    "the narrow recommendation list to scroll to its end",
+)
+wait_until(
+    lambda: find_visual_item(root.contentItem(), "narrowRecommendationRow3")
+    is not None,
+    "the third narrow recommendation row",
+)
+narrow_third_row = find_visual_item(root.contentItem(), "narrowRecommendationRow3")
+assert narrow_third_row is not None and narrow_third_row.isVisible()
 narrow_third_texts = visible_texts(narrow_third_row)
 assert "17L —" in narrow_third_texts
 assert "Grade —" in narrow_third_texts
@@ -1615,8 +1630,8 @@ application.processEvents()
 
 privacy_link = root.findChild(QObject, "privacyLink")
 about_link = root.findChild(QObject, "aboutLink")
-status_strip = root.findChild(QObject, "statusStrip")
-assert privacy_link is not None and about_link is not None and status_strip is not None
+navigation_rail = root.findChild(QObject, "navigationRail")
+assert privacy_link is not None and about_link is not None and navigation_rail is not None
 assert privacy_link.property("text") == "Privacy"
 assert privacy_link.isVisible()
 assert privacy_link.property("activeFocusOnTab") is True
@@ -1625,7 +1640,7 @@ assert accessible_privacy_link is not None
 assert accessible_privacy_link.text(QAccessible.Text.Name) == "Open Privacy dialog"
 assert root.property("narrow") is True
 assert privacy_link.width() > 0
-assert status_strip.width() <= root.width()
+assert navigation_rail.width() <= root.width()
 
 window_width = float(root.property("width"))
 window_height = float(root.property("height"))
@@ -1633,14 +1648,14 @@ privacy_top_left = privacy_link.mapToScene(QPointF(0, 0))
 privacy_bottom_right = privacy_link.mapToScene(
     QPointF(privacy_link.width(), privacy_link.height())
 )
-status_top_left = status_strip.mapToScene(QPointF(0, 0))
-status_bottom_right = status_strip.mapToScene(
-    QPointF(status_strip.width(), status_strip.height())
+navigation_top_left = navigation_rail.mapToScene(QPointF(0, 0))
+navigation_bottom_right = navigation_rail.mapToScene(
+    QPointF(navigation_rail.width(), navigation_rail.height())
 )
-assert privacy_top_left.x() >= status_top_left.x()
-assert privacy_top_left.y() >= status_top_left.y()
-assert privacy_bottom_right.x() <= status_bottom_right.x()
-assert privacy_bottom_right.y() <= status_bottom_right.y()
+assert privacy_top_left.x() >= navigation_top_left.x()
+assert privacy_top_left.y() >= navigation_top_left.y()
+assert privacy_bottom_right.x() <= navigation_bottom_right.x()
+assert privacy_bottom_right.y() <= navigation_bottom_right.y()
 assert privacy_top_left.x() >= 0
 assert privacy_top_left.y() >= 0
 assert privacy_bottom_right.x() <= window_width
@@ -2167,10 +2182,14 @@ build_view.setProperty("benchExpanded", False)
 application.processEvents()
 wide_bench_toggle = find_visual_item(root.contentItem(), "buildBenchToggle")
 assert wide_bench_toggle is not None and wide_bench_toggle.isVisible()
+assert_visual_item_inside(build_view, wide_bench_toggle)
+assert_visual_item_inside(root.contentItem(), wide_bench_toggle)
 assert wide_bench_toggle.property("text").endswith("bench · 2")
 wide_bench_toggle.forceActiveFocus()
 QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
+assert_visual_item_inside(build_view, wide_bench_toggle)
+assert_visual_item_inside(root.contentItem(), wide_bench_toggle)
 wide_bench = find_visual_item(root.contentItem(), "buildBenchButton0")
 assert wide_bench is not None and wide_bench.isVisible()
 wide_bench.forceActiveFocus()
@@ -2179,6 +2198,10 @@ assert wide_bench.property("activeFocus") is True
 
 root.resize(1440, 900)
 application.processEvents()
+wide_bench_toggle = find_visual_item(root.contentItem(), "buildBenchToggle")
+assert wide_bench_toggle is not None and wide_bench_toggle.isVisible()
+assert_visual_item_inside(build_view, wide_bench_toggle)
+assert_visual_item_inside(root.contentItem(), wide_bench_toggle)
 wide_preview = find_visual_item(root.contentItem(), "wideBuildCardPreview")
 wide_curve = find_visual_item(root.contentItem(), "wideBuildManaCurve")
 assert wide_preview is not None and wide_preview.isVisible()
@@ -2324,3 +2347,145 @@ del engine
     assert "Unable to assign" not in completed.stderr
     assert "TypeError" not in completed.stderr
 
+
+def test_qml_dimensional_controls_have_distinct_states_and_fit_narrow_window() -> None:
+    probe = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QPointF, QObject, Qt, QUrl
+from PySide6.QtGui import QAccessible, QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtTest import QTest
+
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_mock import MockSessionAdapter
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+session = MockLiveSession(scenario="ready")
+provider = MockSessionAdapter(session=session)
+
+with TemporaryDirectory() as preferences_dir:
+    preferences = GuiPreferencesAdapter(app_dir=preferences_dir)
+    engine = QQmlApplicationEngine()
+    qml_directory = Path.cwd() / "draftomen" / "qml"
+    engine.addImportPath(str(qml_directory))
+    context = engine.rootContext()
+    context.setContextProperty("fixedFontFamily", "monospace")
+    context.setContextProperty("sessionProvider", provider)
+    context.setContextProperty("applicationTitle", "Draft Omen")
+    context.setContextProperty("applicationVersion", "0.0")
+    context.setContextProperty("guiPreferences", preferences)
+    context.setContextProperty("initialSurface", "live")
+    context.setContextProperty("initialWindowWidth", 680)
+    context.setContextProperty("initialWindowHeight", 640)
+    engine.setInitialProperties({"provider": provider})
+    engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+    assert engine.rootObjects()
+    root = engine.rootObjects()[0]
+    root.resize(680, 640)
+    application.processEvents()
+
+    navigation = root.findChild(QObject, "navigationRail")
+    about = root.findChild(QObject, "aboutLink")
+    privacy = root.findChild(QObject, "privacyLink")
+    settings = root.findChild(QObject, "settingsButton")
+    ranking = root.findChild(QObject, "rankingSelector")
+    status_strip = root.findChild(QObject, "statusStrip")
+    assert navigation is not None
+    assert about is not None and privacy is not None
+    assert settings is not None and ranking is not None and status_strip is not None
+    assert about.isVisible() and privacy.isVisible()
+    for control in (about, privacy):
+        assert control.property("height") >= 42
+        position = control.mapToItem(navigation, QPointF(0, 0))
+        assert position.x() >= 0
+        assert position.y() >= 0
+        assert position.y() + control.property("height") <= navigation.property("height")
+        accessible = QAccessible.queryAccessibleInterface(control)
+        assert accessible is not None
+        assert accessible.text(QAccessible.Text.Name)
+
+    for control in (settings, ranking):
+        assert control.property("height") >= 42
+        position = control.mapToItem(root.contentItem(), QPointF(0, 0))
+        assert position.x() >= 0
+        assert position.y() >= 0
+        assert position.x() + control.property("width") <= root.width()
+        accessible = QAccessible.queryAccessibleInterface(control)
+        assert accessible is not None
+        assert accessible.text(QAccessible.Text.Name)
+    surface = settings.findChild(QObject, "dimensionalSurface")
+    assert surface is not None
+    assert surface.property("stateEnabled") is True
+    assert surface.property("statePressed") is False
+    assert surface.property("stateSelected") is False
+    resting_fill = surface.property("topFillColor")
+    assert surface.property("faceY") == 0
+    surface.setProperty("stateHovered", True)
+    application.processEvents()
+    assert surface.property("faceY") == 0
+    assert surface.property("topFillColor") != resting_fill
+    surface.setProperty("stateHovered", False)
+    application.processEvents()
+    settings.forceActiveFocus()
+    application.processEvents()
+    assert surface.property("stateFocused") is True
+    assert surface.property("outlineWidth") >= 2
+    settings.setProperty("checked", True)
+    application.processEvents()
+    assert surface.property("stateSelected") is True
+    settings.setProperty("enabled", False)
+    application.processEvents()
+    assert surface.property("stateEnabled") is False
+    settings.setProperty("enabled", True)
+
+    ranking.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    popup = ranking.findChild(QObject, "dimensionalComboPopup")
+    combo_list = ranking.findChild(QObject, "dimensionalComboList")
+    assert popup is not None and popup.property("visible") is True
+    assert combo_list is not None
+    delegate = combo_list.property("currentItem")
+    assert delegate is not None and delegate.property("height") >= 42
+    delegate_surface = delegate.findChild(QObject, "dimensionalSurface")
+    selected_indicator = delegate.findChild(
+        QObject, "dimensionalComboSelectedIndicator"
+    )
+    assert delegate_surface is not None
+    assert delegate_surface.property("stateExpanded") is True
+    assert selected_indicator is not None
+    assert selected_indicator.property("visible") is True
+    ranking.setProperty("currentIndex", 1)
+    application.processEvents()
+    assert ranking.property("currentIndex") == 1
+    QTest.keyClick(root, Qt.Key_Escape)
+    application.processEvents()
+    assert popup.property("visible") is False
+
+    about.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    about_dialog = root.findChild(QObject, "aboutDialog")
+    close = root.findChild(QObject, "aboutDialogCloseButton")
+    assert about_dialog is not None and about_dialog.property("visible") is True
+    assert close is not None and close.property("height") >= 42
+    close.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert about_dialog.property("visible") is False
+    assert about.property("activeFocus") is True
+
+    del engine
+"""
+    completed = _run_qml_probe(probe)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+    assert "TypeError" not in completed.stderr

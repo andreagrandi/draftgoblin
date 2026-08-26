@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
+- Restyle desktop buttons and dropdown selectors with dimensional Draft Omen
+  controls, and move About and Privacy actions into the navigation rail.
+
 - Make `draftomen` launch the live PySide6/QML GUI by default, move the
   terminal workflow to `draftomen-tui`, and keep deterministic mockup launches
   explicit.

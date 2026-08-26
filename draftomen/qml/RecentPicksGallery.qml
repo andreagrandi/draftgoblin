@@ -168,9 +168,10 @@ Item {
         }
 
         footer: DialogButtonBox {
-            Button {
+            DimensionalButton {
                 objectName: "recentPickPreviewCloseButton"
                 text: "Close"
+                accented: false
                 Accessible.name: "Close"
                 onClicked: previewDialog.reject()
             }

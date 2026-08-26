@@ -56,7 +56,7 @@ Item {
                     wrapMode: Text.WordWrap
                 }
             }
-            Button {
+            DimensionalButton {
                 objectName: "backtestRunButton"
                 text: root.hasReport ? "Run again" : "Run backtest"
                 Accessible.name: text

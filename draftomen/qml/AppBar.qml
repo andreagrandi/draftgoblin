@@ -58,13 +58,14 @@ Rectangle {
             }
         }
 
-        ComboBox {
+        DimensionalComboBox {
             id: accountSelector
             objectName: "accountSelector"
             Layout.preferredWidth: 180
             visible: root.sessionState.accounts
                 && root.sessionState.accounts.length > 0
             model: root.sessionState.accounts || []
+            textRole: "screen_name"
             valueRole: "account_id"
             currentIndex: {
                 const activeAccount = root.sessionState.active_account
@@ -83,17 +84,9 @@ Rectangle {
             Accessible.name: "Arena account"
             Accessible.description: "Choose the Arena account whose live draft is shown."
             onActivated: root.provider.chooseAccount(currentValue)
-
-            delegate: ItemDelegate {
-                required property var modelData
-                required property int index
-                width: accountSelector.width
-                text: modelData.screen_name || modelData.account_id
-                highlighted: accountSelector.highlightedIndex === index
-            }
         }
 
-        ComboBox {
+        DimensionalComboBox {
             id: scenarioSelector
             visible: root.provider && root.provider.mockMode
             Layout.preferredWidth: 126
@@ -104,16 +97,8 @@ Rectangle {
             Accessible.name: "Representative state"
             Accessible.description: "Choose deterministic visual-development data."
             onActivated: root.provider.selectScenario(currentText)
-
-            background: Rectangle {
-                color: Theme.surfaceHigh
-                border.color: scenarioSelector.activeFocus ? Theme.focus : Theme.outline
-                border.width: scenarioSelector.activeFocus ? 2 : 1
-                radius: Theme.radius
-            }
         }
-
-        Button {
+        DimensionalButton {
             objectName: "settingsButton"
             text: "Settings"
             Accessible.name: "Open settings"

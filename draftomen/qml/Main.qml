@@ -66,14 +66,6 @@ ApplicationWindow {
         sessionState: window.sessionState
         applicationVersion: window.desktopApplicationVersion
         narrow: window.narrow
-        onAboutRequested: opener => {
-            aboutDialog.returnFocusItem = opener
-            aboutDialog.open()
-        }
-        onPrivacyRequested: opener => {
-            privacyDialog.returnFocusItem = opener
-            privacyDialog.open()
-        }
     }
 
     AboutDialog {
@@ -94,6 +86,14 @@ ApplicationWindow {
             currentSurface: window.currentSurface
             compact: window.narrow
             onSurfaceRequested: surface => window.currentSurface = surface
+            onAboutRequested: opener => {
+                aboutDialog.returnFocusItem = opener
+                aboutDialog.open()
+            }
+            onPrivacyRequested: opener => {
+                privacyDialog.returnFocusItem = opener
+                privacyDialog.open()
+            }
         }
 
         StackLayout {

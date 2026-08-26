@@ -6,10 +6,13 @@ import QtQuick.Layouts 1.15
 
 Rectangle {
     id: root
+    objectName: "navigationRail"
 
     required property string currentSurface
     required property bool compact
     signal surfaceRequested(string surface)
+    signal aboutRequested(var opener)
+    signal privacyRequested(var opener)
 
     color: Theme.surfaceLow
     implicitWidth: compact ? 116 : 176
@@ -69,17 +72,9 @@ Rectangle {
                 { key: "backtest", label: "Backtest", shortLabel: "Backtest", icon: "history" }
             ]
 
-            delegate: Button {
+            delegate: DimensionalButton {
                 id: navigationButton
                 required property var modelData
-
-                readonly property color navigationForeground: !enabled
-                    ? Qt.rgba(0.77, 0.79, 0.69, 0.48)
-                    : activeFocus
-                        ? Theme.focus
-                        : checked
-                            ? Theme.primary
-                            : hovered ? Theme.text : Theme.textMuted
 
                 Layout.fillWidth: true
                 Layout.preferredHeight: Theme.targetHeight
@@ -88,36 +83,15 @@ Rectangle {
                     : navigationButton.modelData.label
                 checkable: true
                 checked: root.currentSurface === navigationButton.modelData.key
+                accented: navigationButton.checked
                 ButtonGroup.group: navigationGroup
                 Accessible.name: navigationButton.modelData.label
                 Accessible.description: "Open the " + navigationButton.modelData.label + " surface."
                 onClicked: root.surfaceRequested(navigationButton.modelData.key)
 
-                background: Rectangle {
-                    color: !navigationButton.enabled
-                        ? "transparent"
-                        : navigationButton.checked
-                            ? Theme.surfaceHighest
-                            : navigationButton.hovered
-                                ? Theme.surfaceHigh : "transparent"
-                    border.color: !navigationButton.enabled
-                        ? "transparent"
-                        : navigationButton.activeFocus
-                            ? Theme.focus
-                            : navigationButton.checked
-                                ? Theme.primary
-                                : navigationButton.hovered
-                                    ? Theme.outline : "transparent"
-                    border.width: !navigationButton.enabled
-                        ? 0
-                        : navigationButton.activeFocus || navigationButton.checked
-                            ? 2
-                            : navigationButton.hovered ? 1 : 0
-                    radius: Theme.radius
-                }
-
                 contentItem: RowLayout {
                     anchors.fill: parent
+                    anchors.topMargin: navigationButton.down ? Theme.controlPressOffset : 0
                     anchors.leftMargin: root.compact ? 6 : 10
                     anchors.rightMargin: root.compact ? 6 : 10
                     spacing: root.compact ? 6 : 10
@@ -131,7 +105,7 @@ Rectangle {
                         implicitWidth: 24
                         implicitHeight: 24
                         property string iconName: navigationButton.modelData.icon
-                        property color iconColor: navigationButton.navigationForeground
+                        property color iconColor: navigationButton.contentColor
 
                         onIconNameChanged: requestPaint()
                         onIconColorChanged: requestPaint()
@@ -182,7 +156,7 @@ Rectangle {
                     Text {
                         Layout.fillWidth: true
                         text: navigationButton.text
-                        color: navigationButton.navigationForeground
+                        color: navigationButton.contentColor
                         font.bold: navigationButton.checked
                         verticalAlignment: Text.AlignVCenter
                         horizontalAlignment: Text.AlignLeft
@@ -195,12 +169,46 @@ Rectangle {
             Layout.fillHeight: true
         }
 
-        Label {
+        ColumnLayout {
             Layout.fillWidth: true
-            text: root.compact ? "Read only" : "Arena integration · Read only"
-            color: Theme.textMuted
-            font.pixelSize: 10
-            wrapMode: Text.WordWrap
+            spacing: 6
+
+            DimensionalButton {
+                id: aboutButton
+                objectName: "aboutLink"
+                Layout.fillWidth: true
+                text: "About"
+                accented: true
+                accentColor: Theme.primary
+                accentContentColor: Theme.primaryContent
+                Accessible.name: "Open About dialog"
+                Accessible.description: "Show Draft Omen information and project website."
+                onClicked: root.aboutRequested(aboutButton)
+            }
+
+            DimensionalButton {
+                id: privacyButton
+                objectName: "privacyLink"
+                Layout.fillWidth: true
+                text: "Privacy"
+                accented: true
+                accentColor: Theme.secondary
+                accentContentColor: Theme.secondaryContent
+                activeFocusOnTab: true
+                focusPolicy: Qt.StrongFocus
+                Accessible.role: Accessible.Button
+                Accessible.name: "Open Privacy dialog"
+                Accessible.description: "Show how Draft Omen handles your data."
+                onClicked: root.privacyRequested(privacyButton)
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: root.compact ? "Read only" : "Arena integration · Read only"
+                color: Theme.textMuted
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+            }
         }
     }
 
