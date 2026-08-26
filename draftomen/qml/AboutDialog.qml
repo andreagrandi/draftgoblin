@@ -102,35 +102,14 @@ Dialog {
             Accessible.name: text
         }
 
-        Button {
+        DimensionalButton {
             id: websiteButton
             objectName: "aboutDialogWebsite"
             Layout.alignment: Qt.AlignHCenter
             text: "Project website"
             implicitWidth: 140
-            implicitHeight: 38
             Accessible.name: "Open Draft Omen project website"
             Accessible.description: root.projectWebsite
-
-            contentItem: Text {
-                text: websiteButton.text
-                color: Theme.text
-                font: websiteButton.font
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-            }
-
-            background: Rectangle {
-                radius: Theme.radius
-                color: websiteButton.down ? Theme.primaryDark
-                    : websiteButton.hovered ? Theme.surfaceHighest
-                    : Theme.surfaceHigh
-                border.color: websiteButton.activeFocus
-                    ? Theme.focus : Theme.outline
-                border.width: websiteButton.activeFocus ? 2 : 1
-            }
-
             onClicked: Qt.openUrlExternally(root.projectWebsite)
         }
     }
@@ -144,32 +123,13 @@ Dialog {
             border.width: 1
         }
 
-        Button {
+        DimensionalButton {
             id: closeButton
             objectName: "aboutDialogCloseButton"
             text: "Close"
+            accented: false
             implicitWidth: 96
-            implicitHeight: 38
             Accessible.name: "Close About dialog"
-
-            contentItem: Text {
-                text: closeButton.text
-                color: Theme.text
-                font: closeButton.font
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-
-            background: Rectangle {
-                radius: Theme.radius
-                color: closeButton.down ? Theme.primaryDark
-                    : closeButton.hovered ? Theme.surfaceHighest
-                    : Theme.surfaceHigh
-                border.color: closeButton.activeFocus
-                    ? Theme.focus : Theme.outline
-                border.width: closeButton.activeFocus ? 2 : 1
-            }
-
             onClicked: root.close()
         }
     }

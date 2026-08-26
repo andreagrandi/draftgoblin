@@ -29,6 +29,19 @@ Item {
         instant_count: null
     })
     readonly property int wideMinimumWidth: 220 + 360 + 240 + Theme.gutter * 2
+    readonly property real wideBenchHeight: (
+        root.benchExpanded
+            ? Math.min(
+                wideBenchRows.implicitHeight,
+                root.wideBenchViewportMaximumHeight
+            )
+            : 0
+    ) + Theme.targetHeight + wideBenchContent.spacing + 4 * 2
+    // Keep the expanded bench compact so the main row retains useful height.
+    readonly property real wideBenchViewportMaximumHeight: Math.max(
+        Theme.targetHeight + Theme.gutter,
+        root.height * 0.08
+    )
     readonly property bool compactPresentation: root.narrow || root.width < root.wideMinimumWidth
     readonly property var automaticPair: {
         for (let index = 0; index < root.build.pair_options.length; index++) {
@@ -302,7 +315,7 @@ Item {
         }
     }
 
-    component BuildCardRow: Button {
+    component BuildCardRow: DimensionalButton {
         id: cardRow
         required property var cardEntry
         required property int entryIndex
@@ -318,6 +331,8 @@ Item {
         Layout.minimumHeight: 40
         Layout.preferredHeight: root.displayPreferences.compactDensity ? 40 : 46
         text: ""
+        dimensionalSelected: cardRow.selected
+        accented: cardRow.selected
         Accessible.name: "Focus card " + cardEntry.card.name
         Accessible.description: cardEntry.quantity + " copies, " + colorsText
             + ", DO score " + scoreText + ", grade " + (cardEntry.letter_grade || "—")
@@ -325,22 +340,16 @@ Item {
         Accessible.selectable: true
         Accessible.selected: cardRow.selected
         onClicked: root.focusCard(cardEntry)
-        background: Rectangle {
-            color: cardRow.selected ? Theme.surfaceHighest : Theme.surfaceHigh
-            border.color: cardRow.activeFocus ? Theme.focus
-                : cardRow.selected ? Theme.primary : Theme.outline
-            border.width: cardRow.activeFocus || cardRow.selected ? 2 : 1
-            radius: Theme.radius
-        }
         contentItem: RowLayout {
             anchors.fill: parent
+            anchors.topMargin: cardRow.down ? Theme.controlPressOffset : 0
             anchors.leftMargin: 10
             anchors.rightMargin: 10
             spacing: 8
             Label {
                 Layout.preferredWidth: 24
                 text: "×" + cardEntry.quantity
-                color: Theme.textMuted
+                color: cardRow.selected ? cardRow.contentColor : Theme.textMuted
                 font.family: fixedFontFamily
                 horizontalAlignment: Text.AlignRight
             }
@@ -348,21 +357,21 @@ Item {
             Label {
                 Layout.fillWidth: true
                 text: cardEntry.card.name
-                color: cardRow.selected ? Theme.primary : Theme.text
+                color: cardRow.contentColor
                 font.bold: cardRow.selected
                 elide: Text.ElideRight
             }
             Label {
                 Layout.preferredWidth: 30
                 text: cardEntry.letter_grade || "—"
-                color: Theme.warning
+                color: cardRow.selected ? cardRow.contentColor : Theme.warning
                 font.bold: true
                 horizontalAlignment: Text.AlignRight
             }
             Label {
                 Layout.preferredWidth: 42
                 text: "DO " + scoreText
-                color: Theme.primary
+                color: cardRow.selected ? cardRow.contentColor : Theme.primary
                 font.family: fixedFontFamily
                 horizontalAlignment: Text.AlignRight
             }
@@ -395,13 +404,14 @@ Item {
                 font.bold: true
                 font.letterSpacing: 1
             }
-            ComboBox {
+            DimensionalComboBox {
                 id: pairSelector
                 objectName: "buildPairSelector"
                 visible: root.hasBuild
                 Layout.preferredWidth: root.compactPresentation ? 104 : 174
                 model: root.build.pair_options
                 textRole: "pair"
+                valueRole: "pair"
                 currentIndex: {
                     for (let index = 0; index < root.build.pair_options.length; index++) {
                         if (root.build.pair_options[index].pair === root.build.selected_pair)
@@ -409,23 +419,17 @@ Item {
                     }
                     return 0
                 }
-                delegate: ItemDelegate {
-                    required property var modelData
-                    width: pairSelector.width
-                    text: modelData.pair + (modelData.automatic ? " · automatic" : "")
-                }
                 Accessible.name: "Deck color pair"
                 Accessible.description: "Choose a pair, then rebuild the suggested deck."
             }
-            Button {
+            DimensionalButton {
                 objectName: "buildRebuildButton"
                 visible: root.hasBuild
                 text: "Rebuild"
                 Accessible.name: "Rebuild suggested deck"
                 Accessible.description: "Requests a new build with the selected color pair override."
                 onClicked: {
-                    const option = pairSelector.currentIndex >= 0 ? root.build.pair_options[pairSelector.currentIndex] : null
-                    sessionProvider.requestBuild(option ? option.pair : "")
+                    sessionProvider.requestBuild(pairSelector.currentValue || "")
                 }
             }
         }
@@ -446,7 +450,7 @@ Item {
                 spacing: 12
                 Label { text: "No deck build available"; color: Theme.text; font.pixelSize: 20; font.bold: true }
                 Label { Layout.fillWidth: true; text: "Complete or recover a draft to request a suggested deck."; color: Theme.textMuted; wrapMode: Text.WordWrap }
-                Button {
+                DimensionalButton {
                     objectName: "buildRequestButton"
                     text: "Request build"
                     Accessible.name: "Request suggested deck build"
@@ -468,6 +472,7 @@ Item {
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    Layout.minimumHeight: 0
                     spacing: Theme.gutter
 
                 ColumnLayout {
@@ -686,10 +691,12 @@ Item {
                             anchors.fill: parent
                             anchors.margins: Theme.panelPadding
                             spacing: 4
-                            Button {
+                            DimensionalButton {
                                 objectName: "wideBuildContextToggle"
                                 Layout.fillWidth: true
                                 text: (root.contextExpanded ? "Hide" : "Show") + " why this pair"
+                                expanded: root.contextExpanded
+                                accented: false
                                 Accessible.name: text
                                 Accessible.description: root.contextExpanded
                                     ? "The pair rationale is currently expanded. Activating this button collapses it."
@@ -732,8 +739,12 @@ Item {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: wideBenchContent.implicitHeight + Theme.panelPadding * 2
-                    Layout.maximumHeight: root.height * 0.45
+                    Layout.minimumHeight: root.wideBenchHeight
+                    Layout.preferredHeight: root.wideBenchHeight
+                    Layout.maximumHeight: Math.max(
+                        root.wideBenchHeight,
+                        root.height * 0.45
+                    )
                     color: Theme.surfaceLow
                     border.color: Theme.outline
                     border.width: 1
@@ -742,12 +753,14 @@ Item {
                     ColumnLayout {
                         id: wideBenchContent
                         anchors.fill: parent
-                        anchors.margins: Theme.panelPadding
-                        spacing: 8
-                        Button {
+                        anchors.margins: 4
+                        spacing: 4
+                        DimensionalButton {
                             objectName: root.compactPresentation ? "" : "buildBenchToggle"
                             Layout.fillWidth: true
                             text: (root.benchExpanded ? "Hide" : "Show") + " bench · " + root.benchQuantity()
+                            expanded: root.benchExpanded
+                            accented: false
                             Accessible.name: "Toggle bench"
                             onClicked: root.benchExpanded = !root.benchExpanded
                         }
@@ -755,8 +768,11 @@ Item {
                             id: wideBenchScroll
                             visible: root.benchExpanded
                             Layout.fillWidth: true
-                            Layout.preferredHeight: Math.min(wideBenchRows.implicitHeight, root.height * 0.3)
-                            Layout.maximumHeight: root.height * 0.3
+                            Layout.preferredHeight: Math.min(
+                                wideBenchRows.implicitHeight,
+                                root.wideBenchViewportMaximumHeight
+                            )
+                            Layout.maximumHeight: root.wideBenchViewportMaximumHeight
                             clip: true
                             contentWidth: availableWidth
                             ScrollBar.vertical.policy: ScrollBar.AsNeeded
@@ -875,12 +891,14 @@ Item {
 
                     ManaCurve { objectName: "narrowBuildManaCurve" }
 
-                    Button {
+                    DimensionalButton {
                         id: cardDetailsToggle
                         objectName: "buildCardDetailsToggle"
                         visible: root.displayPreferences.cardPreview && root.focusedCard
                         Layout.fillWidth: true
                         text: (root.cardDetailsExpanded ? "Hide" : "Show") + " selected card details"
+                        expanded: root.cardDetailsExpanded
+                        accented: false
                         Accessible.name: "Toggle selected card details"
                         onClicked: {
                             root.cardDetailsExpanded = !root.cardDetailsExpanded
@@ -909,10 +927,12 @@ Item {
                             anchors.fill: parent
                             anchors.margins: Theme.panelPadding
                             spacing: 5
-                            Button {
+                            DimensionalButton {
                                 objectName: "buildSpellsToggle"
                                 Layout.fillWidth: true
                                 text: (root.spellsExpanded ? "Hide" : "Show") + " spells · " + (root.build.spell_count !== null ? root.build.spell_count : root.build.spells.length)
+                                expanded: root.spellsExpanded
+                                accented: false
                                 Accessible.name: "Toggle deck spells"
                                 onClicked: root.spellsExpanded = !root.spellsExpanded
                             }
@@ -958,7 +978,15 @@ Item {
                             anchors.fill: parent
                             anchors.margins: Theme.panelPadding
                             spacing: 5
-                            Button { objectName: "buildLandsToggle"; Layout.fillWidth: true; text: (root.landsExpanded ? "Hide" : "Show") + " lands · " + root.build.land_count; Accessible.name: "Toggle lands"; onClicked: root.landsExpanded = !root.landsExpanded }
+                            DimensionalButton {
+                                objectName: "buildLandsToggle"
+                                Layout.fillWidth: true
+                                text: (root.landsExpanded ? "Hide" : "Show") + " lands · " + root.build.land_count
+                                expanded: root.landsExpanded
+                                accented: false
+                                Accessible.name: "Toggle lands"
+                                onClicked: root.landsExpanded = !root.landsExpanded
+                            }
                             Repeater {
                                 visible: root.landsExpanded
                                 model: root.build.lands
@@ -985,10 +1013,12 @@ Item {
                             anchors.fill: parent
                             anchors.margins: Theme.panelPadding
                             spacing: 5
-                            Button {
+                            DimensionalButton {
                                 objectName: root.compactPresentation ? "buildBenchToggle" : ""
                                 Layout.fillWidth: true
                                 text: (root.benchExpanded ? "Hide" : "Show") + " bench · " + root.benchQuantity()
+                                expanded: root.benchExpanded
+                                accented: false
                                 Accessible.name: "Toggle bench"
                                 onClicked: root.benchExpanded = !root.benchExpanded
                             }
@@ -1020,10 +1050,12 @@ Item {
                             anchors.fill: parent
                             anchors.margins: Theme.panelPadding
                             spacing: 6
-                            Button {
+                            DimensionalButton {
                                 objectName: "narrowBuildContextToggle"
                                 Layout.fillWidth: true
                                 text: (root.contextExpanded ? "Hide" : "Show") + " why this pair"
+                                expanded: root.contextExpanded
+                                accented: false
                                 Accessible.name: text
                                 Accessible.description: root.contextExpanded
                                     ? "The pair rationale is currently expanded. Activating this button collapses it."

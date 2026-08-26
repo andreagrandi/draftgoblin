@@ -100,7 +100,7 @@ Rectangle {
             }
         }
 
-        Button {
+        DimensionalButton {
             id: ratingsDownloadButton
             visible: root.hasWarning
                 && root.sessionState.ratings.set_code !== null
@@ -114,7 +114,7 @@ Rectangle {
             }
         }
 
-        Button {
+        DimensionalButton {
             objectName: "sessionErrorRetryButton"
             visible: root.activeError && root.activeError.recoverable
             text: "Retry"
@@ -127,10 +127,11 @@ Rectangle {
             }
         }
 
-        Button {
+        DimensionalButton {
             objectName: "sessionErrorDismissButton"
             visible: root.activeError
             text: "Dismiss"
+            accented: false
             Accessible.name: "Dismiss error"
             Accessible.description: "Dismisses the published error."
             onClicked: {
@@ -165,14 +166,15 @@ Rectangle {
         }
 
         footer: DialogButtonBox {
-            Button {
+            DimensionalButton {
                 objectName: "ratingsDownloadCancelButton"
                 text: "Not now"
+                accented: false
                 Accessible.name: "Cancel ratings download"
                 onClicked: ratingsDownloadDialog.close()
             }
 
-            Button {
+            DimensionalButton {
                 objectName: "ratingsDownloadConfirmButton"
                 text: "Download ratings"
                 Accessible.name: "Confirm ratings download"

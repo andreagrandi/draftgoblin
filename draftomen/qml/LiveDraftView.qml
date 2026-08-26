@@ -96,6 +96,7 @@ Item {
 
             ColumnLayout {
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 spacing: 2
 
                 Label {
@@ -103,6 +104,8 @@ Item {
                     color: Theme.text
                     font.pixelSize: 22
                     font.bold: true
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
                 }
 
                 Label {
@@ -111,11 +114,15 @@ Item {
                             + " cards available"
                         : root.sessionState.status.message
                     color: Theme.textMuted
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
                 }
             }
 
             ColumnLayout {
                 visible: root.hasRecommendations
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 Layout.alignment: Qt.AlignVCenter
                 spacing: 2
 
@@ -133,10 +140,12 @@ Item {
                     text: root.sessionState.status.message
                     color: Theme.textMuted
                     font.pixelSize: 12
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
                 }
             }
 
-            ComboBox {
+            DimensionalComboBox {
                 id: rankingSelector
                 objectName: "rankingSelector"
                 Layout.preferredWidth: root.narrow ? 138 : 166
@@ -147,6 +156,7 @@ Item {
                     { key: "mana_value", label: "Mana value" }
                 ]
                 textRole: "label"
+                valueRole: "key"
                 currentIndex: {
                     const recommendations = root.sessionState.recommendations
                     if (!recommendations)
@@ -158,7 +168,7 @@ Item {
                 }
                 Accessible.name: "Recommendation ranking"
                 Accessible.description: "Choose DO Score, 17L WR, ALSA, or mana value."
-                onActivated: sessionProvider.changeRanking(model[currentIndex].key)
+                onActivated: sessionProvider.changeRanking(currentValue)
             }
         }
 
@@ -353,6 +363,7 @@ Item {
         spacing: 8
 
         ListView {
+            objectName: "narrowRecommendationList"
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.minimumHeight: 220
@@ -382,12 +393,12 @@ Item {
             currentIndex: 0
             Accessible.name: "Live draft details"
 
-            TabButton {
+            DimensionalTabButton {
                 objectName: "liveCardDetailsTab"
                 text: "Card details"
                 Accessible.name: "Card details"
             }
-            TabButton {
+            DimensionalTabButton {
                 objectName: "livePoolTab"
                 text: "Pool"
                 Accessible.name: "Pool details"

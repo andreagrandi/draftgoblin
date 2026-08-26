@@ -68,7 +68,7 @@ Item {
                                 wrapMode: Text.WordWrap
                             }
                         }
-                        ComboBox {
+                        DimensionalComboBox {
                             id: defaultRanking
                             objectName: "settingsRankingSelector"
                             Layout.preferredWidth: root.narrow ? 140 : 168
@@ -79,6 +79,7 @@ Item {
                                 { key: "mana_value", label: "Mana value" }
                             ]
                             textRole: "label"
+                            valueRole: "key"
                             currentIndex: {
                                 for (let index = 0; index < model.length; index++)
                                     if (model[index].key === root.sessionState.recommendations.ranking_mode)
@@ -87,7 +88,7 @@ Item {
                             }
                             Accessible.name: "Default recommendation ranking"
                             Accessible.description: "Changes the shared live-session recommendation ranking."
-                            onActivated: sessionProvider.changeRanking(model[currentIndex].key)
+                            onActivated: sessionProvider.changeRanking(currentValue)
                         }
                     }
                     RowLayout {
@@ -245,7 +246,7 @@ Item {
                     Label { text: "Card metadata · " + root.sessionState.card_data.message; color: Theme.text }
                     Label { text: "Ratings · " + root.sessionState.ratings.message; color: Theme.textMuted }
                     Label { text: "Statistics attribution · 17Lands"; color: Theme.textMuted }
-                    Button {
+                    DimensionalButton {
                         id: settingsRatingsDownloadButton
                         objectName: "settingsRatingsDownloadButton"
                         enabled: root.sessionState.ratings.set_code !== null && root.sessionState.ratings.set_code !== undefined && root.sessionState.ratings.phase !== "loading"
@@ -283,13 +284,14 @@ Item {
             wrapMode: Text.WordWrap
         }
         footer: DialogButtonBox {
-            Button {
+            DimensionalButton {
                 objectName: "settingsRatingsDownloadCancelButton"
                 text: "Not now"
+                accented: false
                 Accessible.name: "Cancel ratings download"
                 onClicked: ratingsDownloadDialog.close()
             }
-            Button {
+            DimensionalButton {
                 objectName: "settingsRatingsDownloadConfirmButton"
                 text: "Download ratings"
                 Accessible.name: "Confirm ratings download"
