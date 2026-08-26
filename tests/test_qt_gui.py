@@ -1571,6 +1571,191 @@ finally:
     assert completed.returncode == 0, completed.stderr
 
 
+def test_qml_privacy_dialog_is_accessible_modal_and_preserves_provider_state_offscreen() -> None:
+    probe = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QObject, QPoint, QPointF, QUrl, Qt
+from PySide6.QtGui import QAccessible, QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtTest import QTest
+
+from draftomen import __version__
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.qt_mock import MockSessionAdapter
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+provider = MockSessionAdapter(session=MockLiveSession(scenario="warning"))
+preferences_dir = TemporaryDirectory()
+preferences = GuiPreferencesAdapter(app_dir=preferences_dir.name)
+engine = QQmlApplicationEngine()
+qml_directory = Path.cwd() / "draftomen" / "qml"
+engine.addImportPath(str(qml_directory))
+context = engine.rootContext()
+context.setContextProperty("fixedFontFamily", _fixed_font_family())
+context.setContextProperty("sessionProvider", provider)
+context.setContextProperty("applicationTitle", "Draft Omen")
+context.setContextProperty("applicationVersion", __version__)
+context.setContextProperty("guiPreferences", preferences)
+context.setContextProperty("initialSurface", "live")
+context.setContextProperty("initialWindowWidth", 680)
+context.setContextProperty("initialWindowHeight", 640)
+engine.setInitialProperties({"provider": provider})
+engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+assert engine.rootObjects()
+root = engine.rootObjects()[0]
+root.resize(680, 640)
+application.processEvents()
+
+privacy_link = root.findChild(QObject, "privacyLink")
+about_link = root.findChild(QObject, "aboutLink")
+status_strip = root.findChild(QObject, "statusStrip")
+assert privacy_link is not None and about_link is not None and status_strip is not None
+assert privacy_link.property("text") == "Privacy"
+assert privacy_link.isVisible()
+assert privacy_link.property("activeFocusOnTab") is True
+accessible_privacy_link = QAccessible.queryAccessibleInterface(privacy_link)
+assert accessible_privacy_link is not None
+assert accessible_privacy_link.text(QAccessible.Text.Name) == "Open Privacy dialog"
+assert root.property("narrow") is True
+assert privacy_link.width() > 0
+assert status_strip.width() <= root.width()
+
+window_width = float(root.property("width"))
+window_height = float(root.property("height"))
+privacy_top_left = privacy_link.mapToScene(QPointF(0, 0))
+privacy_bottom_right = privacy_link.mapToScene(
+    QPointF(privacy_link.width(), privacy_link.height())
+)
+status_top_left = status_strip.mapToScene(QPointF(0, 0))
+status_bottom_right = status_strip.mapToScene(
+    QPointF(status_strip.width(), status_strip.height())
+)
+assert privacy_top_left.x() >= status_top_left.x()
+assert privacy_top_left.y() >= status_top_left.y()
+assert privacy_bottom_right.x() <= status_bottom_right.x()
+assert privacy_bottom_right.y() <= status_bottom_right.y()
+assert privacy_top_left.x() >= 0
+assert privacy_top_left.y() >= 0
+assert privacy_bottom_right.x() <= window_width
+assert privacy_bottom_right.y() <= window_height
+
+before_state = provider.state.copy()
+initial_surface = root.property("currentSurface")
+
+def tab_to(item: QObject, *, maximum: int = 40) -> None:
+    for _ in range(maximum):
+        QTest.keyClick(root, Qt.Key_Tab)
+        application.processEvents()
+        if item.property("activeFocus") is True:
+            return
+    raise AssertionError("keyboard traversal did not reach " + item.objectName())
+
+
+tab_to(privacy_link)
+assert privacy_link.property("activeFocus") is True
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+
+dialog = root.findChild(QObject, "privacyDialog")
+title = root.findChild(QObject, "privacyDialogTitle")
+disclosure = root.findChild(QObject, "privacyDialogDisclosure")
+close = root.findChild(QObject, "privacyDialogCloseButton")
+about_dialog = root.findChild(QObject, "aboutDialog")
+assert dialog is not None and dialog.property("visible") is True
+assert dialog.property("modal") is True
+assert root.property("currentSurface") == initial_surface
+assert dialog.property("title") == "Privacy"
+assert title is not None and title.property("text") == "Privacy"
+assert disclosure is not None
+assert disclosure.property("text") == (
+    "All user data remains on the user's computer. "
+    "Draft Omen does not send your personal data to us."
+)
+accessible_disclosure = QAccessible.queryAccessibleInterface(disclosure)
+assert accessible_disclosure is not None
+assert accessible_disclosure.text(QAccessible.Text.Name) == disclosure.property("text")
+assert close is not None and close.property("text") == "Close"
+assert close.property("activeFocusOnTab") is True
+accessible_close = QAccessible.queryAccessibleInterface(close)
+assert accessible_close is not None
+assert accessible_close.text(QAccessible.Text.Name) == "Close Privacy dialog"
+
+dialog_x = float(dialog.property("x"))
+dialog_y = float(dialog.property("y"))
+dialog_width = float(dialog.property("width"))
+dialog_height = float(dialog.property("height"))
+dialog_margin = 16.0
+assert dialog_width > 0 and dialog_height > 0
+assert dialog_width <= window_width - 2 * dialog_margin
+assert dialog_height <= window_height - 2 * dialog_margin
+assert dialog_margin <= dialog_x <= window_width - dialog_width - dialog_margin
+assert dialog_margin <= dialog_y <= window_height - dialog_height - dialog_margin
+assert abs(dialog_x - (window_width - dialog_width) / 2) <= 1.0
+assert abs(dialog_y - (window_height - dialog_height) / 2) <= 1.0
+assert provider.state == before_state
+
+tab_to(close, maximum=4)
+assert close.property("activeFocus") is True
+QTest.keyClick(root, Qt.Key_Tab)
+application.processEvents()
+assert dialog.property("visible") is True
+assert close.property("activeFocus") is True
+assert privacy_link.property("activeFocus") is False
+assert about_link.property("activeFocus") is False
+QTest.keyClick(root, Qt.Key_Tab, Qt.ShiftModifier)
+application.processEvents()
+assert dialog.property("visible") is True
+assert close.property("activeFocus") is True
+assert privacy_link.property("activeFocus") is False
+assert about_link.property("activeFocus") is False
+assert root.property("currentSurface") == initial_surface
+
+about_position = about_link.mapToItem(
+    root.contentItem(), QPointF(about_link.width() / 2, about_link.height() / 2)
+)
+QTest.mouseClick(
+    root,
+    Qt.LeftButton,
+    Qt.NoModifier,
+    QPoint(round(about_position.x()), round(about_position.y())),
+)
+application.processEvents()
+assert dialog.property("visible") is True
+assert about_dialog is not None and about_dialog.property("visible") is False
+assert root.property("currentSurface") == initial_surface
+assert provider.state == before_state
+
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+assert dialog.property("visible") is False
+assert privacy_link.property("activeFocus") is True
+assert root.property("currentSurface") == initial_surface
+assert provider.state == before_state
+
+tab_to(privacy_link)
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+assert dialog.property("visible") is True
+assert root.property("currentSurface") == initial_surface
+QTest.keyClick(root, Qt.Key_Escape)
+application.processEvents()
+assert dialog.property("visible") is False
+assert privacy_link.property("activeFocus") is True
+assert root.property("currentSurface") == initial_surface
+assert provider.state == before_state
+"""
+    completed = _run_qml_probe(probe)
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_qml_preferences_build_backtest_and_responsive_states_offscreen() -> None:
     probe = """
 from tempfile import TemporaryDirectory

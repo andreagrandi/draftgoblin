@@ -98,6 +98,7 @@ files = [
     "draftomen/tui.py",
     "draftomen/watch.py",
     "draftomen/qml/AboutDialog.qml",
+    "draftomen/qml/PrivacyDialog.qml",
     "draftomen/qml/AppBar.qml",
     "draftomen/qml/BacktestView.qml",
     "draftomen/qml/BuildView.qml",
