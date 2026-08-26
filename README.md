@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/andreagrandi/draftomen/master/docs/assets/draftomen_logo.png" alt="Draft Omen logo" width="220">
+  <img src="https://raw.githubusercontent.com/andreagrandi/draftomen/master/docs/assets/draftomen_banner.png" alt="Draft Omen banner" width="100%">
 </p>
 
 # Draft Omen
