@@ -261,9 +261,10 @@ from PySide6.QtTest import QTest
 from draftomen import __version__
 from draftomen.carddb import build_card_database_from_bulk_file
 from draftomen.cardimages import CardImageService
+from draftomen.pool import load_draft_state
 from draftomen.qt_adapter import GuiPreferencesAdapter, LiveSessionAdapter
 from draftomen.qt_gui import _fixed_font_family
-from draftomen.session import LiveSession
+from draftomen.session import LiveSession, LiveSessionCommand, RequestBuild
 
 
 def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
@@ -347,8 +348,41 @@ log_path.write_text("".join(fixture_log_lines[:22]), encoding="utf-8")
 bulk_file = project_root / "tests" / "fixtures" / "scryfall-default-cards-sample.jsonl"
 
 
+class RecordingLiveSession(LiveSession):
+    def __init__(self, **kwargs):
+        self.build_requests: list[dict[str, bool | int]] = []
+        self.app_dir = kwargs["app_dir"]
+        super().__init__(**kwargs)
+
+    def dispatch(self, *, command: LiveSessionCommand):
+        if isinstance(command, RequestBuild):
+            draft = self.snapshot.draft
+            persisted = (
+                None
+                if draft is None
+                else load_draft_state(
+                    account_id=draft.account_id,
+                    draft_id=draft.draft_id,
+                    app_dir=self.app_dir,
+                )
+            )
+            self.build_requests.append(
+                {
+                    "draft_completed": draft is not None and draft.completed,
+                    "pool_total_cards": self.snapshot.pool.total_cards,
+                    "persisted_completed": (
+                        persisted is not None and persisted.completed
+                    ),
+                }
+            )
+        return super().dispatch(command=command)
+
+
+recording_sessions: list[RecordingLiveSession] = []
+
+
 def factory(publish):
-    return LiveSession(
+    session = RecordingLiveSession(
         log_path=log_path,
         card_database_loader=load_image_database,
         app_dir=app_dir,
@@ -363,7 +397,8 @@ def factory(publish):
         ),
         ratings_cache_checker=lambda _set_code: False,
     )
-
+    recording_sessions.append(session)
+    return session
 
 QQuickStyle.setStyle("Fusion")
 application = QGuiApplication([])
@@ -425,11 +460,14 @@ try:
     )
     next_recommendation_source = image_source(live_image)
     assert next_recommendation_source
+    recording_session = recording_sessions[0]
+    assert recording_session.build_requests == []
     provider.requestBuild("")
     wait_until(
         lambda: provider.state.get("build") is not None,
         "the published active-draft build",
     )
+    assert len(recording_session.build_requests) == 1
 
 
     root.setProperty("currentSurface", "build")
@@ -486,12 +524,31 @@ try:
         and image_source(build_image) == next_build_source,
         "the restored visible build image",
     )
+    root.setProperty("currentSurface", "live")
+    application.processEvents()
+    assert root.property("currentSurface") == "live"
     with log_path.open(mode="a", encoding="utf-8") as log_file:
         log_file.writelines(fixture_log_lines[22:])
+    build_view = root.findChild(QObject, "buildView")
+    assert build_view is not None
     wait_until(
-        lambda: (provider.state.get("draft") or {}).get("completed") is True,
-        "the completed representative draft",
+        lambda: (provider.state.get("draft") or {}).get("completed") is True
+        and root.property("currentSurface") == "build"
+        and provider.state.get("build") is not None
+        and len(recording_session.build_requests) == 2,
+        "the completed representative draft build",
     )
+    assert len(recording_session.build_requests) == 2
+    manual_build, completed_build = recording_session.build_requests
+    assert manual_build["draft_completed"] is False
+    assert manual_build["persisted_completed"] is False
+    assert completed_build == {
+        "draft_completed": True,
+        "pool_total_cards": provider.state["pool"]["total_cards"],
+        "persisted_completed": True,
+    }
+    assert provider.state["pool"]["total_cards"] == 42
+    assert build_view.property("hasBuild") is True
 
 
     root.setProperty("currentSurface", "backtest")
@@ -632,6 +689,281 @@ with TemporaryDirectory() as preferences_dir:
         assert build_view.property("buildIdentity") == build_identity
 """
     completed = _run_qml_probe(probe, timeout=15)
+    assert completed.returncode == 0, completed.stderr
+    assert "TypeError" not in completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+
+
+def test_completed_draft_transition_requires_matching_identity_offscreen() -> None:
+    probe = """
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_mock import MockSessionAdapter
+from draftomen.session import ApplicationPhase, LiveSessionCommand, RequestBuild
+
+
+class RecordingMockSession(MockLiveSession):
+    def __init__(self, *, scenario):
+        super().__init__(scenario=scenario)
+        self.build_request_states: list[tuple[str | None, str | None, bool]] = []
+
+    def dispatch(self, *, command: LiveSessionCommand):
+        if isinstance(command, RequestBuild):
+            draft = self.snapshot.draft
+            self.build_request_states.append(
+                (
+                    None if draft is None else draft.account_id,
+                    None if draft is None else draft.draft_id,
+                    draft is not None and draft.completed,
+                )
+            )
+        return super().dispatch(command=command)
+
+
+def publish(snapshot):
+    session._snapshot = snapshot
+    provider._publish(snapshot=snapshot)
+    application.processEvents()
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+session = RecordingMockSession(scenario="ready")
+ready_snapshot = session.snapshot
+empty_snapshot = replace(
+    ready_snapshot,
+    status=replace(
+        ready_snapshot.status,
+        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+        message="Waiting for a Quick Draft.",
+    ),
+    draft=None,
+    pool=replace(ready_snapshot.pool, total_cards=0),
+    build=None,
+)
+session._snapshot = empty_snapshot
+provider = MockSessionAdapter(session=session)
+with TemporaryDirectory() as preferences_dir:
+    preferences = GuiPreferencesAdapter(
+        app_dir=preferences_dir,
+        parent=application,
+    )
+    engine = QQmlApplicationEngine()
+    qml_directory = Path.cwd() / "draftomen" / "qml"
+    engine.addImportPath(str(qml_directory))
+    context = engine.rootContext()
+    context.setContextProperty("fixedFontFamily", "monospace")
+    context.setContextProperty("sessionProvider", provider)
+    context.setContextProperty("applicationTitle", "Draft Omen")
+    context.setContextProperty("applicationVersion", "0.0")
+    context.setContextProperty("guiPreferences", preferences)
+    context.setContextProperty("initialSurface", "live")
+    context.setContextProperty("initialWindowWidth", 1440)
+    context.setContextProperty("initialWindowHeight", 900)
+    engine.setInitialProperties({"provider": provider})
+    engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+    root = engine.rootObjects()[0]
+    application.processEvents()
+    assert root.property("currentSurface") == "live"
+    assert session.build_request_states == []
+
+    recovered_completed_snapshot = replace(
+        empty_snapshot,
+        status=replace(
+            empty_snapshot.status,
+            phase=ApplicationPhase.DRAFT_COMPLETE,
+            message="Recovered completed draft.",
+        ),
+        draft=replace(
+            ready_snapshot.draft,
+            account_id="account-b",
+            draft_id="draft-b",
+            completed=True,
+        ),
+        pool=replace(ready_snapshot.pool, total_cards=42),
+    )
+    publish(recovered_completed_snapshot)
+    assert root.property("currentSurface") == "live"
+    assert session.build_request_states == []
+
+    drafting_a_snapshot = replace(
+        recovered_completed_snapshot,
+        status=replace(
+            recovered_completed_snapshot.status,
+            phase=ApplicationPhase.DRAFTING,
+            message="Draft A in progress.",
+        ),
+        draft=replace(
+            ready_snapshot.draft,
+            account_id="account-a",
+            draft_id="draft-a",
+            completed=False,
+        ),
+        pool=replace(ready_snapshot.pool, total_cards=41),
+        build=None,
+    )
+    publish(drafting_a_snapshot)
+    assert root.property("currentSurface") == "live"
+    assert session.build_request_states == []
+
+    completed_b_snapshot = replace(
+        drafting_a_snapshot,
+        status=replace(
+            drafting_a_snapshot.status,
+            phase=ApplicationPhase.DRAFT_COMPLETE,
+            message="Draft B complete.",
+        ),
+        draft=replace(
+            drafting_a_snapshot.draft,
+            account_id="account-b",
+            draft_id="draft-b",
+            completed=True,
+        ),
+        pool=replace(ready_snapshot.pool, total_cards=42),
+    )
+    publish(completed_b_snapshot)
+    assert root.property("currentSurface") == "live"
+    assert session.build_request_states == []
+    del root
+    del engine
+"""
+    completed = _run_qml_probe(probe)
+    assert completed.returncode == 0, completed.stderr
+    assert "TypeError" not in completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+
+
+def test_completed_draft_transition_rebuilds_stale_build_once_offscreen() -> None:
+    probe = """
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import time
+
+from PySide6.QtCore import QObject, QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_mock import MockSessionAdapter
+from draftomen.session import ApplicationPhase, LiveSessionCommand, RequestBuild
+
+
+class RecordingMockSession(MockLiveSession):
+    def __init__(self, *, scenario):
+        super().__init__(scenario=scenario)
+        self.build_request_states: list[tuple[bool, int]] = []
+
+    def dispatch(self, *, command: LiveSessionCommand):
+        if isinstance(command, RequestBuild):
+            draft = self.snapshot.draft
+            self.build_request_states.append(
+                (
+                    draft is not None and draft.completed,
+                    self.snapshot.pool.total_cards,
+                )
+            )
+        return super().dispatch(command=command)
+
+
+def wait_until(predicate, description):
+    deadline = time.monotonic() + 5
+    while not predicate():
+        application.processEvents()
+        if time.monotonic() >= deadline:
+            raise AssertionError("Timed out waiting for " + description)
+        time.sleep(0.005)
+    application.processEvents()
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+session = RecordingMockSession(scenario="ready")
+drafting_snapshot = replace(
+    session.snapshot,
+    status=replace(
+        session.snapshot.status,
+        phase=ApplicationPhase.DRAFTING,
+        message="Draft in progress.",
+    ),
+    draft=replace(session.snapshot.draft, completed=False),
+    pool=replace(session.snapshot.pool, total_cards=41),
+)
+session._snapshot = drafting_snapshot
+provider = MockSessionAdapter(session=session)
+with TemporaryDirectory() as preferences_dir:
+    preferences = GuiPreferencesAdapter(
+        app_dir=preferences_dir,
+        parent=application,
+    )
+    engine = QQmlApplicationEngine()
+    qml_directory = Path.cwd() / "draftomen" / "qml"
+    engine.addImportPath(str(qml_directory))
+    context = engine.rootContext()
+    context.setContextProperty("fixedFontFamily", "monospace")
+    context.setContextProperty("sessionProvider", provider)
+    context.setContextProperty("applicationTitle", "Draft Omen")
+    context.setContextProperty("applicationVersion", "0.0")
+    context.setContextProperty("guiPreferences", preferences)
+    context.setContextProperty("initialSurface", "live")
+    context.setContextProperty("initialWindowWidth", 1440)
+    context.setContextProperty("initialWindowHeight", 900)
+    engine.setInitialProperties({"provider": provider})
+    engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+    root = engine.rootObjects()[0]
+    build_view = root.findChild(QObject, "buildView")
+    assert build_view is not None
+    application.processEvents()
+    assert root.property("currentSurface") == "live"
+    assert session.build_request_states == []
+
+    completed_snapshot = replace(
+        drafting_snapshot,
+        status=replace(
+            drafting_snapshot.status,
+            phase=ApplicationPhase.DRAFT_COMPLETE,
+            message="Draft complete.",
+        ),
+        draft=replace(drafting_snapshot.draft, completed=True),
+        pool=replace(drafting_snapshot.pool, total_cards=42),
+    )
+    session._snapshot = completed_snapshot
+    provider._publish(snapshot=completed_snapshot)
+    wait_until(
+        lambda: root.property("currentSurface") == "build"
+        and provider.state["draft"]["completed"] is True
+        and provider.state["pool"]["total_cards"] == 42
+        and provider.state.get("build") is not None
+        and len(session.build_request_states) == 1,
+        "the completed draft build",
+    )
+    assert session.build_request_states == [(True, 42)]
+    assert build_view.property("hasBuild") is True
+
+    unrelated_state = dict(provider.state)
+    unrelated_state["status"] = dict(unrelated_state["status"])
+    unrelated_state["status"]["message"] = "Deck remains available."
+    provider._replace_state(state=unrelated_state)
+    application.processEvents()
+    assert root.property("currentSurface") == "build"
+    assert len(session.build_request_states) == 1
+    del root
+    del engine
+"""
+    completed = _run_qml_probe(probe)
     assert completed.returncode == 0, completed.stderr
     assert "TypeError" not in completed.stderr
     assert "Binding loop detected" not in completed.stderr
