@@ -5,6 +5,7 @@
 - Add a larger, borderless overlay for the two product screenshots.
 - Add a persisted toggle for following system text scaling in the desktop Settings, with effective scale feedback.
 - Show desktop display-preference autosave status in the bottom status bar.
+- Keep Backtest navigation hidden by default, with a persisted Settings visibility toggle.
 
 - Replace the README and website screenshots with current GUI views for live picks and suggested decks.
 

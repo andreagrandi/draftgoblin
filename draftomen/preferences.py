@@ -175,6 +175,7 @@ class GuiDisplayPreferences:
     card_preview: bool = True
     detailed_build_context: bool = True
     system_text_scaling: bool = True
+    show_backtest: bool = False
 
 
 def gui_preferences_path(*, app_dir: PathInput | None = None) -> Path:

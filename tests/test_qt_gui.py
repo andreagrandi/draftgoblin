@@ -3217,12 +3217,31 @@ with TemporaryDirectory() as preferences_dir:
     assert engine.rootObjects()
     root = engine.rootObjects()[0]
     application.processEvents()
+    navigation = root.findChild(QObject, "navigationRail")
+    assert navigation is not None
     status_strip = root.findChild(QObject, "statusStrip")
     assert status_strip is not None
     persistence_message = root.findChild(QObject, "statusPersistenceMessage")
     assert persistence_message is not None
     assert persistence_message.property("text") == "Saved"
     assert QColor(persistence_message.property("color")) == QColor("#a78bfa")
+    show_backtest = root.findChild(QObject, "settingsShowBacktestSwitch")
+    assert show_backtest is not None
+    assert show_backtest.property("checked") is False
+    assert preferences.showBacktest is False
+    assert navigation.property("backtestNavigationVisible") is False
+    show_backtest.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert show_backtest.property("checked") is True
+    assert preferences.showBacktest is True
+    assert navigation.property("backtestNavigationVisible") is True
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert show_backtest.property("checked") is False
+    assert preferences.showBacktest is False
+    assert navigation.property("backtestNavigationVisible") is False
+    wait_for_saved(preferences)
     assert root.findChild(QObject, "settingsPersistenceMessage") is None
     accessible_persistence = QAccessible.queryAccessibleInterface(persistence_message)
     assert accessible_persistence is not None
@@ -3231,6 +3250,7 @@ with TemporaryDirectory() as preferences_dir:
     assert persistence_message.width() <= status_strip.width()
     names = (
         "settingsSplashSwitch",
+        "settingsShowBacktestSwitch",
         "settingsCompactDensitySwitch",
         "settingsSecondaryStatsSwitch",
         "settingsCardPreviewSwitch",
@@ -3247,7 +3267,7 @@ with TemporaryDirectory() as preferences_dir:
         switch for switch in switches if not switch.property("checked")
     ]
     assert len(checked_switches) == 5
-    assert len(unchecked_switches) == 1
+    assert len(unchecked_switches) == 2
 
     for switch in switches:
         is_checked = switch.property("checked") is True
@@ -3439,7 +3459,9 @@ with TemporaryDirectory() as preferences_dir:
 
     persisted_preferences = GuiPreferencesAdapter(app_dir=preferences_dir)
     persisted_preferences.setSystemTextScaling(False)
+    persisted_preferences.setShowBacktest(True)
     assert persisted_preferences.systemTextScaling is False
+    assert persisted_preferences.showBacktest is True
     wait_for_saved(persisted_preferences)
     preferences.shutdown()
     del root
@@ -3461,6 +3483,14 @@ with TemporaryDirectory() as preferences_dir:
     assert reload_engine.rootObjects()
     root = reload_engine.rootObjects()[0]
     application.processEvents()
+    reloaded_navigation = root.findChild(QObject, "navigationRail")
+    assert reloaded_navigation is not None
+    assert reloaded_navigation.property("backtestNavigationVisible") is True
+    reloaded_show_backtest = root.findChild(
+        QObject, "settingsShowBacktestSwitch"
+    )
+    assert reloaded_show_backtest is not None
+    assert reloaded_show_backtest.property("checked") is True
     reloaded_system_switch = root.findChild(
         QObject, "settingsSystemTextScalingSwitch"
     )

@@ -865,13 +865,16 @@ def test_gui_preferences_adapter_persists_display_choices_independently(
     adapter.preferencesChanged.connect(lambda: changes.append(True))
 
     try:
+        assert adapter.showBacktest is False
         adapter.setCompactDensity(False)
+        adapter.setShowBacktest(False)
         assert changes == []
         adapter.setCompactDensity(True)
         adapter.setSecondaryStats(False)
         adapter.setCardPreview(False)
         adapter.setDetailedBuildContext(False)
         adapter.setSystemTextScaling(False)
+        adapter.setShowBacktest(True)
         _process_until(
             application=qcore_application,
             predicate=lambda: adapter.persistenceMessage == "Saved",
@@ -879,13 +882,14 @@ def test_gui_preferences_adapter_persists_display_choices_independently(
         )
         reloaded = GuiPreferencesAdapter(app_dir=tmp_path / "app")
 
-        assert changes == [True, True, True, True, True]
+        assert changes == [True, True, True, True, True, True]
         assert adapter.persistenceMessage == "Saved"
         assert reloaded.compactDensity is True
         assert reloaded.secondaryStats is False
         assert reloaded.cardPreview is False
         assert reloaded.detailedBuildContext is False
         assert reloaded.systemTextScaling is False
+        assert reloaded.showBacktest is True
     finally:
         adapter.shutdown()
 

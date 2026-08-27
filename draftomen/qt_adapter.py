@@ -281,6 +281,10 @@ class GuiPreferencesAdapter(QObject):
     def systemTextScaling(self) -> bool:
         return self._preferences.system_text_scaling
 
+    @Property(bool, notify=preferencesChanged)
+    def showBacktest(self) -> bool:
+        return self._preferences.show_backtest
+
     @Property(int, notify=applicationFontPixelSizeChanged)
     def applicationFontPixelSize(self) -> int:
         application = QGuiApplication.instance()
@@ -316,6 +320,10 @@ class GuiPreferencesAdapter(QObject):
     @Slot(bool)
     def setSystemTextScaling(self, enabled: bool) -> None:
         self._replace_preferences(system_text_scaling=enabled)
+
+    @Slot(bool)
+    def setShowBacktest(self, enabled: bool) -> None:
+        self._replace_preferences(show_backtest=enabled)
 
     @Slot()
     def shutdown(self) -> None:
