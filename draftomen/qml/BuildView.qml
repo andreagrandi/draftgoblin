@@ -29,6 +29,9 @@ Item {
         instant_count: null
     })
     readonly property int wideMinimumWidth: 220 + 360 + 240 + Theme.gutter * 2
+    readonly property int wideBuildCardMinimumHeight: 300
+    readonly property real wideBuildContextMinimumHeight:
+        wideReasoning.implicitHeight + Theme.panelPadding * 2
     readonly property real wideBenchHeight: (
         root.benchExpanded
             ? Math.min(
@@ -38,11 +41,37 @@ Item {
             : 0
     ) + Theme.targetHeight + wideBenchContent.spacing + 4 * 2
     // Keep the expanded bench compact so the main row retains useful height.
+    readonly property real wideBuildMainRowMinimumHeight:
+        root.wideBuildCardMinimumHeight
+            + (root.displayPreferences.detailedBuildContext
+                ? wideBuildCardColumn.spacing + root.wideBuildContextMinimumHeight : 0)
+    readonly property real wideBenchViewportAvailableHeight:
+        wideBuildContent.height
+            - root.wideBuildMainRowMinimumHeight
+            - wideBuildContent.spacing
+            - Theme.targetHeight
+            - wideBenchContent.spacing
+            - 4 * 2
+    readonly property real wideBuildMinimumContentHeight:
+        Math.max(
+            wideBuildSummaryColumn.implicitHeight,
+            root.wideBuildMainRowMinimumHeight
+        )
+            + wideBuildContent.spacing
+            + Theme.targetHeight
+            + wideBenchContent.spacing
+            + 4 * 2
     readonly property real wideBenchViewportMaximumHeight: Math.max(
-        Theme.targetHeight + Theme.gutter,
-        root.height * 0.08
+        root.wideBenchViewportAvailableHeight >= Theme.targetHeight + Theme.gutter
+            ? Theme.targetHeight + Theme.gutter : 0,
+        Math.min(
+            root.height * 0.2,
+            root.wideBenchViewportAvailableHeight
+        )
     )
-    readonly property bool compactPresentation: root.narrow || root.width < root.wideMinimumWidth
+    readonly property bool compactPresentation: root.narrow
+        || root.width < root.wideMinimumWidth
+        || wideBuildContent.height < root.wideBuildMinimumContentHeight
     readonly property var automaticPair: {
         for (let index = 0; index < root.build.pair_options.length; index++) {
             if (root.build.pair_options[index].automatic)
@@ -465,17 +494,20 @@ Item {
             Layout.fillHeight: true
 
             ColumnLayout {
+                id: wideBuildContent
                 visible: !root.compactPresentation
                 anchors.fill: parent
                 spacing: Theme.gutter
 
                 RowLayout {
+                    id: wideBuildMainRow
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumHeight: 0
+                    Layout.minimumHeight: root.wideBuildMainRowMinimumHeight
                     spacing: Theme.gutter
 
                 ColumnLayout {
+                    id: wideBuildSummaryColumn
                     Layout.fillWidth: true
                     Layout.minimumWidth: 220
                     Layout.preferredWidth: 300
@@ -660,6 +692,7 @@ Item {
                 }
 
                 ColumnLayout {
+                    id: wideBuildCardColumn
                     Layout.fillWidth: true
                     Layout.minimumWidth: 240
                     Layout.preferredWidth: 300
@@ -668,12 +701,13 @@ Item {
                     Layout.fillHeight: true
                     spacing: Theme.gutter
                     CardPreview {
+                        id: wideBuildCardPreview
                         objectName: "wideBuildCardPreview"
                         constrainImageFrameToHeight: true
                         visible: root.displayPreferences.cardPreview
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        Layout.minimumHeight: 300
+                        Layout.minimumHeight: root.wideBuildCardMinimumHeight
                         recommendation: root.focusedCard
                         imageState: root.sessionState.card_image
                     }
@@ -681,7 +715,7 @@ Item {
                         objectName: "wideBuildContext"
                         visible: root.displayPreferences.detailedBuildContext
                         Layout.fillWidth: true
-                        Layout.preferredHeight: wideReasoning.implicitHeight + Theme.panelPadding * 2
+                        Layout.preferredHeight: root.wideBuildContextMinimumHeight
                         color: Theme.surfaceLow
                         border.color: Theme.outline
                         border.width: 1
@@ -738,6 +772,7 @@ Item {
             }
 
                 Rectangle {
+                    objectName: "wideBuildBench"
                     Layout.fillWidth: true
                     Layout.minimumHeight: root.wideBenchHeight
                     Layout.preferredHeight: root.wideBenchHeight
@@ -766,6 +801,7 @@ Item {
                         }
                         ScrollView {
                             id: wideBenchScroll
+                            objectName: "wideBuildBenchScroll"
                             visible: root.benchExpanded
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.min(
@@ -814,6 +850,7 @@ Item {
 
             ScrollView {
                 id: narrowBuildScroll
+                objectName: "narrowBuildScroll"
                 visible: root.compactPresentation
                 anchors.fill: parent
                 clip: true
@@ -1002,6 +1039,7 @@ Item {
                     }
 
                     Rectangle {
+                        objectName: "narrowBuildBench"
                         Layout.fillWidth: true
                         Layout.preferredHeight: benchContent.implicitHeight + Theme.panelPadding * 2
                         color: Theme.surfaceLow
@@ -1026,6 +1064,7 @@ Item {
                                 visible: root.benchExpanded
                                 model: root.build.bench
                                 delegate: BuildCardRow {
+                                    visible: root.benchExpanded
                                     required property var modelData
                                     required property int index
                                     cardEntry: modelData

@@ -2052,6 +2052,7 @@ assert provider.state == before_state
 
 def test_qml_preferences_build_backtest_and_responsive_states_offscreen() -> None:
     probe = """
+from dataclasses import replace
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
@@ -2103,6 +2104,22 @@ def assert_visual_item_precedes(first: QQuickItem, second: QQuickItem) -> None:
     first_bottom = first.mapToScene(QPointF(0, first.height())).y()
     second_top = second.mapToScene(QPointF(0, 0)).y()
     assert first_bottom <= second_top
+
+
+def scene_geometry(item: QQuickItem) -> tuple[float, float, float, float]:
+    top_left = item.mapToScene(QPointF(0, 0))
+    return (top_left.x(), top_left.y(), item.width(), item.height())
+
+
+def assert_geometry_close(
+    item: QQuickItem,
+    expected: tuple[float, float, float, float],
+) -> None:
+    actual = scene_geometry(item)
+    assert all(
+        abs(value - expected_value) <= 0.1
+        for value, expected_value in zip(actual, expected)
+    )
 
 
 def trigger_and_wait_for_layout(item, action, predicate) -> None:
@@ -2457,13 +2474,28 @@ assert wide_context_details.isVisible() is False
 assert wide_reason.isVisible() is False
 assert wide_context.height() == collapsed_wide_context_height
 
+current_snapshot = provider._session.snapshot
+build = current_snapshot.build
+assert build is not None
+second_bench = build.spells[0]
+assert build.bench[0].card.grp_id != second_bench.card.grp_id
+updated_snapshot = replace(
+    current_snapshot,
+    build=replace(
+        build,
+        bench=(*build.bench, second_bench),
+    ),
+)
+provider._session._snapshot = updated_snapshot
+provider._publish(snapshot=updated_snapshot)
+application.processEvents()
 build_view.setProperty("benchExpanded", False)
 application.processEvents()
 wide_bench_toggle = find_visual_item(root.contentItem(), "buildBenchToggle")
 assert wide_bench_toggle is not None and wide_bench_toggle.isVisible()
 assert_visual_item_inside(build_view, wide_bench_toggle)
 assert_visual_item_inside(root.contentItem(), wide_bench_toggle)
-assert wide_bench_toggle.property("text").endswith("bench · 2")
+assert wide_bench_toggle.property("text").endswith("bench · 3")
 wide_bench_toggle.forceActiveFocus()
 QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
@@ -2472,13 +2504,49 @@ assert_visual_item_inside(root.contentItem(), wide_bench_toggle)
 wide_bench = find_visual_item(root.contentItem(), "buildBenchButton0")
 assert wide_bench is not None and wide_bench.isVisible()
 wide_bench.forceActiveFocus()
+QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
 assert wide_bench.property("activeFocus") is True
 
+root.resize(1440, 640)
+application.processEvents()
+build_view.setProperty("benchExpanded", False)
+application.processEvents()
+low_build_scroll = find_visual_item(root.contentItem(), "narrowBuildScroll")
+low_bench_toggle = find_visual_item(root.contentItem(), "buildBenchToggle")
+low_bench_panel = find_visual_item(root.contentItem(), "narrowBuildBench")
+assert build_view.property("compactPresentation") is True
+assert preferences.cardPreview is True
+assert low_build_scroll is not None and low_build_scroll.isVisible()
+assert low_bench_toggle is not None and low_bench_toggle.isVisible()
+assert low_bench_panel is not None and low_bench_panel.isVisible()
+assert_visual_item_inside(build_view, low_build_scroll)
+build_view.setProperty("benchExpanded", True)
+application.processEvents()
+assert build_view.property("benchExpanded") is True
+assert low_build_scroll.isVisible()
+assert low_bench_panel.isVisible()
+assert_visual_item_inside(build_view, low_build_scroll)
+low_bench_row = find_visual_item(root.contentItem(), "buildBenchButton0")
+assert low_bench_row is not None and low_bench_row.isVisible()
+build_view.setProperty("benchExpanded", False)
+application.processEvents()
+assert build_view.property("benchExpanded") is False
+assert low_build_scroll.isVisible()
+assert low_bench_panel.isVisible()
+assert low_bench_row.isVisible() is False
+assert_visual_item_inside(build_view, low_build_scroll)
+
 root.resize(1440, 900)
 application.processEvents()
+build_view.setProperty("benchExpanded", False)
+application.processEvents()
 wide_bench_toggle = find_visual_item(root.contentItem(), "buildBenchToggle")
+wide_bench_panel = find_visual_item(root.contentItem(), "wideBuildBench")
+wide_bench_scroll = find_visual_item(root.contentItem(), "wideBuildBenchScroll")
 assert wide_bench_toggle is not None and wide_bench_toggle.isVisible()
+assert wide_bench_panel is not None and wide_bench_panel.isVisible()
+assert wide_bench_scroll is not None
 assert_visual_item_inside(build_view, wide_bench_toggle)
 assert_visual_item_inside(root.contentItem(), wide_bench_toggle)
 wide_preview = find_visual_item(root.contentItem(), "wideBuildCardPreview")
@@ -2486,6 +2554,54 @@ wide_curve = find_visual_item(root.contentItem(), "wideBuildManaCurve")
 assert wide_preview is not None and wide_preview.isVisible()
 assert wide_curve is not None and wide_curve.isVisible()
 assert_visual_item_inside(build_view, wide_preview)
+collapsed_bench_geometry = scene_geometry(wide_bench_panel)
+collapsed_spells_geometry = scene_geometry(wide_spells)
+collapsed_preview_geometry = scene_geometry(wide_preview)
+wide_bench_toggle.forceActiveFocus()
+expanded_bench_geometry = None
+expanded_spells_geometry = None
+expanded_preview_geometry = None
+for cycle in range(2):
+    trigger_and_wait_for_layout(
+        wide_bench_panel,
+        lambda: QTest.keyClick(root, Qt.Key_Space),
+        lambda height: height > collapsed_bench_geometry[3],
+    )
+    assert build_view.property("benchExpanded") is True
+    bench_row0 = find_visual_item(root.contentItem(), "buildBenchButton0")
+    bench_row1 = find_visual_item(root.contentItem(), "buildBenchButton1")
+    assert bench_row0 is not None and bench_row0.isVisible()
+    assert bench_row1 is not None and bench_row1.isVisible()
+    for bench_row in (bench_row0, bench_row1):
+        assert bench_row.height() >= 40
+        assert_visual_item_inside(wide_bench_scroll, bench_row)
+    current_bench_geometry = scene_geometry(wide_bench_panel)
+    current_spells_geometry = scene_geometry(wide_spells)
+    current_preview_geometry = scene_geometry(wide_preview)
+    if cycle == 0:
+        expanded_bench_geometry = current_bench_geometry
+        expanded_spells_geometry = current_spells_geometry
+        expanded_preview_geometry = current_preview_geometry
+    else:
+        assert_geometry_close(wide_bench_panel, expanded_bench_geometry)
+        assert_geometry_close(wide_spells, expanded_spells_geometry)
+        assert_geometry_close(wide_preview, expanded_preview_geometry)
+    assert current_bench_geometry[3] > collapsed_bench_geometry[3]
+    assert current_bench_geometry[1] < collapsed_bench_geometry[1]
+    assert current_spells_geometry[3] < collapsed_spells_geometry[3]
+    assert current_preview_geometry[3] < collapsed_preview_geometry[3]
+
+    wide_bench_toggle.forceActiveFocus()
+    trigger_and_wait_for_layout(
+        wide_bench_panel,
+        lambda: QTest.keyClick(root, Qt.Key_Space),
+        lambda height: abs(height - collapsed_bench_geometry[3]) <= 0.1,
+    )
+    assert build_view.property("benchExpanded") is False
+    assert_geometry_close(wide_bench_panel, collapsed_bench_geometry)
+    assert_geometry_close(wide_spells, collapsed_spells_geometry)
+    assert_geometry_close(wide_preview, collapsed_preview_geometry)
+
 wide_heading = find_visual_item(wide_preview, "cardPreviewHeading")
 wide_frame = find_visual_item(wide_preview, "cardPreviewImageFrame")
 wide_fallback = find_visual_item(wide_preview, "cardPreviewFallback")
