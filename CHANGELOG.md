@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a larger, borderless overlay for the two product screenshots.
+
 - Replace the README and website screenshots with current GUI views for live picks and suggested decks.
 
 - Expand the About dialog with author attribution, MIT License details, and website/GitHub links.

@@ -105,26 +105,38 @@ const releaseUrl = 'https://github.com/andreagrandi/draftomen/releases/latest';
       </div>
       <div class="showcase-grid">
         <figure class="showcase-card">
-          <img
-            src="/images/draft-omen-pick-view.webp"
-            alt="Draft Omen Live Draft screen: Pack 1, Pick 3 with 12 cards available, Glóin the Mighty selected, ranked card rows, DO Score, 17Lands win rate, grade, color fit, focused-card details, and pool summary"
-            width="1920"
-            height="1023"
-            loading="lazy"
-          />
+          <button
+            class="showcase-image-trigger"
+            type="button"
+            aria-label="Open the Live Draft screenshot at full size"
+          >
+            <img
+              src="/images/draft-omen-pick-view.webp"
+              alt="Draft Omen Live Draft screen: Pack 1, Pick 3 with 12 cards available, Glóin the Mighty selected, ranked card rows, DO Score, 17Lands win rate, grade, color fit, focused-card details, and pool summary"
+              width="1920"
+              height="1023"
+              loading="lazy"
+            />
+          </button>
           <figcaption>
             <strong>Live Draft</strong>
             <span>Pack 1, Pick 3 with pool-aware ranking, focused-card details, and live pool summary.</span>
           </figcaption>
         </figure>
         <figure class="showcase-card">
-          <img
-            src="/images/draft-omen-deck-view.webp"
-            alt="Draft Omen Suggested deck screen: automatic UR pair, 40-card deck with 23 spells and 17 lands, mana base, mana curve, grouped main-deck spells, and Tidings of War selected"
-            width="1920"
-            height="1022"
-            loading="lazy"
-          />
+          <button
+            class="showcase-image-trigger"
+            type="button"
+            aria-label="Open the Suggested deck screenshot at full size"
+          >
+            <img
+              src="/images/draft-omen-deck-view.webp"
+              alt="Draft Omen Suggested deck screen: automatic UR pair, 40-card deck with 23 spells and 17 lands, mana base, mana curve, grouped main-deck spells, and Tidings of War selected"
+              width="1920"
+              height="1022"
+              loading="lazy"
+            />
+          </button>
           <figcaption>
             <strong>Suggested deck</strong>
             <span>Review the automatic UR build, mana base, curve, spell groups, and selected-card details.</span>
@@ -147,4 +159,45 @@ const releaseUrl = 'https://github.com/andreagrandi/draftomen/releases/latest';
       </div>
     </div>
   </section>
+
+  <dialog class="image-lightbox" aria-label="Expanded screenshot">
+    <button
+      class="image-lightbox-close"
+      type="button"
+      aria-label="Close expanded screenshot"
+    >
+      <span aria-hidden="true">×</span>
+    </button>
+    <img alt="" />
+  </dialog>
+
+  <script>
+    const lightbox = document.querySelector<HTMLDialogElement>('.image-lightbox');
+    const lightboxImage = lightbox?.querySelector<HTMLImageElement>('img');
+    const closeButton = lightbox?.querySelector<HTMLButtonElement>('.image-lightbox-close');
+
+    if (lightbox && lightboxImage) {
+      document.querySelectorAll<HTMLButtonElement>('.showcase-image-trigger').forEach(function (trigger) {
+        trigger.addEventListener('click', function () {
+          const image = trigger.querySelector<HTMLImageElement>('img');
+          if (!image) return;
+
+          lightboxImage.src = image.currentSrc || image.src;
+          lightboxImage.alt = image.alt;
+          lightbox.showModal();
+        });
+      });
+
+      closeButton?.addEventListener('click', function () {
+        lightbox.close();
+      });
+      lightbox.addEventListener('click', function (event) {
+        if (event.target === lightbox) lightbox.close();
+      });
+      lightbox.addEventListener('close', function () {
+        lightboxImage.removeAttribute('src');
+        lightboxImage.alt = '';
+      });
+    }
+  </script>
 </BaseLayout>
