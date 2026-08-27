@@ -350,8 +350,6 @@ Item {
                     Layout.minimumHeight: 180
                     pool: root.sessionState.pool
                     narrow: root.narrow
-                    onPreviewRequested: grpId => sessionProvider.previewRecentPick(grpId)
-                    onPreviewDismissed: sessionProvider.dismissRecentPickPreview()
                 }
             }
         }
@@ -423,8 +421,6 @@ Item {
                 objectName: "narrowLivePoolDetails"
                 pool: root.sessionState.pool
                 narrow: root.narrow
-                onPreviewRequested: grpId => sessionProvider.previewRecentPick(grpId)
-                onPreviewDismissed: sessionProvider.dismissRecentPickPreview()
             }
         }
     }

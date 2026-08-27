@@ -37,12 +37,10 @@ from draftomen.session import (
     ChooseAccount,
     ChooseRecommendation,
     DismissError,
-    DismissRecentPickPreview,
     FocusBuildCard,
     LiveSession,
     LiveSessionCommand,
     LiveSessionSnapshot,
-    PreviewRecentPick,
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
@@ -274,14 +272,6 @@ class SessionAdapter(QObject):
     @Slot(int)
     def chooseRecommendation(self, grp_id: int) -> None:
         self._dispatch(command=ChooseRecommendation(grp_id=grp_id))
-
-    @Slot(int)
-    def previewRecentPick(self, grp_id: int) -> None:
-        self._dispatch(command=PreviewRecentPick(grp_id=grp_id))
-
-    @Slot()
-    def dismissRecentPickPreview(self) -> None:
-        self._dispatch(command=DismissRecentPickPreview())
 
     @Slot(int)
     def focusBuildCard(self, grp_id: int) -> None:

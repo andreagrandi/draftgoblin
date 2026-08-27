@@ -26,7 +26,6 @@ from draftomen.session import (
     ChooseRecommendation,
     DataLoadPhase,
     DismissError,
-    DismissRecentPickPreview,
     DraftIdentity,
     FocusBuildCard,
     LiveSessionCommand,
@@ -34,7 +33,6 @@ from draftomen.session import (
     OperationKind,
     PoolCard,
     PoolState,
-    PreviewRecentPick,
     ProgressState,
     RatingsState,
     Recommendation,
@@ -620,30 +618,6 @@ class MockLiveSession:
                 card_image=CardImageState(
                     grp_id=command.grp_id,
                     message="Mock card images are unavailable.",
-                ),
-            )
-        elif isinstance(command, PreviewRecentPick):
-            known_ids = {
-                recent_pick.card.grp_id
-                for recent_pick in snapshot.pool.recent_picks
-            }
-            if command.grp_id not in known_ids:
-                raise ValueError(
-                    f"Card {command.grp_id} is not in the recent picks."
-                )
-            snapshot = replace(
-                snapshot,
-                pool=replace(
-                    snapshot.pool,
-                    previewed_recent_pick_grp_id=command.grp_id,
-                ),
-            )
-        elif isinstance(command, DismissRecentPickPreview):
-            snapshot = replace(
-                snapshot,
-                pool=replace(
-                    snapshot.pool,
-                    previewed_recent_pick_grp_id=None,
                 ),
             )
         elif isinstance(command, ChangeRanking):

@@ -867,6 +867,277 @@ assert provider.state["ratings"]["phase"] == "loading"
     assert completed.returncode == 0, completed.stderr
 
 
+def test_qml_recent_pick_preview_uses_delayed_bounded_hover_offscreen() -> None:
+    probe = """
+import time
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QObject, QPoint, QPointF, Qt, QUrl
+from PySide6.QtGui import QAccessible, QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuick import QQuickItem
+from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtTest import QTest
+
+from draftomen import __version__
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.qt_mock import MockSessionAdapter
+from draftomen.mock_session import MockLiveSession
+
+
+def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
+    if item.objectName() == object_name:
+        return item
+    for child in item.childItems():
+        found = find_visual_item(child, object_name)
+        if found is not None:
+            return found
+    return None
+
+
+def visible_item_named(name: str) -> QQuickItem | None:
+    return next(
+        (
+            item
+            for item in root.findChildren(QObject, name)
+            if isinstance(item, QQuickItem) and item.isVisible()
+        ),
+        None,
+    )
+
+
+def mouse_center(item: QQuickItem) -> QPoint:
+    point = item.mapToScene(QPointF(item.width() / 2, item.height() / 2))
+    return QPoint(round(point.x()), round(point.y()))
+
+
+def item_bounds(item: QQuickItem) -> tuple[float, float, float, float]:
+    top_left = item.mapToItem(root.contentItem(), QPointF(0, 0))
+    bottom_right = item.mapToItem(
+        root.contentItem(), QPointF(item.width(), item.height())
+    )
+    return top_left.x(), top_left.y(), bottom_right.x(), bottom_right.y()
+
+
+def item_center(item: QQuickItem) -> QPointF:
+    return item.mapToItem(
+        root.contentItem(), QPointF(item.width() / 2, item.height() / 2)
+    )
+
+
+def center_is_inside(item: QQuickItem, container: QQuickItem) -> bool:
+    center = item_center(item)
+    left, top, right, bottom = item_bounds(container)
+    return left <= center.x() <= right and top <= center.y() <= bottom
+def assert_preview_does_not_overlap_gallery(
+    preview: QQuickItem, gallery: QQuickItem
+) -> None:
+    preview_left, preview_top, preview_right, preview_bottom = item_bounds(preview)
+    gallery_left, gallery_top, gallery_right, gallery_bottom = item_bounds(gallery)
+    assert (
+        preview_right <= gallery_left
+        or preview_left >= gallery_right
+        or preview_bottom <= gallery_top
+        or preview_top >= gallery_bottom
+    )
+
+
+def preview_point_without_thumbnail(
+    preview: QQuickItem, thumbnails: list[QQuickItem]
+) -> QPoint:
+    candidates = (
+        (16, 16),
+        (preview.width() - 16, 16),
+        (16, preview.height() - 16),
+        (preview.width() - 16, preview.height() - 16),
+        (preview.width() / 2, preview.height() / 2),
+    )
+    for x, y in candidates:
+        point = preview.mapToItem(root.contentItem(), QPointF(x, y))
+        if not any(
+            item_bounds(thumbnail)[0] <= point.x() <= item_bounds(thumbnail)[2]
+            and item_bounds(thumbnail)[1] <= point.y() <= item_bounds(thumbnail)[3]
+            for thumbnail in thumbnails
+        ):
+            scene_point = preview.mapToScene(QPointF(x, y))
+            return QPoint(round(scene_point.x()), round(scene_point.y()))
+    raise AssertionError("preview has no deterministic point outside thumbnails")
+
+
+def assert_preview_inside_window(preview: QQuickItem) -> None:
+    left, top, right, bottom = item_bounds(preview)
+    content = root.contentItem()
+    assert left >= 0
+    assert top >= 0
+    assert right <= content.width()
+    assert bottom <= content.height()
+
+
+def pump(milliseconds: int) -> None:
+    deadline = time.monotonic() + milliseconds / 1000
+    while time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.005)
+    application.processEvents()
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+preferences_dir = TemporaryDirectory()
+provider = MockSessionAdapter(session=MockLiveSession(scenario="ready"))
+preferences = GuiPreferencesAdapter(app_dir=preferences_dir.name)
+engine = QQmlApplicationEngine()
+qml_directory = Path.cwd() / "draftomen" / "qml"
+engine.addImportPath(str(qml_directory))
+context = engine.rootContext()
+context.setContextProperty("fixedFontFamily", _fixed_font_family())
+context.setContextProperty("sessionProvider", provider)
+context.setContextProperty("applicationTitle", "Draft Omen")
+context.setContextProperty("applicationVersion", __version__)
+context.setContextProperty("guiPreferences", preferences)
+context.setContextProperty("initialSurface", "live")
+context.setContextProperty("initialWindowWidth", 680)
+context.setContextProperty("initialWindowHeight", 640)
+engine.setInitialProperties({"provider": provider})
+engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+assert engine.rootObjects()
+root = engine.rootObjects()[0]
+root.resize(680, 1200)
+application.processEvents()
+detail_tabs = root.findChild(QObject, "liveDetailTabs")
+assert detail_tabs is not None
+detail_tabs.setProperty("currentIndex", 1)
+application.processEvents()
+pool_flickable = visible_item_named("poolSummaryFlickable")
+gallery = visible_item_named("recentPicksGallery")
+assert pool_flickable is not None and gallery is not None
+assert gallery.isVisible()
+gallery_top_left = gallery.mapToItem(pool_flickable, QPointF(0, 0))
+current_content_y = float(pool_flickable.property("contentY"))
+pool_flickable.setProperty(
+    "contentY", max(0.0, current_content_y + gallery_top_left.y() - 8.0)
+)
+application.processEvents()
+thumbnails = [
+    find_visual_item(gallery, f"recentPickThumbnail{index}")
+    for index in range(12)
+]
+assert all(thumbnail is not None for thumbnail in thumbnails)
+thumbnails = [thumbnail for thumbnail in thumbnails if thumbnail is not None]
+first_thumbnail = thumbnails[0]
+hover_timers = root.findChildren(QObject, "recentPickHoverTimer")
+all_previews = root.findChildren(QObject, "recentPickPreview")
+previews = gallery.findChildren(QObject, "recentPickPreview")
+assert first_thumbnail.isVisible()
+assert hover_timers and all(timer.property("interval") > 500 for timer in hover_timers)
+assert len(previews) == 1
+preview = previews[0]
+assert preview.property("visible") is False
+
+accessible_thumbnail = QAccessible.queryAccessibleInterface(first_thumbnail)
+assert accessible_thumbnail is not None
+assert accessible_thumbnail.role() == QAccessible.Role.Graphic
+assert accessible_thumbnail.text(QAccessible.Text.Name) == (
+    provider.state["pool"]["recent_picks"][0]["card"]["name"]
+)
+assert "Hover for a card preview." in accessible_thumbnail.text(
+    QAccessible.Text.Description
+)
+assert first_thumbnail.property("activeFocusOnTab") in (None, False)
+
+QTest.mouseMove(root, mouse_center(first_thumbnail))
+pump(250)
+assert preview.property("visible") is False
+QTest.mouseMove(root, QPoint(2, 2))
+pump(130)
+assert preview.property("visible") is False
+
+QTest.mouseMove(root, mouse_center(first_thumbnail))
+pump(250)
+assert preview.property("visible") is False
+pump(300)
+assert preview.property("visible") is True
+assert preview.property("modal") is False
+assert preview.property("focus") is False
+first_grp_id = provider.state["pool"]["recent_picks"][0]["card"]["grp_id"]
+previewed = gallery.property("previewedPick")
+assert previewed["card"]["grp_id"] == first_grp_id
+assert_preview_inside_window(preview)
+assert_preview_does_not_overlap_gallery(preview, gallery)
+assert preview.width() > first_thumbnail.width()
+assert root.findChild(QObject, "recentPickPreviewDialog") is None
+
+preview_point = preview_point_without_thumbnail(preview, thumbnails)
+QTest.mouseMove(root, preview_point)
+pump(30)
+assert gallery.property("previewHovered") is True
+assert preview.property("visible") is True
+assert gallery.property("previewedPick")["card"]["grp_id"] == first_grp_id
+QTest.mouseMove(root, mouse_center(first_thumbnail))
+pump(50)
+assert preview.property("visible") is True
+assert gallery.property("previewedPick")["card"]["grp_id"] == first_grp_id
+assert all(timer.property("running") is False for timer in hover_timers)
+pump(250)
+assert preview.property("visible") is True
+assert gallery.property("previewedPick")["card"]["grp_id"] == first_grp_id
+
+next_thumbnail = next(
+    (
+        thumbnail
+        for thumbnail in thumbnails[1:]
+        if thumbnail.isVisible() and center_is_inside(thumbnail, pool_flickable)
+    ),
+    None,
+)
+assert next_thumbnail is not None
+next_index = int(next_thumbnail.objectName().removeprefix("recentPickThumbnail"))
+next_grp_id = provider.state["pool"]["recent_picks"][next_index]["card"]["grp_id"]
+QTest.mouseMove(root, mouse_center(next_thumbnail))
+pump(30)
+assert preview.property("visible") is False
+assert gallery.property("previewedPick") is None
+pump(300)
+assert preview.property("visible") is False
+assert gallery.property("previewedPick") is None
+pump(260)
+assert preview.property("visible") is True
+assert gallery.property("previewedPick")["card"]["grp_id"] == next_grp_id
+assert sum(item.property("visible") for item in all_previews) == 1
+assert_preview_inside_window(preview)
+assert_preview_does_not_overlap_gallery(preview, gallery)
+assert preview.width() > next_thumbnail.width()
+
+root.resize(680, 640)
+pump(100)
+assert root.width() == 680
+assert root.height() == 640
+assert preview.property("visible") is True
+assert gallery.property("previewedPick")["card"]["grp_id"] == next_grp_id
+assert_preview_inside_window(preview)
+assert_preview_does_not_overlap_gallery(preview, gallery)
+assert preview.width() > next_thumbnail.width()
+
+QTest.mouseClick(
+    root,
+    Qt.LeftButton,
+    Qt.NoModifier,
+    mouse_center(next_thumbnail),
+)
+application.processEvents()
+assert preview.property("visible") is True
+assert gallery.property("previewedPick")["card"]["grp_id"] == next_grp_id
+assert root.findChild(QObject, "recentPickPreviewDialog") is None
+QTest.mouseMove(root, QPoint(2, 2))
+pump(130)
+assert preview.property("visible") is False
+"""
+    completed = _run_qml_probe(probe)
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_qml_tab_and_shift_tab_traversal_stays_on_surfaces_and_dialogs_offscreen() -> None:
     probe = """
 from pathlib import Path
