@@ -4,6 +4,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from os import PathLike
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +15,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QCoreApplication, QObject, QTimer, QUrl, Slot
 
 from draftomen.mock_session import MockLiveSession
+from draftomen.preferences import GuiDisplayPreferences
 from draftomen.qt_adapter import (
     GuiPreferencesAdapter,
     LiveSessionAdapter,
@@ -858,25 +860,100 @@ def test_gui_preferences_adapter_persists_display_choices_independently(
     qcore_application: QCoreApplication,
     tmp_path: Path,
 ) -> None:
-    del qcore_application
     adapter = GuiPreferencesAdapter(app_dir=tmp_path / "app")
     changes: list[bool] = []
     adapter.preferencesChanged.connect(lambda: changes.append(True))
 
-    adapter.setCompactDensity(True)
-    adapter.setSecondaryStats(False)
-    adapter.setCardPreview(False)
-    adapter.setDetailedBuildContext(False)
-    adapter.setSystemTextScaling(False)
-    reloaded = GuiPreferencesAdapter(app_dir=tmp_path / "app")
+    try:
+        adapter.setCompactDensity(False)
+        assert changes == []
+        adapter.setCompactDensity(True)
+        adapter.setSecondaryStats(False)
+        adapter.setCardPreview(False)
+        adapter.setDetailedBuildContext(False)
+        adapter.setSystemTextScaling(False)
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: adapter.persistenceMessage == "Saved",
+            description="the latest GUI preferences save",
+        )
+        reloaded = GuiPreferencesAdapter(app_dir=tmp_path / "app")
 
-    assert changes == [True, True, True, True, True]
-    assert adapter.persistenceMessage == "Saved"
-    assert reloaded.compactDensity is True
-    assert reloaded.secondaryStats is False
-    assert reloaded.cardPreview is False
-    assert reloaded.detailedBuildContext is False
-    assert reloaded.systemTextScaling is False
+        assert changes == [True, True, True, True, True]
+        assert adapter.persistenceMessage == "Saved"
+        assert reloaded.compactDensity is True
+        assert reloaded.secondaryStats is False
+        assert reloaded.cardPreview is False
+        assert reloaded.detailedBuildContext is False
+        assert reloaded.systemTextScaling is False
+    finally:
+        adapter.shutdown()
+
+
+def test_gui_preferences_adapter_exposes_saving_and_ignores_stale_completion(
+    qcore_application: QCoreApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save_calls: list[GuiDisplayPreferences] = []
+    first_save_started = threading.Event()
+    release_first_save = threading.Event()
+
+    def delayed_save(
+        *,
+        preferences: GuiDisplayPreferences,
+        app_dir: str | PathLike[str] | None,
+    ) -> str | None:
+        del app_dir
+        save_calls.append(preferences)
+        if len(save_calls) == 1:
+            first_save_started.set()
+            assert release_first_save.wait(timeout=3.0)
+            return "stale save failed"
+        if len(save_calls) == 3:
+            return "current save failed"
+        return None
+
+    monkeypatch.setattr("draftomen.qt_adapter.save_gui_preferences", delayed_save)
+    adapter = GuiPreferencesAdapter(app_dir=tmp_path / "app")
+    observed_messages: list[str] = []
+    adapter.persistenceChanged.connect(
+        lambda: observed_messages.append(adapter.persistenceMessage)
+    )
+
+    try:
+        adapter.setCompactDensity(True)
+        _process_until(
+            application=qcore_application,
+            predicate=first_save_started.is_set,
+            description="the first preference save to start",
+        )
+        assert adapter.persistenceMessage == "Saving…"
+
+        adapter.setSecondaryStats(False)
+        assert adapter.persistenceMessage == "Saving…"
+        release_first_save.set()
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: len(save_calls) == 2
+            and adapter.persistenceMessage == "Saved",
+            description="the newest preference save to complete",
+        )
+        assert len(save_calls) == 2
+        latest_preferences = save_calls[-1]
+        assert latest_preferences.compact_density is True
+        assert latest_preferences.secondary_stats is False
+        assert "stale save failed" not in observed_messages
+        adapter.setCardPreview(False)
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: adapter.persistenceMessage == "current save failed",
+            description="the current preference save failure",
+        )
+        assert adapter.persistenceMessage == "current save failed"
+    finally:
+        release_first_save.set()
+        adapter.shutdown()
 
 
 def test_live_adapter_keeps_selection_responsive_during_thumbnail_fetches(

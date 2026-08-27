@@ -516,8 +516,13 @@ try:
     QTest.keyClick(root, Qt.Key_Space)
     application.processEvents()
     assert preferences.cardPreview is False
+    wait_until(
+        lambda: preferences.persistenceMessage == "Saved",
+        "the latest display preference save",
+    )
     assert GuiPreferencesAdapter(app_dir=app_dir).cardPreview is False
 finally:
+    preferences.shutdown()
     provider.shutdown()
     provider.wait_for_shutdown()
     del engine
@@ -2359,6 +2364,15 @@ def trigger_and_wait_for_layout(item, action, predicate) -> None:
     application.processEvents()
 
 
+def wait_for_saved(preferences: GuiPreferencesAdapter) -> None:
+    for _ in range(100):
+        application.processEvents()
+        if preferences.persistenceMessage == "Saved":
+            return
+        QTest.qWait(10)
+    assert preferences.persistenceMessage == "Saved"
+
+
 class RecordingProvider(MockSessionAdapter):
     def __init__(self):
         self.commands = []
@@ -2411,6 +2425,7 @@ assert preferences.cardPreview is True
 QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
 assert preferences.cardPreview is False
+wait_for_saved(preferences)
 assert GuiPreferencesAdapter(app_dir=preferences_dir.name).cardPreview is False
 
 root.resize(1080, 900)
@@ -2961,6 +2976,7 @@ QTest.keyClick(root, Qt.Key_Space)
 application.processEvents()
 assert provider.state["errors"] == []
 
+preferences.shutdown()
 del engine
 
 """
@@ -3164,6 +3180,15 @@ def assert_accessible_status(item, expected: str) -> None:
     assert accessible.text(QAccessible.Text.Description) == expected
 
 
+def wait_for_saved(preferences: GuiPreferencesAdapter) -> None:
+    for _ in range(100):
+        application.processEvents()
+        if preferences.persistenceMessage == "Saved":
+            return
+        QTest.qWait(10)
+    assert preferences.persistenceMessage == "Saved"
+
+
 QQuickStyle.setStyle("Fusion")
 application = QGuiApplication([])
 application_font = application.font()
@@ -3192,6 +3217,18 @@ with TemporaryDirectory() as preferences_dir:
     assert engine.rootObjects()
     root = engine.rootObjects()[0]
     application.processEvents()
+    status_strip = root.findChild(QObject, "statusStrip")
+    assert status_strip is not None
+    persistence_message = root.findChild(QObject, "statusPersistenceMessage")
+    assert persistence_message is not None
+    assert persistence_message.property("text") == "Saved"
+    assert QColor(persistence_message.property("color")) == QColor("#a78bfa")
+    assert root.findChild(QObject, "settingsPersistenceMessage") is None
+    accessible_persistence = QAccessible.queryAccessibleInterface(persistence_message)
+    assert accessible_persistence is not None
+    assert accessible_persistence.text(QAccessible.Text.Name) == "Saved"
+    assert accessible_persistence.text(QAccessible.Text.Description)
+    assert persistence_message.width() <= status_strip.width()
     names = (
         "settingsSplashSwitch",
         "settingsCompactDensitySwitch",
@@ -3304,8 +3341,9 @@ with TemporaryDirectory() as preferences_dir:
     assert system_message.property("text") == enabled_different_message
     assert_accessible_status(system_message, enabled_different_message)
 
-    persistence_message = root.findChild(QObject, "settingsPersistenceMessage")
+    persistence_message = root.findChild(QObject, "statusPersistenceMessage")
     assert persistence_message is not None
+    assert root.findChild(QObject, "settingsPersistenceMessage") is None
     scaled_font = persistence_message.property("font")
     resolved_pixel_size = QFontInfo(application.font()).pixelSize()
     assert scaled_font.pixelSize() == expected_scaled_pixel_size(resolved_pixel_size)
@@ -3342,6 +3380,10 @@ with TemporaryDirectory() as preferences_dir:
     assert system_message.property("text") == disabled_different_message
     assert_accessible_status(system_message, disabled_different_message)
 
+    wait_for_saved(preferences)
+    assert persistence_message.property("text") == "Saved"
+    assert QColor(persistence_message.property("color")) == QColor("#a78bfa")
+    assert_accessible_status(persistence_message, "Saved")
     assert GuiPreferencesAdapter(app_dir=preferences_dir).systemTextScaling is False
     QTest.keyClick(root, Qt.Key_Space)
     application.processEvents()
@@ -3398,6 +3440,8 @@ with TemporaryDirectory() as preferences_dir:
     persisted_preferences = GuiPreferencesAdapter(app_dir=preferences_dir)
     persisted_preferences.setSystemTextScaling(False)
     assert persisted_preferences.systemTextScaling is False
+    wait_for_saved(persisted_preferences)
+    preferences.shutdown()
     del root
     del engine
 
@@ -3428,9 +3472,10 @@ with TemporaryDirectory() as preferences_dir:
     assert reloaded_inherited_font_control is not None
     assert reloaded_inherited_font_control.property("font").pixelSize() == 13
     reloaded_persistence_message = root.findChild(
-        QObject, "settingsPersistenceMessage"
+        QObject, "statusPersistenceMessage"
     )
     assert reloaded_persistence_message is not None
+    assert root.findChild(QObject, "settingsPersistenceMessage") is None
     assert reloaded_persistence_message.property("font").pixelSize() == 11
     reloaded_system_message = root.findChild(
         QObject, "settingsSystemTextScalingMessage"
@@ -3508,6 +3553,7 @@ with TemporaryDirectory() as preferences_dir:
     application.processEvents()
     assert card_preview.property("checked") is was_checked
 
+    persisted_preferences.shutdown()
     del reload_engine
 """
     completed = _run_qml_probe(probe)

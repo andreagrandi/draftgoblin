@@ -318,6 +318,7 @@ def run_gui(
             ),
         )
     exit_code = application.exec()
+    preferences.shutdown()
     if isinstance(provider, LiveSessionAdapter):
         provider.shutdown()
         provider.wait_for_shutdown()

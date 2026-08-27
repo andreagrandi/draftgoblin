@@ -7,6 +7,7 @@ Rectangle {
     objectName: "statusStrip"
 
     required property var sessionState
+    required property var displayPreferences
     required property string applicationVersion
     property bool narrow: false
 
@@ -34,6 +35,20 @@ Rectangle {
             color: Theme.textMuted
             font.pixelSize: Theme.textPixelSize(11)
             elide: Text.ElideRight
+        }
+
+        Label {
+            objectName: "statusPersistenceMessage"
+            Layout.fillWidth: true
+            Layout.minimumWidth: 0
+            text: root.displayPreferences.persistenceMessage
+            color: root.displayPreferences.persistenceMessage === "Saved"
+                ? Theme.primary
+                : Theme.warning
+            font.pixelSize: Theme.textPixelSize(11)
+            elide: Text.ElideRight
+            Accessible.name: text
+            Accessible.description: text
         }
 
         Label {
