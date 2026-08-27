@@ -2768,3 +2768,185 @@ with TemporaryDirectory() as preferences_dir:
     assert "Binding loop detected" not in completed.stderr
     assert "Unable to assign" not in completed.stderr
     assert "TypeError" not in completed.stderr
+
+
+def test_qml_settings_switches_expose_contrast_states_and_keyboard_toggle() -> None:
+    probe = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QObject, Qt, QUrl
+from PySide6.QtGui import QAccessible, QColor, QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtTest import QTest
+
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_mock import MockSessionAdapter
+
+
+def relative_luminance(value) -> float:
+    color = QColor(value)
+    channels = [color.redF(), color.greenF(), color.blueF()]
+    linear = [
+        channel / 12.92 if channel <= 0.04045
+        else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(first, second) -> float:
+    first_luminance = relative_luminance(first)
+    second_luminance = relative_luminance(second)
+    lighter = max(first_luminance, second_luminance)
+    darker = min(first_luminance, second_luminance)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+provider = MockSessionAdapter(session=MockLiveSession(scenario="ready"))
+
+with TemporaryDirectory() as preferences_dir:
+    preferences = GuiPreferencesAdapter(app_dir=preferences_dir)
+    engine = QQmlApplicationEngine()
+    qml_directory = Path.cwd() / "draftomen" / "qml"
+    engine.addImportPath(str(qml_directory))
+    context = engine.rootContext()
+    context.setContextProperty("fixedFontFamily", "monospace")
+    context.setContextProperty("sessionProvider", provider)
+    context.setContextProperty("applicationTitle", "Draft Omen")
+    context.setContextProperty("applicationVersion", "0.0")
+    context.setContextProperty("guiPreferences", preferences)
+    context.setContextProperty("initialSurface", "settings")
+    context.setContextProperty("initialWindowWidth", 900)
+    context.setContextProperty("initialWindowHeight", 760)
+    engine.setInitialProperties({"provider": provider})
+    engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+    assert engine.rootObjects()
+    root = engine.rootObjects()[0]
+    application.processEvents()
+
+    names = (
+        "settingsSplashSwitch",
+        "settingsCompactDensitySwitch",
+        "settingsSecondaryStatsSwitch",
+        "settingsCardPreviewSwitch",
+        "settingsDetailedBuildContextSwitch",
+    )
+    switches = [root.findChild(QObject, name) for name in names]
+    assert all(switch is not None for switch in switches)
+    assert all(switch.property("height") >= 42 for switch in switches)
+    assert all(switch.property("width") >= 40 for switch in switches)
+
+    checked_switches = [switch for switch in switches if switch.property("checked")]
+    unchecked_switches = [
+        switch for switch in switches if not switch.property("checked")
+    ]
+    assert len(checked_switches) == 4
+    assert len(unchecked_switches) == 1
+
+    for switch in switches:
+        is_checked = switch.property("checked") is True
+        assert switch.property("visualChecked") is is_checked
+        assert switch.property("visualUnchecked") is (not is_checked)
+        assert switch.property("visualDisabled") is False
+        assert switch.property("visualFocused") == switch.property("activeFocus")
+        assert switch.property("visualState") == (
+            "checked" if is_checked else "unchecked"
+        )
+        assert switch.findChild(QObject, "settingsSwitchTrack") is not None
+        assert switch.findChild(QObject, "settingsSwitchThumb") is not None
+        assert switch.findChild(QObject, "settingsSwitchStateText") is not None
+        assert switch.findChild(QObject, "settingsSwitchFocusRing") is not None
+
+    checked_track = QColor(checked_switches[0].property("visualTrackColor"))
+    unchecked_track = QColor(unchecked_switches[0].property("visualTrackColor"))
+    checked_thumb = QColor(checked_switches[0].property("visualThumbColor"))
+    unchecked_thumb = QColor(unchecked_switches[0].property("visualThumbColor"))
+    assert all(
+        QColor(switch.property("visualTrackColor")) == checked_track
+        for switch in checked_switches
+    )
+    assert all(
+        QColor(switch.property("visualTrackColor")) == unchecked_track
+        for switch in unchecked_switches
+    )
+    assert all(
+        QColor(switch.property("visualThumbColor")) == checked_thumb
+        for switch in checked_switches
+    )
+    assert all(
+        QColor(switch.property("visualThumbColor")) == unchecked_thumb
+        for switch in unchecked_switches
+    )
+    assert checked_track != unchecked_track
+    assert checked_thumb != unchecked_thumb
+    assert relative_luminance(checked_track) < relative_luminance(unchecked_track)
+    assert contrast_ratio(
+        checked_track, checked_switches[0].property("visualContentColor")
+    ) >= 4.5
+    assert contrast_ratio(
+        unchecked_track, unchecked_switches[0].property("visualContentColor")
+    ) >= 4.5
+    assert contrast_ratio(
+        checked_thumb, checked_switches[0].property("visualThumbContentColor")
+    ) >= 4.5
+    assert contrast_ratio(
+        unchecked_thumb, unchecked_switches[0].property("visualThumbContentColor")
+    ) >= 4.5
+
+    disabled_switch = checked_switches[0]
+    disabled_switch.setProperty("enabled", False)
+    application.processEvents()
+    assert disabled_switch.property("visualDisabled") is True
+    assert disabled_switch.property("visualState") == "disabled"
+    assert QColor(disabled_switch.property("visualTrackColor")) == QColor(
+        disabled_switch.property("disabledTrackColor")
+    )
+    assert QColor(disabled_switch.property("visualThumbColor")) == QColor(
+        disabled_switch.property("disabledThumbColor")
+    )
+    assert contrast_ratio(
+        disabled_switch.property("visualTrackColor"),
+        disabled_switch.property("visualContentColor"),
+    ) >= 4.5
+    assert contrast_ratio(
+        disabled_switch.property("visualThumbColor"),
+        disabled_switch.property("visualThumbContentColor"),
+    ) >= 4.5
+    focus_ring = disabled_switch.findChild(QObject, "settingsSwitchFocusRing")
+    assert focus_ring is not None and focus_ring.property("visible") is False
+    disabled_switch.setProperty("enabled", True)
+
+    card_preview = root.findChild(QObject, "settingsCardPreviewSwitch")
+    assert card_preview is not None
+    accessible = QAccessible.queryAccessibleInterface(card_preview)
+    assert accessible is not None
+    assert accessible.text(QAccessible.Text.Name) == "Card image preview"
+    assert accessible.text(QAccessible.Text.Description) == (
+        "Saved desktop display preference."
+    )
+    card_preview.forceActiveFocus()
+    application.processEvents()
+    assert card_preview.property("visualFocused") is True
+    focus_ring = card_preview.findChild(QObject, "settingsSwitchFocusRing")
+    assert focus_ring is not None and focus_ring.property("visible") is True
+    was_checked = card_preview.property("checked")
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert card_preview.property("checked") is (not was_checked)
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert card_preview.property("checked") is was_checked
+
+    del engine
+"""
+    completed = _run_qml_probe(probe)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+    assert "TypeError" not in completed.stderr

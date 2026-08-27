@@ -104,7 +104,7 @@ Item {
                                 wrapMode: Text.WordWrap
                             }
                         }
-                        Switch {
+                        SettingsSwitch {
                             objectName: "settingsSplashSwitch"
                             checked: root.sessionState.recommendations.splash_enabled
                             Accessible.name: "Splash recommendations"
@@ -142,7 +142,7 @@ Item {
                             Label { text: "Compact density"; color: Theme.text; font.bold: true }
                             Label { Layout.fillWidth: true; text: "Reduce list spacing while retaining 40px targets."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
                         }
-                        Switch {
+                        SettingsSwitch {
                             objectName: "settingsCompactDensitySwitch"
                             checked: root.displayPreferences.compactDensity
                             Accessible.name: "Compact density"
@@ -157,7 +157,7 @@ Item {
                             Label { text: "Secondary statistics"; color: Theme.text; font.bold: true }
                             Label { Layout.fillWidth: true; text: "Show ALSA, mana value, and source details."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
                         }
-                        Switch {
+                        SettingsSwitch {
                             objectName: "settingsSecondaryStatsSwitch"
                             checked: root.displayPreferences.secondaryStats
                             Accessible.name: "Secondary statistics"
@@ -172,7 +172,7 @@ Item {
                             Label { text: "Card image preview"; color: Theme.text; font.bold: true }
                             Label { Layout.fillWidth: true; text: "Keep the selected card image visible when space allows."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
                         }
-                        Switch {
+                        SettingsSwitch {
                             objectName: "settingsCardPreviewSwitch"
                             checked: root.displayPreferences.cardPreview
                             Accessible.name: "Card image preview"
@@ -187,7 +187,7 @@ Item {
                             Label { text: "Detailed build context"; color: Theme.text; font.bold: true }
                             Label { Layout.fillWidth: true; text: "Show pair reasoning and durable build warnings."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
                         }
-                        Switch {
+                        SettingsSwitch {
                             objectName: "settingsDetailedBuildContextSwitch"
                             checked: root.displayPreferences.detailedBuildContext
                             Accessible.name: "Detailed build context"

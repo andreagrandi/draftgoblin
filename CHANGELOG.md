@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Improve Settings toggles with high-contrast checked, unchecked, disabled,
+  and focus states.
+
 - Replace recent-pick click-modal previews with delayed, bounded hover previews.
 
 - Fetch uncached recommendation card thumbnails in the background as each

@@ -107,6 +107,7 @@ files = [
     "draftomen/qml/PoolSummaryPanel.qml",
     "draftomen/qml/RecommendationRow.qml",
     "draftomen/qml/SettingsView.qml",
+    "draftomen/qml/SettingsSwitch.qml",
     "draftomen/qml/StateBanner.qml",
     "draftomen/qml/StatusStrip.qml",
     "draftomen/qml/Theme.qml",
