@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Expand the About dialog with author attribution, MIT License details, and website/GitHub links.
+
 - Expand the wide build bench to show multiple rows while preserving the main deck and selected-card layouts.
 
 - Widen the Live Draft card details and enlarge its focused card preview for

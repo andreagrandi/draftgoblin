@@ -1990,7 +1990,9 @@ try:
     logo = root.findChild(QObject, "aboutDialogLogo")
     version = root.findChild(QObject, "aboutDialogVersion")
     author = root.findChild(QObject, "aboutDialogAuthor")
+    license_label = root.findChild(QObject, "aboutDialogLicense")
     website = root.findChild(QObject, "aboutDialogWebsite")
+    repository = root.findChild(QObject, "aboutDialogRepository")
     close = root.findChild(QObject, "aboutDialogCloseButton")
     assert dialog is not None and dialog.property("visible") is True
     assert dialog.property("modal") is True
@@ -2011,9 +2013,36 @@ try:
     assert title is not None and title.property("text") == "Draft Omen"
     assert logo is not None and logo.isVisible() and logo.width() >= 180
     assert version is not None and version.property("text") == "Version " + __version__
-    assert author is not None and author.property("text") == "Created by Andrea Grandi"
-    assert website is not None and website.property("text") == "Project website"
+    assert author is not None and author.property("text") == "Made with ❤️ by Andrea Grandi"
+    assert license_label is not None
+    assert license_label.property("text") == "Draft Omen is licensed under the MIT License"
+    assert website is not None and website.isVisible()
+    assert website.property("text") == "Project website"
+    assert repository is not None and repository.isVisible()
+    assert repository.property("text") == "GitHub repository"
     assert close is not None and close.property("text") == "Close"
+    assert dialog.property("projectWebsite") == "https://www.draftomen.com"
+    assert dialog.property("projectRepository") == "https://github.com/andreagrandi/draftomen"
+    assert website.property("activeFocusOnTab") is True
+    assert repository.property("activeFocusOnTab") is True
+    accessible_author = QAccessible.queryAccessibleInterface(author)
+    assert accessible_author is not None
+    assert accessible_author.text(QAccessible.Text.Name) == "Made with ❤️ by Andrea Grandi"
+    accessible_license = QAccessible.queryAccessibleInterface(license_label)
+    assert accessible_license is not None
+    assert accessible_license.text(QAccessible.Text.Name) == (
+        "Draft Omen is licensed under the MIT License"
+    )
+    accessible_website = QAccessible.queryAccessibleInterface(website)
+    assert accessible_website is not None
+    assert accessible_website.text(QAccessible.Text.Name) == "Open Draft Omen project website"
+    assert accessible_website.text(QAccessible.Text.Description) == "https://www.draftomen.com"
+    accessible_repository = QAccessible.queryAccessibleInterface(repository)
+    assert accessible_repository is not None
+    assert accessible_repository.text(QAccessible.Text.Name) == "Open Draft Omen GitHub repository"
+    assert accessible_repository.text(QAccessible.Text.Description) == (
+        "https://github.com/andreagrandi/draftomen"
+    )
     logo_source = logo.property("source")
     assert isinstance(logo_source, QUrl)
     logo_context = QQmlEngine.contextForObject(logo)
@@ -2029,7 +2058,16 @@ try:
     website.forceActiveFocus()
     QTest.keyClick(root, Qt.Key_Space)
     application.processEvents()
-    assert url_handler.urls == ["https://github.com/andreagrandi/draftomen"]
+    assert url_handler.urls == ["https://www.draftomen.com"]
+    assert provider.state == before_state
+
+    repository.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert url_handler.urls == [
+        "https://www.draftomen.com",
+        "https://github.com/andreagrandi/draftomen",
+    ]
     assert provider.state == before_state
 
     close.forceActiveFocus()

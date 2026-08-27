@@ -7,7 +7,8 @@ Dialog {
 
     required property string applicationVersion
     property var returnFocusItem: null
-    readonly property string projectWebsite: "https://github.com/andreagrandi/draftomen"
+    readonly property string projectWebsite: "https://www.draftomen.com"
+    readonly property string projectRepository: "https://github.com/andreagrandi/draftomen"
 
     objectName: "aboutDialog"
     parent: Overlay.overlay
@@ -96,7 +97,16 @@ Dialog {
         Label {
             objectName: "aboutDialogAuthor"
             Layout.fillWidth: true
-            text: "Created by Andrea Grandi"
+            text: "Made with ❤️ by Andrea Grandi"
+            color: Theme.text
+            horizontalAlignment: Text.AlignHCenter
+            Accessible.name: text
+        }
+
+        Label {
+            objectName: "aboutDialogLicense"
+            Layout.fillWidth: true
+            text: "Draft Omen is licensed under the MIT License"
             color: Theme.text
             horizontalAlignment: Text.AlignHCenter
             Accessible.name: text
@@ -111,6 +121,16 @@ Dialog {
             Accessible.name: "Open Draft Omen project website"
             Accessible.description: root.projectWebsite
             onClicked: Qt.openUrlExternally(root.projectWebsite)
+        }
+
+        DimensionalButton {
+            objectName: "aboutDialogRepository"
+            Layout.alignment: Qt.AlignHCenter
+            text: "GitHub repository"
+            implicitWidth: 160
+            Accessible.name: "Open Draft Omen GitHub repository"
+            Accessible.description: root.projectRepository
+            onClicked: Qt.openUrlExternally(root.projectRepository)
         }
     }
 
