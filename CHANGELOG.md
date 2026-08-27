@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Replace the README and website screenshots with current GUI views for live picks and suggested decks.
+
 - Expand the About dialog with author attribution, MIT License details, and website/GitHub links.
 
 - Expand the wide build bench to show multiple rows while preserving the main deck and selected-card layouts.

@@ -456,10 +456,8 @@
   }
 
   .showcase-card img {
-    aspect-ratio: 1.78 / 1;
     width: 100%;
-    object-fit: cover;
-    object-position: center;
+    height: auto;
   }
 
   .showcase-card figcaption {
@@ -787,9 +785,6 @@
     grid-template-columns: 1fr;
   }
 
-  .showcase-card img {
-    aspect-ratio: 1.8 / 1;
-  }
 
   .callout {
     gap: 1.15rem;
