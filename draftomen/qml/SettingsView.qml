@@ -199,15 +199,6 @@ Item {
                             onToggled: root.displayPreferences.setDetailedBuildContext(checked)
                         }
                     }
-                    Label {
-                        objectName: "settingsPersistenceMessage"
-                        Layout.fillWidth: true
-                        text: root.displayPreferences.persistenceMessage
-                        color: root.displayPreferences.persistenceMessage === "Saved" ? Theme.primary : Theme.warning
-                        font.pixelSize: Theme.textPixelSize(11)
-                        Accessible.name: text
-                        Accessible.description: "Display preference persistence status: " + text
-                    }
                 }
             }
 

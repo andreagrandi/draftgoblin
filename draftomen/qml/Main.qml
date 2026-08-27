@@ -67,6 +67,7 @@ ApplicationWindow {
 
     footer: StatusStrip {
         sessionState: window.sessionState
+        displayPreferences: window.displayPreferences
         applicationVersion: window.desktopApplicationVersion
         narrow: window.narrow
     }

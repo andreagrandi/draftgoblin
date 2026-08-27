@@ -4,6 +4,7 @@ Keep blocking session work in adapter-owned workers and QML values presentation-
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import fields, is_dataclass, replace
 from enum import Enum
@@ -11,8 +12,9 @@ from os import PathLike
 from typing import Any, Literal, TypeAlias, cast
 
 from PySide6.QtCore import (
-    QByteArray,
     QAbstractListModel,
+    QByteArray,
+    QCoreApplication,
     QEvent,
     QModelIndex,
     QMetaObject,
@@ -60,6 +62,8 @@ _DEFAULT_APPLICATION_FONT_PIXEL_SIZE = 13
 
 
 _WORKER_ERROR_ID = "qt-worker-error"
+
+_GUI_PREFERENCES_SAVE_LOCK = threading.Lock()
 
 
 def _to_qml_value(value: Any) -> Any:
@@ -159,6 +163,63 @@ class RecommendationListModel(QAbstractListModel):
             self.endInsertRows()
 
 
+class _GuiPreferencesSaveThread(QThread):
+    """Serialize immutable GUI preference snapshots on one worker thread.
+    At most one snapshot is active; pending work is coalesced to the newest.
+    """
+
+    saveFinished = Signal(int, str)
+
+    def __init__(
+        self,
+        *,
+        app_dir: str | PathLike[str] | None,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._app_dir = app_dir
+        self._condition = threading.Condition()
+        self._pending: tuple[int, GuiDisplayPreferences] | None = None
+        self._stop_requested = False
+
+    def enqueue(
+        self,
+        *,
+        generation: int,
+        preferences: GuiDisplayPreferences,
+    ) -> None:
+        with self._condition:
+            if self._stop_requested:
+                return
+            self._pending = (generation, preferences)
+            self._condition.notify()
+
+    def request_stop(self) -> None:
+        with self._condition:
+            self._stop_requested = True
+            self._condition.notify()
+
+    def run(self) -> None:
+        while True:
+            with self._condition:
+                while self._pending is None and not self._stop_requested:
+                    self._condition.wait()
+                if self._pending is None:
+                    return
+                generation, preferences = self._pending
+                self._pending = None
+
+            try:
+                with _GUI_PREFERENCES_SAVE_LOCK:
+                    persistence_message = save_gui_preferences(
+                        preferences=preferences,
+                        app_dir=self._app_dir,
+                    )
+            except Exception as error:  # pragma: no cover - defensive boundary.
+                persistence_message = f"Could not save GUI preferences: {error}"
+            self.saveFinished.emit(generation, persistence_message or "Saved")
+
+
 class GuiPreferencesAdapter(QObject):
     """Expose persisted display-only GUI choices through narrow Qt properties.
     Ranking and splash choices remain explicit commands on SessionAdapter.
@@ -179,9 +240,21 @@ class GuiPreferencesAdapter(QObject):
         self._preferences, self._persistence_message = load_gui_preferences(
             app_dir=app_dir,
         )
-        application = QGuiApplication.instance()
+        self._save_generation = 0
+        self._save_thread: _GuiPreferencesSaveThread | None = None
+        self._closing = False
+
+        application = QCoreApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self.shutdown)
         if isinstance(application, QGuiApplication):
             application.installEventFilter(self)
+
+    def __del__(self) -> None:
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
     def eventFilter(self, _watched: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.ApplicationFontChange:
@@ -244,17 +317,58 @@ class GuiPreferencesAdapter(QObject):
     def setSystemTextScaling(self, enabled: bool) -> None:
         self._replace_preferences(system_text_scaling=enabled)
 
+    @Slot()
+    def shutdown(self) -> None:
+        self._closing = True
+        thread = self._save_thread
+        if thread is None:
+            return
+        thread.request_stop()
+        thread.wait()
+
+    def _ensure_save_thread(self) -> _GuiPreferencesSaveThread:
+        thread = self._save_thread
+        if thread is None:
+            thread = _GuiPreferencesSaveThread(
+                app_dir=self._app_dir,
+                parent=self,
+            )
+            thread.saveFinished.connect(
+                self._apply_save_result,
+                Qt.ConnectionType.QueuedConnection,
+            )
+            self._save_thread = thread
+        if not thread.isRunning():
+            thread.start()
+        return thread
+
+    @Slot(int, str)
+    def _apply_save_result(
+        self,
+        generation: int,
+        persistence_message: str,
+    ) -> None:
+        if self._closing or generation != self._save_generation:
+            return
+        self._persistence_message = persistence_message
+        self.persistenceChanged.emit()
+
     def _replace_preferences(self, **changes: bool) -> None:
+        if self._closing:
+            return
         updated = replace(self._preferences, **changes)
         if updated == self._preferences:
             return
         self._preferences = updated
-        self._persistence_message = save_gui_preferences(
-            preferences=updated,
-            app_dir=self._app_dir,
-        )
+        self._save_generation += 1
+        generation = self._save_generation
+        self._persistence_message = "Saving…"
         self.preferencesChanged.emit()
         self.persistenceChanged.emit()
+        self._ensure_save_thread().enqueue(
+            generation=generation,
+            preferences=updated,
+        )
 
 
 class SessionAdapter(QObject):
