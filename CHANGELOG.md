@@ -4,6 +4,9 @@
 
 - Replace recent-pick click-modal previews with delayed, bounded hover previews.
 
+- Fetch uncached recommendation card thumbnails in the background as each
+  pick is published, without blocking recommendation selection.
+
 - Restyle desktop buttons and dropdown selectors with dimensional Draft Omen
   controls, and move About and Privacy actions into the navigation rail.
 

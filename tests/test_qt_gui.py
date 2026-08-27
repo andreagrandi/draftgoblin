@@ -401,6 +401,14 @@ try:
     )
     first_recommendation_source = image_source(live_image)
     first_recommendation_grp_id = provider.state["card_image"]["grp_id"]
+    wait_until(
+        lambda: any(
+            card["card"]["grp_id"] != first_recommendation_grp_id
+            and card["card"]["image_path"] is not None
+            for card in provider.state["recommendations"]["cards"]
+        ),
+        "an automatically fetched recommendation thumbnail",
+    )
     next_recommendation_grp_id = next(
         card["card"]["grp_id"]
         for card in provider.state["recommendations"]["cards"]

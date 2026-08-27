@@ -13,7 +13,7 @@ import pytest
 import draftomen.session as session_module
 from draftomen.audit import load_draft_audit_records
 from draftomen.carddb import CardDatabase, CardInfo
-from draftomen.cardimages import CardImageService
+from draftomen.cardimages import CardImageError, CardImageService
 from draftomen.events import (
     AccountEvent,
     DraftStartedEvent,
@@ -1935,6 +1935,7 @@ def test_live_session_context_change_clears_derived_errors_and_retries(
     with pytest.raises(ValueError, match="Unknown session error 'backtest'"):
         session.dispatch(command=RetryError(error_id="backtest"))
 
+
 class _CardImageResponse:
     def __init__(self, *, payload: bytes) -> None:
         self._payload = payload
@@ -1947,7 +1948,6 @@ class _CardImageResponse:
 
     def read(self, limit: int) -> bytes:
         return self._payload[:limit]
-
 
 
 class _ControlledCardImageService:
@@ -2005,17 +2005,24 @@ class _ControlledCardImageService:
             self.finished(image_uri=image_uri).set()
 
 
-def test_live_session_publishes_selected_card_image_loading_then_ready(
+def _new_controlled_image_session(
+    *,
     tmp_path: Path,
-) -> None:
+) -> tuple[LiveSession, _ControlledCardImageService]:
     service = _ControlledCardImageService(cache_dir=tmp_path)
-    database = _fixture_card_database(with_image_uris=True)
     session = LiveSession(
         log_path=tmp_path / "Player.log",
         app_dir=tmp_path / "app",
-        card_database=database,
+        card_database=_fixture_card_database(with_image_uris=True),
         card_image_service=service,
     )
+    return session, service
+
+
+def test_live_session_publishes_selected_card_image_loading_then_ready(
+    tmp_path: Path,
+) -> None:
+    session, service = _new_controlled_image_session(tmp_path=tmp_path)
     _process_until_recommendations(
         session=session,
         lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
@@ -2026,8 +2033,13 @@ def test_live_session_publishes_selected_card_image_loading_then_ready(
     assert request is not None
     assert session.snapshot.card_image.phase == DataLoadPhase.LOADING
     service.release(image_uri=request.image_uri).set()
-    image_path = session.fetch_card_image(request=request)
-    session.complete_card_image_request(request=request, image_path=image_path)
+    image_result = session.fetch_card_image(request=request)
+    image_path = image_result.image_path
+    session.complete_card_image_request(
+        request=request,
+        image_path=image_path,
+        image_uri=image_result.image_uri,
+    )
     assert session.snapshot.card_image.image_path == str(
         tmp_path / Path(request.image_uri).name
     )
@@ -2051,17 +2063,194 @@ def test_live_session_publishes_selected_card_image_loading_then_ready(
     assert session.snapshot.card_image.phase == DataLoadPhase.LOADING
 
 
-def test_live_session_retains_recommendation_details_when_card_image_fails(
+def test_live_session_queues_each_uncached_recommendation_image(
     tmp_path: Path,
 ) -> None:
-    service = _ControlledCardImageService(cache_dir=tmp_path)
+    session, _ = _new_controlled_image_session(tmp_path=tmp_path)
+    _process_until_recommendations(
+        session=session,
+        lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
+    )
+
+    requests = session.recommendation_image_requests()
+
+    assert {request.grp_id for request in requests} == {
+        recommendation.card.grp_id
+        for recommendation in session.snapshot.recommendations.cards
+    }
+    assert session.selected_card_image_request() is not None
+
+
+def test_live_session_publishes_one_recommendation_image_without_reselecting(
+    tmp_path: Path,
+) -> None:
+    session, _ = _new_controlled_image_session(tmp_path=tmp_path)
+    _process_until_recommendations(
+        session=session,
+        lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
+    )
+
+    selected_grp_id = session.snapshot.recommendations.selected_grp_id
+    request = next(
+        request
+        for request in session.recommendation_image_requests()
+        if request.grp_id != selected_grp_id
+    )
+
+    session.complete_recommendation_image_request(
+        request=request,
+        image_path=tmp_path / "recommendation.jpg",
+    )
+
+    updated = next(
+        recommendation
+        for recommendation in session.snapshot.recommendations.cards
+        if recommendation.card.grp_id == request.grp_id
+    )
+    untouched = next(
+        recommendation
+        for recommendation in session.snapshot.recommendations.cards
+        if recommendation.card.grp_id != request.grp_id
+    )
+    assert updated.card.image_path == str(tmp_path / "recommendation.jpg")
+    assert untouched.card.image_path is None
+    assert request not in session.recommendation_image_requests()
+
+
+def test_live_session_retains_deferred_recommendation_image_after_rescore(
+    tmp_path: Path,
+) -> None:
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        card_image_service=_ControlledCardImageService(cache_dir=tmp_path),
+    )
+    _process_until_recommendations(
+        session=session,
+        lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
+    )
+
+    request = next(iter(session.recommendation_image_requests()))
+    assert request.image_uri is None
+    image_path = tmp_path / "deferred-recommendation.jpg"
+    resolved_uri = "https://cards.example/deferred-recommendation.jpg"
+    session.complete_recommendation_image_request(
+        request=request,
+        image_path=image_path,
+        image_uri=resolved_uri,
+    )
+
+    rescored = session.dispatch(command=ChangeRanking(ranking_mode="win_rate"))
+    rescored = session.dispatch(command=ChangeSplashPreference(enabled=False))
+
+    recommendation = next(
+        recommendation
+        for recommendation in rescored.recommendations.cards
+        if recommendation.card.grp_id == request.grp_id
+    )
+    assert recommendation.card.image_path == str(image_path)
+    assert all(
+        queued.grp_id != request.grp_id
+        for queued in session.recommendation_image_requests()
+    )
+
+
+def test_live_session_recommendation_cache_skips_background_request(
+    tmp_path: Path,
+) -> None:
     database = _fixture_card_database(with_image_uris=True)
+    service = CardImageService(
+        cache_dir=tmp_path / "card-images",
+        opener=lambda *_args, **_kwargs: pytest.fail("cached image was fetched"),
+    )
+    cached_card = database.lookup(grp_id=next(iter(database.cards)))
+    assert cached_card.image_uri is not None
+    cached_path = service.cached_path(image_uri=cached_card.image_uri)
+    cached_path.parent.mkdir(parents=True)
+    cached_path.write_bytes(b"fixture")
     session = LiveSession(
         log_path=tmp_path / "Player.log",
         app_dir=tmp_path / "app",
         card_database=database,
         card_image_service=service,
     )
+    _process_until_recommendations(
+        session=session,
+        lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
+    )
+
+    cached_recommendation = next(
+        recommendation
+        for recommendation in session.snapshot.recommendations.cards
+        if recommendation.card.grp_id == cached_card.grp_id
+    )
+    assert cached_recommendation.card.image_path == str(cached_path)
+    assert cached_card.grp_id not in {
+        request.grp_id for request in session.recommendation_image_requests()
+    }
+
+
+def test_live_session_recommendation_image_failure_keeps_queue_moving(
+    tmp_path: Path,
+) -> None:
+    session, _ = _new_controlled_image_session(tmp_path=tmp_path)
+    _process_until_recommendations(
+        session=session,
+        lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
+    )
+    selected_grp_id = session.snapshot.recommendations.selected_grp_id
+    request = next(
+        request
+        for request in session.recommendation_image_requests()
+        if request.grp_id != selected_grp_id
+    )
+    remaining = next(
+        queued
+        for queued in session.recommendation_image_requests()
+        if queued != request
+    )
+
+    session.fail_recommendation_image_request(
+        request=request,
+        error_message="network down",
+    )
+
+    assert session.recommendation_image_request() == remaining
+
+
+def test_live_session_ignores_recommendation_image_from_replaced_pack(
+    tmp_path: Path,
+) -> None:
+    session, _ = _new_controlled_image_session(tmp_path=tmp_path)
+    _process_until_recommendations(
+        session=session,
+        lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
+    )
+    old_request = session.recommendation_image_requests()[0]
+    current_pack = session.current_pack_event
+    assert current_pack is not None
+    session._current_pack_event = replace(
+        current_pack,
+        pick_number=current_pack.pick_number + 1,
+    )
+    session._score_current_pack()
+
+    session.complete_recommendation_image_request(
+        request=old_request,
+        image_path=tmp_path / "stale.jpg",
+    )
+
+    assert all(
+        recommendation.card.image_path != str(tmp_path / "stale.jpg")
+        for recommendation in session.snapshot.recommendations.cards
+    )
+
+
+def test_live_session_retains_recommendation_details_when_card_image_fails(
+    tmp_path: Path,
+) -> None:
+    session, service = _new_controlled_image_session(tmp_path=tmp_path)
     _process_until_recommendations(
         session=session,
         lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
@@ -2124,10 +2313,19 @@ def test_live_session_keeps_metadata_protocol_failure_local_until_explicit_retry
         lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
     )
 
-    failed = session.snapshot.card_image
     selected_grp_id = session.snapshot.recommendations.selected_grp_id
+    request = session.selected_card_image_request()
     assert selected_grp_id is not None
-    assert failed.grp_id == selected_grp_id
+    assert request is not None
+    assert request.image_uri is None
+    assert session.snapshot.card_image.phase == DataLoadPhase.LOADING
+    assert metadata_requests == 0
+
+    with pytest.raises(CardImageError, match="Card metadata lookup failed"):
+        session.fetch_card_image(request=request)
+    session.fail_card_image_request(request=request, error_message="protocol error")
+
+    failed = session.snapshot.card_image
     assert failed.phase == DataLoadPhase.FAILED
     assert session.selected_card_image_request() is None
     assert metadata_requests == 1
@@ -2138,23 +2336,18 @@ def test_live_session_keeps_metadata_protocol_failure_local_until_explicit_retry
     assert metadata_requests == 1
 
     session.dispatch(command=ChooseRecommendation(grp_id=selected_grp_id))
+    retry_request = session.selected_card_image_request()
 
-    assert session.snapshot.card_image.phase == DataLoadPhase.FAILED
-    assert session.selected_card_image_request() is None
-    assert metadata_requests == 2
+    assert session.snapshot.card_image.phase == DataLoadPhase.LOADING
+    assert retry_request is not None
+    assert retry_request.image_uri is None
+    assert metadata_requests == 1
 
 
 def test_live_session_ignores_stale_selected_card_image_completion(
     tmp_path: Path,
 ) -> None:
-    service = _ControlledCardImageService(cache_dir=tmp_path)
-    database = _fixture_card_database(with_image_uris=True)
-    session = LiveSession(
-        log_path=tmp_path / "Player.log",
-        app_dir=tmp_path / "app",
-        card_database=database,
-        card_image_service=service,
-    )
+    session, service = _new_controlled_image_session(tmp_path=tmp_path)
     _process_until_recommendations(
         session=session,
         lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
@@ -2169,21 +2362,19 @@ def test_live_session_ignores_stale_selected_card_image_completion(
 
     session.dispatch(command=ChooseRecommendation(grp_id=second_grp_id))
     second_request = session.selected_card_image_request()
-    assert second_request is not None
-    assert session.snapshot.card_image.grp_id == second_request.grp_id
-    assert session.snapshot.card_image.image_path is None
-    assert session.snapshot.card_image.phase == DataLoadPhase.LOADING
     service.release(image_uri=first_request.image_uri).set()
-    stale_path = session.fetch_card_image(request=first_request)
+    stale_result = session.fetch_card_image(request=first_request)
     service.release(image_uri=second_request.image_uri).set()
-    current_path = session.fetch_card_image(request=second_request)
+    current_result = session.fetch_card_image(request=second_request)
     session.complete_card_image_request(
         request=second_request,
-        image_path=current_path,
+        image_path=current_result.image_path,
+        image_uri=current_result.image_uri,
     )
     session.complete_card_image_request(
         request=first_request,
-        image_path=stale_path,
+        image_path=stale_result.image_path,
+        image_uri=stale_result.image_uri,
     )
 
     assert session.snapshot.recommendations.selected_grp_id == second_request.grp_id
@@ -2268,13 +2459,7 @@ def test_live_session_ratings_rescore_preserves_current_build_image_request(
 def test_live_session_stop_retires_in_flight_card_image_request(
     tmp_path: Path,
 ) -> None:
-    service = _ControlledCardImageService(cache_dir=tmp_path)
-    session = LiveSession(
-        log_path=tmp_path / "Player.log",
-        app_dir=tmp_path / "app",
-        card_database=_fixture_card_database(with_image_uris=True),
-        card_image_service=service,
-    )
+    session, _ = _new_controlled_image_session(tmp_path=tmp_path)
     _process_until_recommendations(
         session=session,
         lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
@@ -2329,9 +2514,11 @@ def test_live_session_switch_to_account_without_pending_pack_retires_card_image(
 
     if image_phase == DataLoadPhase.READY:
         service.release(image_uri=request.image_uri).set()
+        image_result = session.fetch_card_image(request=request)
         session.complete_card_image_request(
             request=request,
-            image_path=session.fetch_card_image(request=request),
+            image_path=image_result.image_path,
+            image_uri=image_result.image_uri,
         )
 
     assert session.snapshot.card_image.phase == image_phase
@@ -2387,14 +2574,18 @@ def test_live_session_resolves_name_indexed_selected_card_image_uri(
     assert request is not None
     assert request.image_uri == f"https://images.example/{request.grp_id}.jpg"
     service.release(image_uri=request.image_uri).set()
-    image_path = session.fetch_card_image(request=request)
-    session.complete_card_image_request(request=request, image_path=image_path)
+    image_result = session.fetch_card_image(request=request)
+    session.complete_card_image_request(
+        request=request,
+        image_path=image_result.image_path,
+        image_uri=image_result.image_uri,
+    )
     selected = next(
         recommendation
         for recommendation in session.snapshot.recommendations.cards
         if recommendation.card.grp_id == request.grp_id
     )
-    assert selected.card.image_path == str(image_path)
+    assert selected.card.image_path == str(image_result.image_path)
 
 
 def test_live_session_account_recovery_requests_selected_card_image(
@@ -2439,7 +2630,7 @@ def test_live_session_account_recovery_requests_selected_card_image(
     assert request.grp_id == recovered.recommendations.selected_grp_id
 
 
-def test_live_session_defers_metadata_lookup_until_batch_final_recommendation(
+def test_live_session_queues_metadata_missing_focus_without_blocking_resolution(
     tmp_path: Path,
 ) -> None:
     database = _fixture_card_database()
@@ -2505,10 +2696,8 @@ def test_live_session_defers_metadata_lookup_until_batch_final_recommendation(
     assert request is not None
     assert request.grp_id == selected_grp_id
     assert selected_grp_id is not None
-    assert metadata_requests == [
-        "https://api.scryfall.com/cards/named?exact="
-        f"{database.lookup(grp_id=selected_grp_id).name.replace(' ', '%20')}"
-    ]
+    assert request.image_uri is None
+    assert metadata_requests == []
 
 
 def test_live_session_build_focus_resolves_nighthowl_without_row_metadata_io(
@@ -2567,24 +2756,23 @@ def test_live_session_build_focus_resolves_nighthowl_without_row_metadata_io(
 
     assert session.snapshot.card_image.phase == DataLoadPhase.LOADING
     assert request is not None
-    assert request.image_uri == "https://cards.example/nighthowl.jpg"
-    assert metadata_requests == [
-        "https://api.scryfall.com/cards/named?exact=Nighthowl%20Pursuer"
-    ]
+    assert request.image_uri is None
+    assert metadata_requests == []
     focused_card_image = session.snapshot.card_image
     empty_poll = session.process_lines(lines=())
 
     assert empty_poll.card_image == focused_card_image
     assert session.selected_card_image_request() == request
-    assert metadata_requests == [
-        "https://api.scryfall.com/cards/named?exact=Nighthowl%20Pursuer"
-    ]
-    image_path = session.fetch_card_image(request=request)
-    session.complete_card_image_request(request=request, image_path=image_path)
+    assert metadata_requests == []
+    image_result = session.fetch_card_image(request=request)
+    session.complete_card_image_request(
+        request=request,
+        image_path=image_result.image_path,
+        image_uri=image_result.image_uri,
+    )
 
-    assert session.snapshot.card_image.phase == DataLoadPhase.READY
-    assert session.snapshot.card_image.image_path == str(image_path)
-    assert image_path.read_bytes() == b"image bytes"
+    assert session.snapshot.card_image.image_path == str(image_result.image_path)
+    assert image_result.image_path.read_bytes() == b"image bytes"
 
 
 def test_live_session_retries_focused_metadata_failure(tmp_path: Path) -> None:
@@ -2617,19 +2805,33 @@ def test_live_session_retries_focused_metadata_failure(tmp_path: Path) -> None:
             monotonic_clock=lambda: 10.0,
             sleep=lambda seconds: None,
             metadata_opener=metadata_opener,
+            opener=lambda *_args, **_kwargs: _CardImageResponse(
+                payload=b"image bytes"
+            ),
         ),
     )
 
     session._start_focused_card_image_load(grp_id=card.grp_id)
+    request = session.selected_card_image_request()
+    assert request is not None
+    assert request.image_uri is None
+    assert session.snapshot.card_image.phase == DataLoadPhase.LOADING
+
+    with pytest.raises(CardImageError, match="Card metadata lookup failed"):
+        session.fetch_card_image(request=request)
+    session.fail_card_image_request(request=request, error_message="offline")
 
     assert session.snapshot.card_image.phase == DataLoadPhase.FAILED
     assert session.selected_card_image_request() is None
 
     session._start_focused_card_image_load(grp_id=card.grp_id)
-
+    retry_request = session.selected_card_image_request()
+    assert retry_request is not None
+    assert retry_request.image_uri is None
+    assert metadata_attempts == 1
+    result = session.fetch_card_image(request=retry_request)
+    assert result.image_uri == "https://cards.example/nighthowl.jpg"
     assert metadata_attempts == 2
-    assert session.snapshot.card_image.phase == DataLoadPhase.LOADING
-    assert session.selected_card_image_request() is not None
 
 
 def _card() -> CardView:
