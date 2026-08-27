@@ -21,6 +21,7 @@ from draftomen.qt_adapter import (
     SessionAdapter,
 )
 from draftomen.session import (
+    CardImageFetchResult,
     ChangeRanking,
     ChangeSplashPreference,
     ChooseAccount,
@@ -156,26 +157,37 @@ class _ImageFakeSession(_FakeSession):
             image_uri="https://images.example/fixture.jpg",
         )
         self.fetch_thread_ids: list[int] = []
+        self.session_thread_ids: list[int] = []
         self.result_thread_ids: list[int] = []
         self.completions: list[Path] = []
         self._request_pending = True
         self.stopped = False
 
     def selected_card_image_request(self) -> CardImageRequest | None:
+        self.session_thread_ids.append(threading.get_ident())
         return self.request if self._request_pending and not self.stopped else None
 
-    def fetch_card_image(self, *, request: CardImageRequest) -> Path:
+    def fetch_card_image(
+        self,
+        *,
+        request: CardImageRequest,
+    ) -> CardImageFetchResult:
         assert request == self.request
         self.fetch_thread_ids.append(threading.get_ident())
-        return Path("/tmp/fixture card.jpg")
+        return CardImageFetchResult(
+            image_path=Path("/tmp/fixture card.jpg"),
+            image_uri=request.image_uri or "https://images.example/fixture.jpg",
+        )
 
     def complete_card_image_request(
         self,
         *,
         request: CardImageRequest,
         image_path: Path,
+        image_uri: str | None = None,
     ) -> None:
         assert request == self.request
+        del image_uri
         self.result_thread_ids.append(threading.get_ident())
         self.completions.append(image_path)
         self._request_pending = False
@@ -200,6 +212,129 @@ class _ImageFakeSession(_FakeSession):
 
     def stop(self) -> LiveSessionSnapshot:
         self.stopped = True
+        return self.snapshot
+
+
+class _BlockedFocusedImageFakeSession(_ImageFakeSession):
+    def __init__(self, *, publish: SnapshotPublisher) -> None:
+        super().__init__(publish=publish)
+        self.request = replace(self.request, image_uri=None)
+        self.fetch_started = threading.Event()
+        self.fetch_release = threading.Event()
+
+    def fetch_card_image(
+        self,
+        *,
+        request: CardImageRequest,
+    ) -> CardImageFetchResult:
+        self.fetch_thread_ids.append(threading.get_ident())
+        self.fetch_started.set()
+        self.fetch_release.wait(timeout=3.0)
+        return CardImageFetchResult(
+            image_path=Path("/tmp/focused metadata.jpg"),
+            image_uri="https://images.example/focused-metadata.jpg",
+        )
+
+    def dispatch(self, *, command: LiveSessionCommand) -> LiveSessionSnapshot:
+        self.dispatch_thread_ids.append(threading.get_ident())
+        self.commands.append(command)
+        self._publish(self.snapshot)
+        return self.snapshot
+
+    def stop(self) -> LiveSessionSnapshot:
+        self.fetch_release.set()
+        return super().stop()
+
+
+class _RecommendationImageFakeSession(_FakeSession):
+    def __init__(self, *, publish: SnapshotPublisher) -> None:
+        super().__init__(publish=publish)
+        cards = self.snapshot.recommendations.cards[:2]
+        self.requests = [
+            CardImageRequest(
+                generation=1,
+                grp_id=recommendation.card.grp_id,
+                image_uri=f"https://images.example/{recommendation.card.grp_id}.jpg",
+            )
+            for recommendation in cards
+        ]
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.fetch_thread_ids: list[int] = []
+        self.session_thread_ids: list[int] = []
+        self.result_thread_ids: list[int] = []
+        self.completed: list[CardImageRequest] = []
+        self.snapshot = replace(
+            self.snapshot,
+            recommendations=replace(
+                self.snapshot.recommendations,
+                cards=cards,
+                selected_grp_id=cards[0].card.grp_id,
+            ),
+        )
+
+    def selected_card_image_request(self) -> CardImageRequest | None:
+        self.session_thread_ids.append(threading.get_ident())
+        return None
+
+    def recommendation_image_request(self) -> CardImageRequest | None:
+        self.session_thread_ids.append(threading.get_ident())
+        return self.requests[0] if self.requests else None
+
+    def fetch_card_image(
+        self,
+        *,
+        request: CardImageRequest,
+    ) -> CardImageFetchResult:
+        self.fetch_thread_ids.append(threading.get_ident())
+        if not self.started.is_set():
+            self.started.set()
+            self.release.wait(timeout=3.0)
+        return CardImageFetchResult(
+            image_path=Path(f"/tmp/{request.grp_id}.jpg"),
+            image_uri=request.image_uri
+            or f"https://images.example/{request.grp_id}.jpg",
+        )
+
+    def complete_recommendation_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        image_path: Path,
+        image_uri: str | None = None,
+    ) -> None:
+        del image_uri
+        self.result_thread_ids.append(threading.get_ident())
+        self.completed.append(request)
+        self.requests.remove(request)
+        recommendations = replace(
+            self.snapshot.recommendations,
+            cards=tuple(
+                replace(
+                    recommendation,
+                    card=replace(
+                        recommendation.card,
+                        image_path=str(image_path),
+                    ),
+                )
+                if recommendation.card.grp_id == request.grp_id
+                else recommendation
+                for recommendation in self.snapshot.recommendations.cards
+            ),
+        )
+        self.snapshot = replace(self.snapshot, recommendations=recommendations)
+        self._publish(self.snapshot)
+
+    def fail_recommendation_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        error_message: str,
+    ) -> None:
+        raise AssertionError(f"Unexpected image failure: {request} {error_message}")
+
+    def stop(self) -> LiveSessionSnapshot:
+        self.release.set()
         return self.snapshot
 
 
@@ -570,7 +705,7 @@ def test_live_adapter_queues_explicit_commands_and_shutdown_is_safe(
     assert not adapter.thread.isRunning()
 
 
-def test_live_adapter_fetches_card_images_on_worker_and_publishes_on_gui_thread(
+def test_live_adapter_fetches_card_images_on_worker_and_completes_on_session_worker(
     qcore_application: QCoreApplication,
 ) -> None:
     gui_thread_id = threading.get_ident()
@@ -602,8 +737,11 @@ def test_live_adapter_fetches_card_images_on_worker_and_publishes_on_gui_thread(
         )
         assert session.fetch_thread_ids
         assert session.result_thread_ids
-        assert set(session.fetch_thread_ids) == set(session.result_thread_ids)
+        assert session.session_thread_ids
+        assert set(session.result_thread_ids) <= set(session.session_thread_ids)
+        assert set(session.fetch_thread_ids).isdisjoint(session.result_thread_ids)
         assert all(thread_id != gui_thread_id for thread_id in session.fetch_thread_ids)
+        assert all(thread_id != gui_thread_id for thread_id in session.result_thread_ids)
         assert observer.thread_ids
         assert set(observer.thread_ids) == {gui_thread_id}
         assert observer.states[-1]["card_image"]["phase"] == "ready"
@@ -613,6 +751,46 @@ def test_live_adapter_fetches_card_images_on_worker_and_publishes_on_gui_thread(
     assert sessions[0].stopped is True
     assert adapter.thread is not None
     assert not adapter.thread.isRunning()
+
+
+def test_live_adapter_keeps_commands_responsive_during_focused_metadata_lookup(
+    qcore_application: QCoreApplication,
+) -> None:
+    gui_thread_id = threading.get_ident()
+    sessions: list[_BlockedFocusedImageFakeSession] = []
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _BlockedFocusedImageFakeSession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=60_000,
+    )
+    adapter.start()
+    try:
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(sessions) and sessions[0].fetch_started.is_set(),
+            description="the focused metadata image fetch",
+        )
+        session = sessions[0]
+        adapter.chooseRecommendation(session.request.grp_id)
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: len(session.commands) == 1,
+            description="a queued command during focused metadata lookup",
+        )
+        assert isinstance(session.commands[0], ChooseRecommendation)
+        assert session.dispatch_thread_ids[0] != gui_thread_id
+        assert session.fetch_thread_ids[0] != gui_thread_id
+        assert session.dispatch_thread_ids[0] != session.fetch_thread_ids[0]
+    finally:
+        if sessions:
+            sessions[0].fetch_release.set()
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
 
 
 def test_live_adapter_surfaces_and_dismisses_worker_initialization_errors(
@@ -697,6 +875,58 @@ def test_gui_preferences_adapter_persists_display_choices_independently(
     assert reloaded.secondaryStats is False
     assert reloaded.cardPreview is False
     assert reloaded.detailedBuildContext is False
+
+
+def test_live_adapter_keeps_selection_responsive_during_thumbnail_fetches(
+    qcore_application: QCoreApplication,
+) -> None:
+    gui_thread_id = threading.get_ident()
+    sessions: list[_RecommendationImageFakeSession] = []
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _RecommendationImageFakeSession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=60_000,
+    )
+    adapter.start()
+    try:
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(sessions) and sessions[0].started.is_set(),
+            description="the first recommendation image fetch",
+        )
+        session = sessions[0]
+        selected_grp_id = session.requests[1].grp_id
+        adapter.chooseRecommendation(selected_grp_id)
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: len(session.commands) == 1,
+            description="a selection while an image fetch is blocked",
+        )
+        assert isinstance(session.commands[0], ChooseRecommendation)
+
+        session.release.set()
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: len(session.completed) == 2,
+            description="all queued recommendation image fetches",
+        )
+        assert session.fetch_thread_ids
+        assert session.result_thread_ids
+        assert len(set(session.fetch_thread_ids)) == 1
+        assert len(set(session.result_thread_ids)) == 1
+        assert all(thread_id != gui_thread_id for thread_id in session.fetch_thread_ids)
+        assert all(thread_id != gui_thread_id for thread_id in session.result_thread_ids)
+        assert set(session.fetch_thread_ids).isdisjoint(session.result_thread_ids)
+    finally:
+        if sessions:
+            sessions[0].release.set()
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
 
 
 def test_live_adapter_shutdown_returns_while_startup_work_is_busy(

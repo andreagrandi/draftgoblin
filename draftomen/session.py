@@ -252,14 +252,24 @@ class CardImageState:
     image_path: str | None = None
     phase: DataLoadPhase = DataLoadPhase.UNAVAILABLE
     message: str = "No selected card image is available."
+
+
 @dataclass(frozen=True, slots=True)
 class CardImageRequest:
-    """Identify one focused or recent-pick image fetch for the adapter worker.
-    The session validates completion before it publishes a result.
+    """Identify one focused, recent-pick, or recommendation image fetch.
+    The session validates completion before publishing its result.
     """
 
     generation: int
     grp_id: int
+    image_uri: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CardImageFetchResult:
+    """Carry an image path and the URI resolved by the fetch worker."""
+
+    image_path: Path
     image_uri: str
 
 
@@ -656,9 +666,17 @@ class LiveSession:
         self._screen_names_by_account_id: dict[str, str] = {}
         self._card_image_service = card_image_service
         self._card_image_paths_by_uri: dict[str, Path] = {}
+        self._card_image_uris_by_grp_id: dict[int, str] = {}
+        self._card_image_paths_by_grp_id: dict[int, Path] = {}
         self._card_image_generation = 0
-        self._deferred_focused_card_image_lookup_grp_id: int | None = None
-        self._defer_focused_card_image_metadata = False
+        self._recommendation_image_generation = 0
+        self._recommendation_image_pack: tuple[
+            PackOfferedEvent | None,
+            str | None,
+            str | None,
+        ] | None = None
+        self._recommendation_image_requests: list[CardImageRequest] = []
+        self._recommendation_image_failures: set[tuple[int, str | None]] = set()
         self._recent_pick_image_generation = 0
         self._recent_pick_image_requests: list[CardImageRequest] = []
         self._recent_pick_image_states: dict[int, CardImageState] = {}
@@ -736,11 +754,135 @@ class LiveSession:
             else None
         )
 
+    def recommendation_image_request(self) -> CardImageRequest | None:
+        """Return the next queued current-pack recommendation image fetch."""
+
+        return (
+            self._recommendation_image_requests[0]
+            if self._recommendation_image_requests
+            else None
+        )
+
+    def _resolved_image_uri_for_request(
+        self,
+        *,
+        request: CardImageRequest,
+    ) -> str | None:
+        """Return a request URI without performing metadata or network work."""
+
+        return request.image_uri or self._card_image_uris_by_grp_id.get(request.grp_id)
+
+    def _remember_card_image(
+        self,
+        *,
+        grp_id: int,
+        image_uri: str | None,
+        image_path: Path,
+    ) -> None:
+        """Retain a successful image by card and by resolved URI."""
+
+        self._card_image_paths_by_grp_id[grp_id] = image_path
+        if image_uri is not None:
+            self._card_image_uris_by_grp_id[grp_id] = image_uri
+            self._card_image_paths_by_uri[image_uri] = image_path
+
+
+    def recommendation_image_requests(self) -> tuple[CardImageRequest, ...]:
+        """Return a stable view of all queued recommendation image fetches."""
+
+        return tuple(self._recommendation_image_requests)
+
+    def _retire_recommendation_requests_for_image(
+        self,
+        *,
+        grp_id: int,
+        image_uri: str | None,
+    ) -> None:
+        """Drop recommendation work satisfied by a focused image fetch."""
+
+        self._recommendation_image_requests = [
+            request
+            for request in self._recommendation_image_requests
+            if request.grp_id != grp_id
+            and (image_uri is None or request.image_uri != image_uri)
+        ]
+
+    def complete_recommendation_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        image_path: Path,
+        image_uri: str | None = None,
+    ) -> None:
+        """Publish one recommendation image when its pack generation is current."""
+
+        with self._state_lock:
+            if (
+                request.generation != self._recommendation_image_generation
+                or request not in self._recommendation_image_requests
+            ):
+                return
+            self._recommendation_image_requests.remove(request)
+            resolved_image_uri = image_uri or self._resolved_image_uri_for_request(
+                request=request
+            )
+            self._remember_card_image(
+                grp_id=request.grp_id,
+                image_uri=resolved_image_uri,
+                image_path=image_path,
+            )
+            recommendations = replace(
+                self.snapshot.recommendations,
+                cards=tuple(
+                    replace(
+                        recommendation,
+                        card=replace(
+                            recommendation.card,
+                            image_path=str(image_path),
+                        ),
+                    )
+                    if recommendation.card.grp_id == request.grp_id
+                    else recommendation
+                    for recommendation in self.snapshot.recommendations.cards
+                ),
+            )
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    recommendations=recommendations,
+                )
+            )
+
+    def fail_recommendation_image_request(
+        self,
+        *,
+        request: CardImageRequest,
+        error_message: str,
+    ) -> None:
+        """Retire one failed recommendation image without stopping the queue."""
+
+        del error_message
+        with self._state_lock:
+            if (
+                request.generation != self._recommendation_image_generation
+                or request not in self._recommendation_image_requests
+            ):
+                return
+            self._recommendation_image_failures.add(
+                (request.grp_id, request.image_uri)
+            )
+            self._recommendation_image_requests = [
+                queued
+                for queued in self._recommendation_image_requests
+                if queued != request
+            ]
+
     def complete_recent_pick_image_request(
         self,
         *,
         request: CardImageRequest,
         image_path: Path,
+        image_uri: str | None = None,
     ) -> None:
         """Publish a successful gallery fetch when its pool generation is current."""
 
@@ -752,7 +894,14 @@ class LiveSession:
             ):
                 return
             self._recent_pick_image_requests.remove(request)
-            self._card_image_paths_by_uri[request.image_uri] = image_path
+            resolved_image_uri = image_uri or self._resolved_image_uri_for_request(
+                request=request
+            )
+            self._remember_card_image(
+                grp_id=request.grp_id,
+                image_uri=resolved_image_uri,
+                image_path=image_path,
+            )
             self._recent_pick_image_states[request.grp_id] = CardImageState(
                 grp_id=request.grp_id,
                 image_path=str(image_path),
@@ -785,21 +934,36 @@ class LiveSession:
             self._publish_recent_pick_projection()
 
 
-    def fetch_card_image(self, *, request: CardImageRequest) -> Path:
-        """Fetch one adapter-scheduled image through the configured service.
-        The caller owns execution; this method only performs the synchronous fetch.
-        """
+    def fetch_card_image(self, *, request: CardImageRequest) -> CardImageFetchResult:
+        """Resolve and fetch one image in the caller-owned image worker."""
 
         card_image_service = self._card_image_service
         if card_image_service is None:
             raise ValueError("Card images are not configured.")
-        return card_image_service.fetch(image_uri=request.image_uri)
+
+        image_uri = self._resolved_image_uri_for_request(request=request)
+        if image_uri is None:
+            database = self._card_database
+            if database is None:
+                raise CardImageError("Card metadata is not configured.")
+            card = database.lookup(grp_id=request.grp_id)
+            image_uri = card_image_service.resolve_focused_image_uri(
+                card=card,
+                card_database=database,
+            )
+            if image_uri is None:
+                raise CardImageError(f"No card image is available for {card.name}.")
+        return CardImageFetchResult(
+            image_path=card_image_service.fetch(image_uri=image_uri),
+            image_uri=image_uri,
+        )
 
     def complete_card_image_request(
         self,
         *,
         request: CardImageRequest,
         image_path: Path,
+        image_uri: str | None = None,
     ) -> None:
         """Publish a successful adapter-owned image fetch when it is still current."""
 
@@ -807,7 +971,18 @@ class LiveSession:
             if request != self._card_image_request:
                 return
             self._card_image_request = None
-            self._card_image_paths_by_uri[request.image_uri] = image_path
+            resolved_image_uri = image_uri or self._resolved_image_uri_for_request(
+                request=request
+            )
+            self._retire_recommendation_requests_for_image(
+                grp_id=request.grp_id,
+                image_uri=resolved_image_uri,
+            )
+            self._remember_card_image(
+                grp_id=request.grp_id,
+                image_uri=resolved_image_uri,
+                image_path=image_path,
+            )
             self._publish_selected_card_image(
                 grp_id=request.grp_id,
                 image_path=image_path,
@@ -820,11 +995,14 @@ class LiveSession:
         error_message: str,
     ) -> None:
         """Publish an adapter-owned image failure when it is still current."""
-
         with self._state_lock:
             if request != self._card_image_request:
                 return
             self._card_image_request = None
+            self._retire_recommendation_requests_for_image(
+                grp_id=request.grp_id,
+                image_uri=self._resolved_image_uri_for_request(request=request),
+            )
             self._publish(
                 snapshot=replace(
                     self.snapshot,
@@ -921,44 +1099,26 @@ class LiveSession:
         Parser and account context remain incremental across repeated batches.
         """
 
-        self._deferred_focused_card_image_lookup_grp_id = None
-        self._defer_focused_card_image_metadata = True
-        try:
-            for line in lines:
-                events = tuple(self.parser.parse_lines(lines=(line,)))
-                self._discard_previous_login_account_context()
-                for parsed_event in events:
-                    if (
-                        isinstance(parsed_event, QuickDraftDetectedEvent)
-                        and not include_pre_draft_detection
-                    ):
-                        continue
+        for line in lines:
+            events = tuple(self.parser.parse_lines(lines=(line,)))
+            self._discard_previous_login_account_context()
+            for parsed_event in events:
+                if (
+                    isinstance(parsed_event, QuickDraftDetectedEvent)
+                    and not include_pre_draft_detection
+                ):
+                    continue
 
-                    event = self._event_with_log_account(event=parsed_event)
-                    state = self._consume_store_event(event=event)
-                    if state is not None:
-                        self._remember_state(state=state)
-                        self._log_account_id = state.account_id
-                        if _event_is_missing_account(event=event):
-                            event = replace(event, account_id=state.account_id)
-                    self._consume_event(event=event, state=state)
-                    self._publish_event(event=event)
-                self._persist_pending_login_name_for_observed_course()
-        finally:
-            self._defer_focused_card_image_metadata = False
-            deferred_grp_id = self._deferred_focused_card_image_lookup_grp_id
-            self._deferred_focused_card_image_lookup_grp_id = None
-
-        selected_grp_id = self.snapshot.recommendations.selected_grp_id
-        if (
-            deferred_grp_id is not None
-            and deferred_grp_id == selected_grp_id
-            and not self._card_image_focuses_current_build(
-                card_image=self.snapshot.card_image,
-                build=self.snapshot.build,
-            )
-        ):
-            self._start_focused_card_image_load(grp_id=deferred_grp_id)
+                event = self._event_with_log_account(event=parsed_event)
+                state = self._consume_store_event(event=event)
+                if state is not None:
+                    self._remember_state(state=state)
+                    self._log_account_id = state.account_id
+                    if _event_is_missing_account(event=event):
+                        event = replace(event, account_id=state.account_id)
+                self._consume_event(event=event, state=state)
+                self._publish_event(event=event)
+            self._persist_pending_login_name_for_observed_course()
         return self.snapshot
 
     def dispatch(self, *, command: LiveSessionCommand) -> LiveSessionSnapshot:
@@ -1397,6 +1557,7 @@ class LiveSession:
         with self._state_lock:
             self._card_image_generation += 1
             self._card_image_request = None
+            self._retire_recommendation_images()
             self._retire_recent_pick_images()
             card_image = self.snapshot.card_image
             self._publish(
@@ -1869,6 +2030,10 @@ class LiveSession:
             or previous_snapshot.card_image.grp_id == recommendations.selected_grp_id
             else self._retire_card_image()
         )
+        self._prepare_recommendation_image_requests(
+            pack=event,
+            recommendations=recommendations,
+        )
         self._publish(
             snapshot=replace(
                 previous_snapshot,
@@ -1884,7 +2049,6 @@ class LiveSession:
         if not build_image_focus:
             self._start_focused_card_image_load(
                 grp_id=recommendations.selected_grp_id,
-                allow_metadata_lookup=not self._defer_focused_card_image_metadata,
             )
         return True
 
@@ -1940,30 +2104,129 @@ class LiveSession:
             ),
         )
 
-    def _card_view(self, *, card: CardInfo) -> CardView:
-        """Project a card with any image path already resolved by this session.
-        Cache lookups do not perform filesystem or network work.
-        """
+    def _card_image_uri(self, *, card: CardInfo) -> str | None:
+        """Resolve a card image URI without doing metadata network work."""
 
+        remembered_uri = self._card_image_uris_by_grp_id.get(card.grp_id)
+        if remembered_uri is not None:
+            return remembered_uri
         card_image_service = self._card_image_service
         database = self._card_database
-        image_uri = (
-            None
-            if card_image_service is None or database is None
-            else card_image_service.resolve_image_uri(
-                card=card,
-                card_database=database,
-            )
+        if card_image_service is None or database is None:
+            return None
+        return card_image_service.resolve_image_uri(
+            card=card,
+            card_database=database,
         )
+
+    def _card_view(self, *, card: CardInfo) -> CardView:
+        """Project a card with any image path already resolved by this session.
+        Cache lookups consult local memory and the filesystem but never network.
+        """
+
+        image_uri = self._card_image_uri(card=card)
         image_path = (
-            None
+            self._card_image_paths_by_grp_id.get(card.grp_id)
             if image_uri is None
-            else self._card_image_paths_by_uri.get(image_uri)
+            else self._cached_card_image_path(image_uri=image_uri)
         )
         return _card_view(
             card=card,
             image_path=None if image_path is None else str(image_path),
         )
+
+    def _recommendation_image_pack_key(
+        self,
+        *,
+        pack: PackOfferedEvent | None,
+        snapshot: LiveSessionSnapshot | None = None,
+    ) -> tuple[PackOfferedEvent | None, str | None, str | None]:
+        current_snapshot = self.snapshot if snapshot is None else snapshot
+        active_account = current_snapshot.active_account
+        draft = current_snapshot.draft
+        return (
+            pack,
+            None if active_account is None else active_account.account_id,
+            None if draft is None else draft.draft_id,
+        )
+
+    def _retire_recommendation_images(self) -> None:
+        """Invalidate all current-pack recommendation image work."""
+
+        self._recommendation_image_generation += 1
+        self._recommendation_image_pack = None
+        self._recommendation_image_requests.clear()
+        self._recommendation_image_failures.clear()
+
+    def _cached_card_image_path(self, *, image_uri: str) -> Path | None:
+        """Return a known or on-disk cached image without network access."""
+
+        cached_path = self._card_image_paths_by_uri.get(image_uri)
+        if cached_path is not None:
+            return cached_path
+
+        card_image_service = self._card_image_service
+        if card_image_service is None:
+            return None
+        cached_path_method = getattr(card_image_service, "cached_path", None)
+        if not callable(cached_path_method):
+            return None
+        cached_path = cached_path_method(image_uri=image_uri)
+        if not isinstance(cached_path, Path):
+            cached_path = Path(cached_path)
+        if not cached_path.is_file():
+            return None
+        self._card_image_paths_by_uri[image_uri] = cached_path
+        return cached_path
+
+    def _prepare_recommendation_image_requests(
+        self,
+        *,
+        pack: PackOfferedEvent,
+        recommendations: RecommendationState,
+    ) -> None:
+        """Queue uncached recommendation thumbnails for one current pack."""
+
+        pack_key = self._recommendation_image_pack_key(pack=pack)
+        if pack_key != self._recommendation_image_pack:
+            self._recommendation_image_generation += 1
+            self._recommendation_image_pack = pack_key
+            self._recommendation_image_requests.clear()
+            self._recommendation_image_failures.clear()
+
+        database = self._card_database
+        if self._card_image_service is None or database is None:
+            return
+
+        queued = {
+            (request.grp_id, request.image_uri)
+            for request in self._recommendation_image_requests
+        }
+        for recommendation in recommendations.cards:
+            if recommendation.card.image_path is not None:
+                continue
+            card = database.lookup(grp_id=recommendation.card.grp_id)
+            image_uri = self._card_image_uri(card=card)
+            if image_uri is None and card.unknown:
+                continue
+            if image_uri is not None and self._cached_card_image_path(
+                image_uri=image_uri
+            ) is not None:
+                continue
+            request_key = (recommendation.card.grp_id, image_uri)
+            if (
+                request_key in self._recommendation_image_failures
+                or request_key in queued
+            ):
+                continue
+            self._recommendation_image_requests.append(
+                CardImageRequest(
+                    generation=self._recommendation_image_generation,
+                    grp_id=recommendation.card.grp_id,
+                    image_uri=image_uri,
+                )
+            )
+            queued.add(request_key)
 
     def _retire_recent_pick_images(self) -> None:
         """Invalidate all gallery work independently from focused-card work."""
@@ -1995,30 +2258,25 @@ class LiveSession:
             }
             self._recent_pick_pool_grp_ids = recent_grp_ids
 
-        card_image_service = self._card_image_service
         recent_picks: list[RecentPick] = []
         queued_grp_ids = {
             request.grp_id for request in self._recent_pick_image_requests
         }
         for grp_id in dict.fromkeys(recent_grp_ids):
             card = database.lookup(grp_id=grp_id)
-            card_view = self._card_view(card=card)
-            image_uri = (
+            image_uri = self._card_image_uri(card=card)
+            cached_path = (
                 None
-                if card_image_service is None
-                else card_image_service.resolve_image_uri(
-                    card=card,
-                    card_database=database,
-                )
+                if image_uri is None
+                else self._cached_card_image_path(image_uri=image_uri)
+            )
+            card_view = _card_view(
+                card=card,
+                image_path=None if cached_path is None else str(cached_path),
             )
             image = self._recent_pick_image_states.get(grp_id)
             if image is None:
-                cached_path = (
-                    None
-                    if image_uri is None
-                    else self._card_image_paths_by_uri.get(image_uri)
-                )
-                if cached_path is not None and cached_path.is_file():
+                if cached_path is not None:
                     image = CardImageState(
                         grp_id=grp_id,
                         image_path=str(cached_path),
@@ -2100,10 +2358,9 @@ class LiveSession:
         self,
         *,
         grp_id: int | None,
-        allow_metadata_lookup: bool = True,
     ) -> None:
         """Publish one focused-card image request for the adapter worker.
-        The worker performs its bounded fetch and returns an explicit result.
+        Metadata resolution and fetching happen only in that worker.
         """
 
         if self.snapshot.status.phase == ApplicationPhase.STOPPED:
@@ -2118,7 +2375,8 @@ class LiveSession:
 
         self._retire_card_image()
         card_image_service = self._card_image_service
-        if card_image_service is None or grp_id is None or self._card_database is None:
+        database = self._card_database
+        if card_image_service is None or grp_id is None or database is None:
             self._publish(
                 snapshot=replace(
                     self.snapshot,
@@ -2130,7 +2388,7 @@ class LiveSession:
             )
             return
 
-        card = self._card_database.lookup(grp_id=grp_id)
+        card = database.lookup(grp_id=grp_id)
         self._card_image_generation += 1
         generation = self._card_image_generation
         self._publish(
@@ -2143,61 +2401,26 @@ class LiveSession:
                 ),
             )
         )
-        image_uri = card_image_service.resolve_image_uri(
-            card=card,
-            card_database=self._card_database,
-        )
-        if image_uri is None and not allow_metadata_lookup:
-            self._deferred_focused_card_image_lookup_grp_id = grp_id
-        if image_uri is None and allow_metadata_lookup:
-            try:
-                image_uri = card_image_service.resolve_focused_image_uri(
-                    card=card,
-                    card_database=self._card_database,
-                )
-            except CardImageError as error:
-                if generation != self._card_image_generation:
-                    return
-                self._publish(
-                    snapshot=replace(
-                        self.snapshot,
-                        card_image=CardImageState(
-                            grp_id=grp_id,
-                            phase=DataLoadPhase.FAILED,
-                            message=f"Card image unavailable: {error}",
-                        ),
+        image_uri = self._card_image_uri(card=card)
+        if image_uri is not None:
+            cached_path = self._cached_card_image_path(image_uri=image_uri)
+            if cached_path is not None:
+                with self._state_lock:
+                    self._retire_recommendation_requests_for_image(
+                        grp_id=grp_id,
+                        image_uri=image_uri,
                     )
+                self._publish_selected_card_image(
+                    grp_id=grp_id,
+                    image_path=cached_path,
                 )
                 return
 
-        if generation != self._card_image_generation:
-            return
-        if image_uri is None:
-            self._publish(
-                snapshot=replace(
-                    self.snapshot,
-                    card_image=CardImageState(
-                        grp_id=grp_id,
-                        message=f"No card image is available for {card.name}.",
-                    ),
-                )
-            )
-            return
-
-        cached_path = self._card_image_paths_by_uri.get(image_uri)
-        if cached_path is not None and cached_path.is_file():
-            self._publish_selected_card_image(
-                grp_id=grp_id,
-                image_path=cached_path,
-            )
-            return
-
-        request = CardImageRequest(
+        self._card_image_request = CardImageRequest(
             generation=generation,
             grp_id=grp_id,
             image_uri=image_uri,
         )
-        self._card_image_request = request
 
     def _publish_selected_card_image(self, *, grp_id: int, image_path: Path) -> None:
         """Publish the resolved focused-card path as a plain snapshot value."""
@@ -3122,6 +3345,15 @@ class LiveSession:
                 current_pack_event=self._current_pack_event,
                 current_scored_pack=self._current_scored_pack,
             )
+            pack_key = self._recommendation_image_pack_key(
+                pack=self._current_pack_event,
+                snapshot=snapshot,
+            )
+            if (
+                self._recommendation_image_pack is not None
+                and pack_key != self._recommendation_image_pack
+            ):
+                self._retire_recommendation_images()
             if snapshot == self._snapshot:
                 return
 

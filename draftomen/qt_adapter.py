@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import fields, is_dataclass, replace
 from enum import Enum
 from os import PathLike
-from typing import Any, cast
+from typing import Any, Literal, TypeAlias, cast
 
 from PySide6.QtCore import (
     QByteArray,
@@ -32,6 +32,8 @@ from draftomen.preferences import (
 )
 from draftomen.ranking import RankingMode
 from draftomen.session import (
+    CardImageFetchResult,
+    CardImageRequest,
     ChangeRanking,
     ChangeSplashPreference,
     ChooseAccount,
@@ -49,6 +51,7 @@ from draftomen.session import (
 )
 
 SessionFactory = Callable[[SnapshotPublisher], LiveSession]
+_ImageRequestKind: TypeAlias = Literal["selected", "recommendation", "recent"]
 _OMITTED_SNAPSHOT_FIELDS = frozenset(("current_pack_event", "current_scored_pack"))
 
 
@@ -366,7 +369,28 @@ class SessionAdapter(QObject):
         self.stateChanged.emit()
 
 
+class _CardImageFetchWorker(QObject):
+    """Execute one session-owned card image fetch outside the session thread."""
+
+    resultReady = Signal(object, object, str)
+
+    def __init__(self, *, session: LiveSession) -> None:
+        super().__init__()
+        self._session = session
+
+    @Slot(object)
+    def fetch(self, request: CardImageRequest) -> None:
+        try:
+            result = self._session.fetch_card_image(request=request)
+        except Exception as error:  # pragma: no cover - network boundary.
+            self.resultReady.emit(request, None, str(error))
+        else:
+            self.resultReady.emit(request, result, "")
+
+
 class _LiveSessionWorker(QObject):
+    _imageFetchRequested = Signal(object)
+    _imageScheduleRequested = Signal()
     snapshotReady = Signal(object)
     failed = Signal(str)
     finished = Signal()
@@ -388,6 +412,10 @@ class _LiveSessionWorker(QObject):
         self._stopped = False
         self._startup_loading = False
         self._startup_snapshot: LiveSessionSnapshot | None = None
+        self._image_thread: QThread | None = None
+        self._image_worker: _CardImageFetchWorker | None = None
+        self._image_request_in_flight: CardImageRequest | None = None
+        self._image_request_kind: _ImageRequestKind | None = None
 
     def _publish_snapshot(self, snapshot: LiveSessionSnapshot) -> None:
         if self._stop_requested:
@@ -404,6 +432,34 @@ class _LiveSessionWorker(QObject):
         if snapshot is not None and not self._stop_requested:
             self.snapshotReady.emit(snapshot)
 
+    def _start_image_worker(self) -> None:
+        """Start the dedicated worker used for blocking image retrieval."""
+
+        session = self._session
+        if session is None or self._image_thread is not None:
+            return
+        thread = QThread(parent=self)
+        image_worker = _CardImageFetchWorker(session=session)
+        image_worker.moveToThread(thread)
+        self._imageFetchRequested.connect(
+            image_worker.fetch,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        # Queue completion so all LiveSession mutation stays on this worker.
+        image_worker.resultReady.connect(
+            self._image_fetch_finished,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._imageScheduleRequested.connect(
+            self._request_one_card_image,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        thread.finished.connect(image_worker.deleteLater)
+        self._image_thread = thread
+        self._image_worker = image_worker
+        thread.start()
+
+
     def request_stop(self) -> None:
         """Request cooperative stop without queuing behind busy session work."""
         self._stop_requested = True
@@ -414,6 +470,7 @@ class _LiveSessionWorker(QObject):
         self._startup_snapshot = None
         try:
             self._session = self._session_factory(self._publish_snapshot)
+            self._start_image_worker()
             self._publish_snapshot(self._session.snapshot)
             if self._stop_requested:
                 self.stop()
@@ -480,49 +537,97 @@ class _LiveSessionWorker(QObject):
         return True
 
     def _request_one_card_image(self) -> None:
-        """Fetch at most one pending image, prioritizing focused-card work."""
+        """Schedule one image, prioritizing focus before pack thumbnails."""
+
+        session = self._session
+        if (
+            session is None
+            or self._stop_requested
+            or self._image_request_in_flight is not None
+            or self._image_thread is None
+        ):
+            return
+
+        request: CardImageRequest | None = None
+        request_kind: _ImageRequestKind | None = None
+        for kind, method_name in (
+            ("selected", "selected_card_image_request"),
+            ("recommendation", "recommendation_image_request"),
+            ("recent", "recent_pick_image_request"),
+        ):
+            get_request = getattr(session, method_name, None)
+            if not callable(get_request):
+                continue
+            request = get_request()
+            if request is not None:
+                request_kind = cast(_ImageRequestKind, kind)
+                break
+        if request is None or request_kind is None or self._stop_requested:
+            return
+
+        self._image_request_in_flight = request
+        self._image_request_kind = request_kind
+        self._imageFetchRequested.emit(request)
+
+    @Slot(object, object, str)
+    def _image_fetch_finished(
+        self,
+        request: CardImageRequest,
+        result: object,
+        error_message: str,
+    ) -> None:
+        """Apply the result in the session thread and queue the next request."""
+        if request != self._image_request_in_flight:
+            return
+        request_kind = self._image_request_kind
+        self._image_request_in_flight = None
+        self._image_request_kind = None
         session = self._session
         if session is None or self._stop_requested:
             return
 
-        request = None
-        recent = False
-        if hasattr(session, "selected_card_image_request"):
-            request = session.selected_card_image_request()
-        if request is None and hasattr(session, "recent_pick_image_request"):
-            request = session.recent_pick_image_request()
-            recent = request is not None
-        if request is None or self._stop_requested:
-            return
-
         try:
-            image_path = session.fetch_card_image(request=request)
-        except Exception as error:  # pragma: no cover - defensive network boundary.
-            if self._stop_requested:
-                return
-            if recent:
-                session.fail_recent_pick_image_request(
-                    request=request,
-                    error_message=str(error),
-                )
+            if error_message:
+                if request_kind == "recommendation":
+                    session.fail_recommendation_image_request(
+                        request=request,
+                        error_message=error_message,
+                    )
+                elif request_kind == "recent":
+                    session.fail_recent_pick_image_request(
+                        request=request,
+                        error_message=error_message,
+                    )
+                else:
+                    session.fail_card_image_request(
+                        request=request,
+                        error_message=error_message,
+                    )
             else:
-                session.fail_card_image_request(
-                    request=request,
-                    error_message=str(error),
-                )
-        else:
-            if self._stop_requested:
-                return
-            if recent:
-                session.complete_recent_pick_image_request(
-                    request=request,
-                    image_path=image_path,
-                )
-            else:
-                session.complete_card_image_request(
-                    request=request,
-                    image_path=image_path,
-                )
+                if not isinstance(result, CardImageFetchResult):
+                    raise TypeError("Card image worker returned an invalid result.")
+                if request_kind == "recommendation":
+                    session.complete_recommendation_image_request(
+                        request=request,
+                        image_path=result.image_path,
+                        image_uri=result.image_uri,
+                    )
+                elif request_kind == "recent":
+                    session.complete_recent_pick_image_request(
+                        request=request,
+                        image_path=result.image_path,
+                        image_uri=result.image_uri,
+                    )
+                else:
+                    session.complete_card_image_request(
+                        request=request,
+                        image_path=result.image_path,
+                        image_uri=result.image_uri,
+                    )
+        except Exception as error:  # pragma: no cover - defensive UI boundary.
+            self.failed.emit(str(error))
+        finally:
+            self._imageScheduleRequested.emit()
 
     @Slot()
     def stop(self) -> None:
@@ -538,6 +643,12 @@ class _LiveSessionWorker(QObject):
                 self._session.stop()
             except Exception as error:  # pragma: no cover - defensive UI boundary.
                 self.failed.emit(str(error))
+        image_thread = self._image_thread
+        if image_thread is not None:
+            image_thread.quit()
+            image_thread.wait()
+            self._image_thread = None
+            self._image_worker = None
         self._stopped = True
         self.finished.emit()
 
