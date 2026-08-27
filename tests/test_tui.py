@@ -2129,6 +2129,7 @@ async def _assert_missing_ratings_download_rescores_pack(tmp_path: Path) -> None
                 if (
                     app.session.snapshot.ratings.phase == DataLoadPhase.READY
                     and app.session.snapshot.ratings.total_cards == 14
+                    and not progress_bar.display
                 ):
                     break
 

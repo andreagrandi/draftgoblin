@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Expand the wide build bench to show multiple rows while preserving the main deck and selected-card layouts.
+
 - Improve Settings toggles with high-contrast checked, unchecked, disabled,
   and focus states.
 
