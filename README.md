@@ -10,17 +10,17 @@ Draft Omen is read-only: it does not write to, inject into, or automate MTG Aren
 
 ## Screenshots
 
-### Live pick recommendations
+### Live Draft GUI — pick recommendations
 
-Cards are ranked in real time, with the raw 17Lands win rate and grade shown alongside Draft Omen's pool-aware score.
+The Live Draft view shows Pack 1, Pick 3 with 12 cards available and Glóin the Mighty selected. Its DO Score, 17Lands win rate, grade, and color fit appear alongside focused-card details and a pool summary.
 
-![Draft Omen ranking the cards in a Quick Draft pack](https://raw.githubusercontent.com/andreagrandi/draftomen/master/docs/assets/draft-pick-recommendations.png)
+![Draft Omen Live Draft GUI showing Pack 1, Pick 3 with 12 cards available, Glóin the Mighty selected, ranked card rows, DO Score, 17Lands win rate, grade, color fit, focused-card details, and pool summary](https://raw.githubusercontent.com/andreagrandi/draftomen/master/docs/assets/draft-pick-recommendations.png)
 
-### Suggested deck
+### Suggested deck GUI
 
-At the end of the draft, Draft Omen selects a color pair, spells, and mana base for a 40-card build.
+After the draft, the Suggested deck view shows an automatic UR pair and a 40-card build with 23 spells, 17 lands, a mana base and curve, grouped main-deck spells, and selected-card details.
 
-![Draft Omen suggested deck build](https://raw.githubusercontent.com/andreagrandi/draftomen/master/docs/assets/suggested-deck-build.png)
+![Draft Omen Suggested deck GUI with an automatic UR pair, 40-card build with 23 spells and 17 lands, mana base, mana curve, grouped main-deck spells, and Tidings of War selected](https://raw.githubusercontent.com/andreagrandi/draftomen/master/docs/assets/suggested-deck-build.png)
 
 ## How recommendations work
 

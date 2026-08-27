@@ -16,7 +16,7 @@ These designs are references, not an implementation contract. Preserve the produ
 3. Start with two visual variations of **DO-01 — Live draft, wide, ready**. Select and refine one direction before expanding it.
 4. Ask Stitch to generate the remaining named frames one group at a time, always reusing the selected component library and design tokens.
 5. Export both the wide and narrow variants. Do not approve a direction based on the wide desktop frame alone.
-6. Treat the existing TUI screenshots as information references only. Do not reproduce the terminal layout literally.
+6. Treat the supplied GUI screenshots as visual and information references only; do not copy their layouts literally.
 
 ## Exported Stitch references
 
@@ -29,13 +29,13 @@ The selected Stitch exports are checked in under `ui_mockups/stitch_draftomen_co
 
 These exports are visual references only. The issue acceptance criteria, shared session contract, and UI architecture skill remain authoritative for behavior. Do not copy the generated HTML into the QML application or infer unsupported application behavior from the mock data.
 
-The current Stitch drop has two screenshot-export limitations: the DO-01 `screen.png` contains an image-fetch failure placeholder, and the DO-07 `screen.png` is truncated to a header strip. Use their complete `code.html` files as the source references until replacement PNGs are exported.
+The current Stitch drop has two screenshot-export limitations: DO-01 `screen.png` contains an image-fetch failure placeholder, and DO-07 `screen.png` is truncated to a header strip. Treat these incomplete exports as reference material only, not current product imagery; use their complete `code.html` files instead.
 
 ## Master prompt for Stitch
 
 Design a polished, modern desktop companion app for **Draft Omen**, an unofficial, read-only Quick Draft assistant for MTG Arena. Draft Omen watches Arena's local log, ranks the cards currently offered, explains the evidence behind its recommendation, tracks the drafted pool, and suggests a 40-card deck when the draft is complete.
 
-Create a cohesive dark-theme desktop product using the supplied Draft Omen logo as the brand reference. The experience should feel clever, focused, trustworthy, and slightly mischievous, but not childish. Translate the information in the supplied terminal screenshots into a genuinely graphical hierarchy; do not imitate a terminal, MTG Arena, or another tracker product.
+Create a cohesive dark-theme desktop product using the supplied Draft Omen logo as the brand reference. The experience should feel clever, focused, trustworthy, and slightly mischievous, but not childish. Use the supplied GUI screenshots as visual and information references, not literal layout specifications; create a genuinely graphical hierarchy rather than imitating a terminal, MTG Arena, or another tracker product.
 
 The most important user question during a live draft is: **"Which card is recommended, and why?"** Make the top recommendation, its DO Score, raw 17Lands win rate, grade, color fit, and supporting card details easy to understand at a glance. Secondary statistics remain available without overwhelming the main decision.
 
