@@ -289,7 +289,6 @@ class PoolState:
 
     cards: tuple[PoolCard, ...] = ()
     recent_picks: tuple[RecentPick, ...] = ()
-    previewed_recent_pick_grp_id: int | None = None
     total_cards: int = 0
     inferred_pair: str | None = None
     commitment: float = 0.0
@@ -475,18 +474,6 @@ class ChooseAccount:
 
     account_id: str
 
-@dataclass(frozen=True, slots=True)
-class PreviewRecentPick:
-    """Request that one recent-pick gallery card open in the preview."""
-
-    grp_id: int
-
-
-@dataclass(frozen=True, slots=True)
-class DismissRecentPickPreview:
-    """Request that the recent-pick preview close."""
-
-
 
 @dataclass(frozen=True, slots=True)
 class ChooseRecommendation:
@@ -495,6 +482,7 @@ class ChooseRecommendation:
     """
 
     grp_id: int
+
 
 @dataclass(frozen=True, slots=True)
 class FocusBuildCard:
@@ -570,8 +558,6 @@ class RetryError:
 
 LiveSessionCommand: TypeAlias = (
     ChooseAccount
-    | PreviewRecentPick
-    | DismissRecentPickPreview
     | ChooseRecommendation
     | FocusBuildCard
     | ChangeRanking
@@ -677,7 +663,6 @@ class LiveSession:
         self._recent_pick_image_requests: list[CardImageRequest] = []
         self._recent_pick_image_states: dict[int, CardImageState] = {}
         self._recent_pick_pool_grp_ids: tuple[int, ...] | None = None
-        self._recent_pick_preview_cleared = False
         self._configure_ratings_loader_for_card_database()
         if card_database is not None:
             card_data = CardDataState(
@@ -997,15 +982,6 @@ class LiveSession:
             self._focus_build_card(grp_id=command.grp_id)
             return self.snapshot
 
-        if isinstance(command, PreviewRecentPick):
-            self._preview_recent_pick(grp_id=command.grp_id)
-            return self.snapshot
-
-        if isinstance(command, DismissRecentPickPreview):
-            self._dismiss_recent_pick_preview()
-            return self.snapshot
-
-
         if isinstance(command, ChangeSplashPreference):
             self._change_splash_preference(enabled=command.enabled)
             return self.snapshot
@@ -1031,37 +1007,6 @@ class LiveSession:
             return self.snapshot
 
         raise ValueError(f"Live session command is not implemented yet: {command!r}.")
-
-    def _preview_recent_pick(self, *, grp_id: int) -> None:
-        if not any(
-            pick.card.grp_id == grp_id
-            for pick in self.snapshot.pool.recent_picks
-        ):
-            raise ValueError(f"Card {grp_id} is not in the recent picks.")
-        if self.snapshot.pool.previewed_recent_pick_grp_id == grp_id:
-            return
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                pool=replace(
-                    self.snapshot.pool,
-                    previewed_recent_pick_grp_id=grp_id,
-                ),
-            )
-        )
-
-    def _dismiss_recent_pick_preview(self) -> None:
-        if self.snapshot.pool.previewed_recent_pick_grp_id is None:
-            return
-        self._publish(
-            snapshot=replace(
-                self.snapshot,
-                pool=replace(
-                    self.snapshot.pool,
-                    previewed_recent_pick_grp_id=None,
-                ),
-            )
-        )
 
     def _request_build(self, *, command: RequestBuild) -> None:
         with self._state_lock:
@@ -1468,10 +1413,6 @@ class LiveSession:
                         )
                         if card_image.phase == DataLoadPhase.LOADING
                         else card_image
-                    ),
-                    pool=replace(
-                        self.snapshot.pool,
-                        previewed_recent_pick_grp_id=None,
                     ),
                 )
             )
@@ -2031,7 +1972,6 @@ class LiveSession:
         self._recent_pick_image_requests.clear()
         self._recent_pick_image_states.clear()
         self._recent_pick_pool_grp_ids = None
-        self._recent_pick_preview_cleared = True
 
     def _prepare_recent_pick_images(
         self,
@@ -2583,22 +2523,12 @@ class LiveSession:
         recent_picks = self._prepare_recent_pick_images(
             pool_grp_ids=pool_grp_ids,
         )
-        recent_grp_ids = {pick.card.grp_id for pick in recent_picks}
-        previous_previewed_grp_id = self.snapshot.pool.previewed_recent_pick_grp_id
-        previewed_grp_id = (
-            None
-            if self._recent_pick_preview_cleared
-            or previous_previewed_grp_id not in recent_grp_ids
-            else previous_previewed_grp_id
-        )
-        self._recent_pick_preview_cleared = False
         color_distribution, mana_curve, average_mana_value = self._pool_aggregates(
             cards=cards
         )
         return PoolState(
             cards=cards,
             recent_picks=recent_picks,
-            previewed_recent_pick_grp_id=previewed_grp_id,
             total_cards=len(pool_grp_ids),
             target_cards=42,
             inferred_pair=(

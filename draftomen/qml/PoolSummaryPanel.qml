@@ -9,8 +9,6 @@ Rectangle {
 
     required property var pool
     required property bool narrow
-    signal previewRequested(int grpId)
-    signal previewDismissed()
 
     readonly property bool hasPool: root.pool && root.pool.total_cards > 0
     readonly property var colorDistribution: root.pool
@@ -315,8 +313,6 @@ Rectangle {
                     Layout.fillWidth: true
                     pool: root.pool
                     narrow: root.narrow
-                    onPreviewRequested: root.previewRequested(grpId)
-                    onPreviewDismissed: root.previewDismissed()
                 }
             }
 

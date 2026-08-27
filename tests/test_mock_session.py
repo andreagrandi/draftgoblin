@@ -10,9 +10,7 @@ from draftomen.session import (
     ChooseRecommendation,
     DataLoadPhase,
     DismissError,
-    DismissRecentPickPreview,
     FocusBuildCard,
-    PreviewRecentPick,
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
@@ -140,23 +138,6 @@ def test_mock_provider_dispatches_production_commands() -> None:
     progress = session.dispatch(command=RequestRatingsDownload(set_code="OTJ"))
     assert progress.progress is not None
     assert session.scenario == "progress"
-
-
-def test_mock_provider_previews_and_dismisses_recent_picks() -> None:
-    session = MockLiveSession()
-    grp_id = session.snapshot.pool.recent_picks[0].card.grp_id
-    original_card_image = session.snapshot.card_image
-
-    previewed = session.dispatch(command=PreviewRecentPick(grp_id=grp_id))
-    assert previewed.pool.previewed_recent_pick_grp_id == grp_id
-    assert previewed.card_image == original_card_image
-
-    dismissed = session.dispatch(command=DismissRecentPickPreview())
-    assert dismissed.pool.previewed_recent_pick_grp_id is None
-    assert dismissed.card_image == original_card_image
-
-    with pytest.raises(ValueError, match="is not in the recent picks"):
-        session.dispatch(command=PreviewRecentPick(grp_id=999999))
 
 
 def test_mock_provider_retries_and_dismisses_errors_by_identifier() -> None:

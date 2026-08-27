@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Replace recent-pick click-modal previews with delayed, bounded hover previews.
+
 - Restyle desktop buttons and dropdown selectors with dimensional Draft Omen
   controls, and move About and Privacy actions into the navigation rail.
 

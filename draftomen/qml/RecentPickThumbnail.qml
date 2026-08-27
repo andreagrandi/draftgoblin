@@ -1,42 +1,32 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 
-FocusScope {
+Item {
     id: root
 
     required property int pickIndex
     required property var recentPick
-    signal activated(int grpId)
+    signal hoverEntered()
+    signal hoverExited()
 
     readonly property var card: root.recentPick && root.recentPick.card
         ? root.recentPick.card : null
     readonly property var imageState: root.recentPick && root.recentPick.image
         ? root.recentPick.image : null
-    readonly property bool keyboardFocused: root.activeFocus
 
     implicitHeight: width * 1.4
-    activeFocusOnTab: true
     objectName: "recentPickThumbnail" + root.pickIndex
-    Accessible.role: Accessible.Button
+    Accessible.role: Accessible.Graphic
     Accessible.name: root.card ? root.card.name : "Recent pick"
     Accessible.description: root.card
-        ? root.card.name + ". Press Enter or Space to preview this card."
-        : "Press Enter or Space to preview this card."
-
-    Keys.onReturnPressed: {
-        if (root.card)
-            root.activated(root.card.grp_id)
-    }
-    Keys.onSpacePressed: {
-        if (root.card)
-            root.activated(root.card.grp_id)
-    }
+        ? root.card.name + ". Hover for a card preview."
+        : "Hover for a card preview."
 
     Rectangle {
         anchors.fill: parent
         color: Theme.surface
-        border.color: root.keyboardFocused ? Theme.focus : Theme.outline
-        border.width: root.keyboardFocused ? 2 : 1
+        border.color: Theme.outline
+        border.width: 1
         radius: Theme.radius
         clip: true
 
@@ -81,13 +71,13 @@ FocusScope {
         }
     }
 
-    MouseArea {
-        anchors.fill: parent
-        cursorShape: Qt.PointingHandCursor
-        onClicked: {
-            root.forceActiveFocus()
-            if (root.card)
-                root.activated(root.card.grp_id)
+    HoverHandler {
+        blocking: false
+        onHoveredChanged: {
+            if (hovered)
+                root.hoverEntered()
+            else
+                root.hoverExited()
         }
     }
 }
