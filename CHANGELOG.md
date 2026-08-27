@@ -4,6 +4,9 @@
 
 - Expand the wide build bench to show multiple rows while preserving the main deck and selected-card layouts.
 
+- Widen the Live Draft card details and enlarge its focused card preview for
+  more readable card imagery and metadata while resizing.
+
 - Improve Settings toggles with high-contrast checked, unchecked, disabled,
   and focus states.
 

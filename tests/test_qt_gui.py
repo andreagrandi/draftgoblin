@@ -1290,6 +1290,20 @@ engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
 root = engine.rootObjects()[0]
 application.processEvents()
 
+live_view = root.findChild(QObject, "liveDraftView")
+assert live_view is not None
+wide_card_details_width = int(
+    live_view.property("wideCardDetailsWidth")
+)
+assert wide_card_details_width == 550
+wide_recommendation_list_width = int(
+    live_view.property("wideRecommendationsMinimumListWidth")
+)
+assert wide_recommendation_list_width == 662
+assert int(live_view.property("wideRecommendationsMinimumWidth")) == (
+    wide_recommendation_list_width + wide_card_details_width + 12
+)
+
 ranking = root.findChild(QObject, "rankingSelector")
 assert ranking is not None
 assert_surface_round_trip(root, ranking)
@@ -1439,16 +1453,12 @@ wide_frame = find_visual_item(wide_preview, "cardPreviewImageFrame")
 wide_details = find_visual_item(wide_preview, "cardPreviewDetails")
 assert wide_frame is not None and wide_frame.isVisible()
 assert wide_details is not None and wide_details.isVisible()
-assert 440 <= wide_preview.width() <= 450
+assert wide_preview.width() == wide_card_details_width
 assert wide_row.width() > wide_preview.width()
-assert wide_frame.width() >= 195, (
-    wide_preview.width(),
-    wide_preview.height(),
-    wide_frame.width(),
-    wide_frame.height(),
-    wide_details.width(),
-    wide_details.height(),
-)
+assert wide_frame.width() == 250
+assert wide_frame.height() == 350
+assert wide_frame.height() / 280 == 1.25
+assert wide_details.width() >= 180
 assert wide_details.width() < wide_preview.width() / 2, (
     wide_preview.width(),
     wide_preview.height(),
@@ -1459,6 +1469,20 @@ assert wide_details.width() < wide_preview.width() / 2, (
 )
 assert_visual_item_inside(wide_preview, wide_frame)
 assert_visual_item_inside(wide_preview, wide_details)
+wide_frame_right = wide_frame.mapToItem(
+    wide_preview, QPointF(wide_frame.width(), 0)
+).x()
+wide_details_left = wide_details.mapToItem(
+    wide_preview, QPointF(0, 0)
+).x()
+assert wide_frame_right <= wide_details_left
+wide_row_right = wide_row.mapToItem(
+    root.contentItem(), QPointF(wide_row.width(), 0)
+).x()
+wide_preview_left = wide_preview.mapToItem(
+    root.contentItem(), QPointF(0, 0)
+).x()
+assert wide_row_right <= wide_preview_left
 confidence = root.findChild(QObject, "recommendationConfidenceSummary")
 assert confidence is not None
 state_without_confidence = dict(provider.state)
@@ -1564,12 +1588,15 @@ for metric_name, metric_text in wide_metrics.items():
     assert metric.property("text") == metric_text
     assert_visual_item_inside(wide_row, metric)
 assert name.property("text") == long_name
-assert wide_row.height() == 84
+assert wide_row.height() >= 84
 assert wide_row.width() <= wide_row.parentItem().width() + 1
 live_view = root.findChild(QObject, "liveDraftView")
 assert live_view is not None
 wide_content_threshold = int(
     live_view.property("wideRecommendationsMinimumWidth")
+)
+assert wide_content_threshold == (
+    wide_recommendation_list_width + wide_card_details_width + 12
 )
 window_threshold_width = root.width() + wide_content_threshold - live_view.width()
 root.resize(window_threshold_width, 900)
@@ -1598,6 +1625,79 @@ root.resize(1440, 900)
 application.processEvents()
 assert live_view.property("wideRecommendations") is True
 
+root.resize(1440, 738)
+application.processEvents()
+assert live_view.property("wideRecommendations") is False
+fallback_wide_preview = find_visual_item(
+    root.contentItem(), "wideLiveCardPreview"
+)
+fallback_list = find_visual_item(
+    root.contentItem(), "narrowRecommendationList"
+)
+fallback_tabs = find_visual_item(root.contentItem(), "liveDetailTabs")
+fallback_preview = find_visual_item(
+    root.contentItem(), "narrowLiveCardPreview"
+)
+fallback_banner = find_visual_item(
+    root.contentItem(), "liveStateBanner"
+)
+assert fallback_wide_preview is not None
+assert fallback_wide_preview.isVisible() is False
+assert fallback_list is not None and fallback_list.isVisible()
+assert fallback_tabs is not None and fallback_tabs.isVisible()
+assert fallback_preview is not None and fallback_preview.isVisible()
+fallback_stack = fallback_preview.parentItem()
+assert fallback_banner is not None and fallback_banner.isVisible()
+assert fallback_stack is not None and fallback_stack.isVisible()
+assert_visual_item_inside(live_view, fallback_banner)
+assert_visual_item_inside(live_view, fallback_stack)
+assert_visual_item_inside(live_view, fallback_list)
+assert_visual_item_inside(live_view, fallback_tabs)
+assert_visual_item_inside(live_view, fallback_preview)
+fallback_list_bottom = fallback_list.mapToItem(
+    live_view, QPointF(0, fallback_list.height())
+).y()
+fallback_banner_bottom = fallback_banner.mapToItem(
+    live_view, QPointF(0, fallback_banner.height())
+).y()
+fallback_list_top = fallback_list.mapToItem(
+    live_view, QPointF(0, 0)
+).y()
+fallback_tabs_top = fallback_tabs.mapToItem(
+    live_view, QPointF(0, 0)
+).y()
+fallback_tabs_bottom = fallback_tabs.mapToItem(
+    live_view, QPointF(0, fallback_tabs.height())
+).y()
+fallback_preview_top = fallback_preview.mapToItem(
+    live_view, QPointF(0, 0)
+).y()
+assert fallback_list_bottom <= fallback_tabs_top
+assert fallback_tabs_bottom <= fallback_preview_top
+assert fallback_banner_bottom <= fallback_list_top
+fallback_frame = find_visual_item(
+    fallback_preview, "cardPreviewImageFrame"
+)
+fallback_details = find_visual_item(
+    fallback_preview, "cardPreviewDetails"
+)
+assert fallback_frame is not None and fallback_frame.isVisible()
+assert fallback_details is not None and fallback_details.isVisible()
+assert_visual_item_inside(fallback_preview, fallback_frame)
+assert_visual_item_inside(fallback_preview, fallback_details)
+fallback_frame_right = fallback_frame.mapToItem(
+    fallback_preview, QPointF(fallback_frame.width(), 0)
+).x()
+fallback_details_left = fallback_details.mapToItem(
+    fallback_preview, QPointF(0, 0)
+).x()
+assert fallback_frame_right <= fallback_details_left
+root.resize(1440, 900)
+application.processEvents()
+assert live_view.property("wideRecommendations") is True
+assert find_visual_item(
+    root.contentItem(), "wideLiveCardPreview"
+).isVisible()
 
 root.resize(760, 900)
 application.processEvents()
@@ -1605,6 +1705,23 @@ narrow_row = find_visual_item(root.contentItem(), "narrowRecommendationRow1")
 narrow_second_row = find_visual_item(root.contentItem(), "narrowRecommendationRow2")
 assert narrow_row is not None and narrow_row.isVisible()
 assert narrow_second_row is not None and narrow_second_row.isVisible()
+
+narrow_preview = find_visual_item(root.contentItem(), "narrowLiveCardPreview")
+assert narrow_preview is not None and narrow_preview.isVisible()
+narrow_frame = find_visual_item(narrow_preview, "cardPreviewImageFrame")
+narrow_details = find_visual_item(narrow_preview, "cardPreviewDetails")
+assert narrow_frame is not None and narrow_frame.isVisible()
+assert narrow_details is not None and narrow_details.isVisible()
+assert narrow_frame.width() >= 195
+assert_visual_item_inside(narrow_preview, narrow_frame)
+assert_visual_item_inside(narrow_preview, narrow_details)
+narrow_frame_right = narrow_frame.mapToItem(
+    narrow_preview, QPointF(narrow_frame.width(), 0)
+).x()
+narrow_details_left = narrow_details.mapToItem(
+    narrow_preview, QPointF(0, 0)
+).x()
+assert narrow_frame_right <= narrow_details_left
 narrow_thumbnail_frame = find_visual_item(
     narrow_row, "recommendationThumbnailFrame"
 )
@@ -1650,6 +1767,8 @@ assert narrow_missing_label.property("text") == "No image available"
 narrow_recommendation_list = root.findChild(
     QObject, "narrowRecommendationList"
 )
+assert live_view.property("narrowRecommendationPreferredHeight") == 220
+assert narrow_recommendation_list.height() >= 220
 narrow_recommendation_list.setProperty("currentIndex", 2)
 assert narrow_recommendation_list.property("currentIndex") == 2
 assert QMetaObject.invokeMethod(narrow_recommendation_list, "positionViewAtEnd")
@@ -1668,6 +1787,78 @@ narrow_third_texts = visible_texts(narrow_third_row)
 assert "17L —" in narrow_third_texts
 assert "Grade —" in narrow_third_texts
 assert "Open" in narrow_third_texts
+
+provider.selectScenario("warning")
+application.processEvents()
+root.resize(680, 640)
+application.processEvents()
+assert live_view.property("wideRecommendations") is False
+minimum_list = find_visual_item(
+    root.contentItem(), "narrowRecommendationList"
+)
+minimum_preview = find_visual_item(root.contentItem(), "narrowLiveCardPreview")
+assert minimum_list is not None and minimum_list.isVisible()
+minimum_banner = find_visual_item(
+    root.contentItem(), "liveStateBanner"
+)
+minimum_tabs = find_visual_item(root.contentItem(), "liveDetailTabs")
+assert minimum_banner is not None and minimum_banner.isVisible()
+assert minimum_tabs is not None and minimum_tabs.isVisible()
+assert_visual_item_inside(root.contentItem(), minimum_banner)
+assert_visual_item_inside(root.contentItem(), minimum_list)
+assert_visual_item_inside(root.contentItem(), minimum_tabs)
+assert minimum_list.height() < 120
+assert minimum_preview is not None and minimum_preview.isVisible()
+minimum_stack = minimum_preview.parentItem()
+assert minimum_stack is not None
+assert minimum_stack.height() >= 276
+minimum_frame = find_visual_item(minimum_preview, "cardPreviewImageFrame")
+minimum_details = find_visual_item(minimum_preview, "cardPreviewDetails")
+assert minimum_frame is not None and minimum_frame.isVisible()
+assert minimum_details is not None and minimum_details.isVisible()
+assert_visual_item_inside(root.contentItem(), minimum_preview)
+assert_visual_item_inside(minimum_preview, minimum_frame)
+assert_visual_item_inside(minimum_preview, minimum_details)
+minimum_frame_right = minimum_frame.mapToItem(
+    minimum_preview, QPointF(minimum_frame.width(), 0)
+).x()
+minimum_details_left = minimum_details.mapToItem(
+    minimum_preview, QPointF(0, 0)
+).x()
+assert minimum_frame_right <= minimum_details_left
+minimum_list_bottom = minimum_list.mapToItem(
+    root.contentItem(), QPointF(0, minimum_list.height())
+).y()
+minimum_preview_top = minimum_preview.mapToItem(
+    root.contentItem(), QPointF(0, 0)
+).y()
+assert minimum_list_bottom <= minimum_preview_top
+minimum_banner_bottom = minimum_banner.mapToItem(
+    root.contentItem(), QPointF(0, minimum_banner.height())
+).y()
+minimum_list_top = minimum_list.mapToItem(
+    root.contentItem(), QPointF(0, 0)
+).y()
+minimum_tabs_top = minimum_tabs.mapToItem(
+    root.contentItem(), QPointF(0, 0)
+).y()
+minimum_tabs_bottom = minimum_tabs.mapToItem(
+    root.contentItem(), QPointF(0, minimum_tabs.height())
+).y()
+assert minimum_banner_bottom <= minimum_list_top
+assert minimum_list_bottom <= minimum_tabs_top
+assert minimum_tabs_bottom <= minimum_preview_top
+assert_visual_item_inside(root.contentItem(), minimum_stack)
+minimum_image = find_visual_item(minimum_preview, "cardPreviewImage")
+assert minimum_image is not None
+assert_visual_item_inside(minimum_frame, minimum_image)
+minimum_name = find_visual_item(minimum_details, "cardPreviewName")
+minimum_facts = find_visual_item(minimum_details, "cardPreviewFacts")
+assert minimum_name is not None and minimum_facts is not None
+for metadata in (minimum_name, minimum_facts):
+    assert metadata.property("paintedWidth") <= metadata.width() + 1
+    assert metadata.property("paintedHeight") <= metadata.height() + 1
+    assert metadata.property("implicitHeight") <= metadata.height() + 1
 root.resize(1440, 900)
 application.processEvents()
 provider.selectScenario("empty")

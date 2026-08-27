@@ -10,6 +10,10 @@ Rectangle {
     property var imageState: null
     property bool detailedIntel: false
     property bool constrainImageFrameToHeight: false
+    // Keep the existing detailed-preview sizing by default; Live Draft's
+    // wide preview can opt into a larger bounded image.
+    property real detailedImageMaximumWidth: 200
+    property real detailedImageWidthRatio: 0.52
 
     readonly property bool imageCurrent: Boolean(
         recommendation
@@ -74,14 +78,25 @@ Rectangle {
     )
     readonly property real detailedContentWidth: root.width
         - Theme.panelPadding * 2 - previewLayout.columnSpacing
-    readonly property real detailedImageFrameWidth: Math.max(
-        120,
-        Math.min(
-            200,
-            root.detailedContentWidth * 0.52,
+    readonly property real detailedImageFrameWidth: {
+        const heightBound = Math.max(
+            0,
             root.detailedImageFrameAvailableHeight / 1.4
         )
-    )
+        const maximumWidth = Math.max(
+            0, root.detailedImageMaximumWidth
+        )
+        const contentBound = Math.max(
+            0,
+            root.detailedContentWidth
+                * Math.max(0, root.detailedImageWidthRatio)
+        )
+        return Math.min(
+            maximumWidth,
+            heightBound,
+            Math.max(120, contentBound)
+        )
+    }
     readonly property real imageFrameWidth: {
         if (root.detailedIntel)
             return root.detailedImageFrameWidth
