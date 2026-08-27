@@ -3121,7 +3121,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from PySide6.QtCore import QObject, Qt, QUrl
-from PySide6.QtGui import QAccessible, QColor, QGuiApplication
+from PySide6.QtGui import QAccessible, QColor, QFontInfo, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
@@ -3150,8 +3150,27 @@ def contrast_ratio(first, second) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+def expected_scaled_pixel_size(resolved_pixel_size: int) -> int:
+    return int(11 * resolved_pixel_size / 13 + 0.5)
+
+def expected_system_scale_percent(resolved_pixel_size: int) -> int:
+    return int(100 * resolved_pixel_size / 13 + 0.5)
+
+
+def assert_accessible_status(item, expected: str) -> None:
+    accessible = QAccessible.queryAccessibleInterface(item)
+    assert accessible is not None
+    assert accessible.text(QAccessible.Text.Name) == expected
+    assert accessible.text(QAccessible.Text.Description) == expected
+
+
 QQuickStyle.setStyle("Fusion")
 application = QGuiApplication([])
+application_font = application.font()
+application_font.setPixelSize(26)
+application.setFont(application_font)
+assert application_font.pixelSize() == 26
+assert QFontInfo(application_font).pixelSize() == 26
 provider = MockSessionAdapter(session=MockLiveSession(scenario="ready"))
 
 with TemporaryDirectory() as preferences_dir:
@@ -3173,13 +3192,13 @@ with TemporaryDirectory() as preferences_dir:
     assert engine.rootObjects()
     root = engine.rootObjects()[0]
     application.processEvents()
-
     names = (
         "settingsSplashSwitch",
         "settingsCompactDensitySwitch",
         "settingsSecondaryStatsSwitch",
         "settingsCardPreviewSwitch",
         "settingsDetailedBuildContextSwitch",
+        "settingsSystemTextScalingSwitch",
     )
     switches = [root.findChild(QObject, name) for name in names]
     assert all(switch is not None for switch in switches)
@@ -3190,7 +3209,7 @@ with TemporaryDirectory() as preferences_dir:
     unchecked_switches = [
         switch for switch in switches if not switch.property("checked")
     ]
-    assert len(checked_switches) == 4
+    assert len(checked_switches) == 5
     assert len(unchecked_switches) == 1
 
     for switch in switches:
@@ -3266,6 +3285,208 @@ with TemporaryDirectory() as preferences_dir:
     assert focus_ring is not None and focus_ring.property("visible") is False
     disabled_switch.setProperty("enabled", True)
 
+    system_switch = root.findChild(QObject, "settingsSystemTextScalingSwitch")
+    assert system_switch is not None and system_switch.property("checked") is True
+    accessible_system = QAccessible.queryAccessibleInterface(system_switch)
+    assert accessible_system is not None
+    assert accessible_system.text(QAccessible.Text.Name) == "Follow system text size"
+    assert accessible_system.text(QAccessible.Text.Description) == (
+        "Use the resolved system text size instead of Draft Omen's 100% baseline."
+    )
+    system_message = root.findChild(QObject, "settingsSystemTextScalingMessage")
+    assert system_message is not None
+    resolved_pixel_size = QFontInfo(application.font()).pixelSize()
+    assert resolved_pixel_size == 26
+    resolved_scale_percent = expected_system_scale_percent(resolved_pixel_size)
+    enabled_different_message = (
+        f"Following system text size at the detected {resolved_scale_percent}% scale."
+    )
+    assert system_message.property("text") == enabled_different_message
+    assert_accessible_status(system_message, enabled_different_message)
+
+    persistence_message = root.findChild(QObject, "settingsPersistenceMessage")
+    assert persistence_message is not None
+    scaled_font = persistence_message.property("font")
+    resolved_pixel_size = QFontInfo(application.font()).pixelSize()
+    assert scaled_font.pixelSize() == expected_scaled_pixel_size(resolved_pixel_size)
+    inherited_font_control = root.findChild(
+        QObject, "settingsRatingsDownloadButton"
+    )
+    assert inherited_font_control is not None
+    inherited_font = inherited_font_control.property("font")
+    assert inherited_font.pixelSize() == resolved_pixel_size
+    inherited_font_signature = (
+        inherited_font.family(),
+        inherited_font.styleName(),
+        inherited_font.weight(),
+        inherited_font.italic(),
+    )
+    system_switch.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert system_switch.property("checked") is False
+    assert preferences.systemTextScaling is False
+    unscaled_font = persistence_message.property("font")
+    assert unscaled_font.pixelSize() == 11
+    assert inherited_font_control.property("font").pixelSize() == 13
+    assert (
+        inherited_font_control.property("font").family(),
+        inherited_font_control.property("font").styleName(),
+        inherited_font_control.property("font").weight(),
+        inherited_font_control.property("font").italic(),
+    ) == inherited_font_signature
+    disabled_different_message = (
+        f"Using Draft Omen's 100% baseline. The detected system scale is "
+        f"{resolved_scale_percent}%."
+    )
+    assert system_message.property("text") == disabled_different_message
+    assert_accessible_status(system_message, disabled_different_message)
+
+    assert GuiPreferencesAdapter(app_dir=preferences_dir).systemTextScaling is False
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert system_switch.property("checked") is True
+    assert persistence_message.property("font").pixelSize() == scaled_font.pixelSize()
+    assert inherited_font_control.property("font").pixelSize() == resolved_pixel_size
+    assert (
+        inherited_font_control.property("font").family(),
+        inherited_font_control.property("font").styleName(),
+        inherited_font_control.property("font").weight(),
+        inherited_font_control.property("font").italic(),
+    ) == inherited_font_signature
+    assert system_message.property("text") == enabled_different_message
+    assert_accessible_status(system_message, enabled_different_message)
+
+    point_font = application.font()
+    point_font.setPointSize(16)
+    application.setFont(point_font)
+    application.processEvents()
+    assert point_font.pixelSize() == -1
+    resolved_point_size = QFontInfo(point_font).pixelSize()
+    assert resolved_point_size > 13
+    point_scaled_font = persistence_message.property("font")
+    assert point_scaled_font.pixelSize() == expected_scaled_pixel_size(resolved_point_size)
+    assert inherited_font_control.property("font").pixelSize() == resolved_point_size
+    resolved_point_scale_percent = expected_system_scale_percent(resolved_point_size)
+    enabled_point_message = (
+        f"Following system text size at the detected "
+        f"{resolved_point_scale_percent}% scale."
+    )
+    assert system_message.property("text") == enabled_point_message
+    assert_accessible_status(system_message, enabled_point_message)
+
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert system_switch.property("checked") is False
+    assert persistence_message.property("font").pixelSize() == 11
+    assert inherited_font_control.property("font").pixelSize() == 13
+    disabled_point_message = (
+        f"Using Draft Omen's 100% baseline. The detected system scale is "
+        f"{resolved_point_scale_percent}%."
+    )
+    assert system_message.property("text") == disabled_point_message
+    assert_accessible_status(system_message, disabled_point_message)
+
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert system_switch.property("checked") is True
+    assert persistence_message.property("font").pixelSize() == point_scaled_font.pixelSize()
+    assert inherited_font_control.property("font").pixelSize() == resolved_point_size
+    assert system_message.property("text") == enabled_point_message
+    assert_accessible_status(system_message, enabled_point_message)
+
+    persisted_preferences = GuiPreferencesAdapter(app_dir=preferences_dir)
+    persisted_preferences.setSystemTextScaling(False)
+    assert persisted_preferences.systemTextScaling is False
+    del root
+    del engine
+
+    reload_engine = QQmlApplicationEngine()
+    reload_engine.addImportPath(str(qml_directory))
+    reload_context = reload_engine.rootContext()
+    reload_context.setContextProperty("fixedFontFamily", "monospace")
+    reload_context.setContextProperty("sessionProvider", provider)
+    reload_context.setContextProperty("applicationTitle", "Draft Omen")
+    reload_context.setContextProperty("applicationVersion", "0.0")
+    reload_context.setContextProperty("guiPreferences", persisted_preferences)
+    reload_context.setContextProperty("initialSurface", "settings")
+    reload_context.setContextProperty("initialWindowWidth", 900)
+    reload_context.setContextProperty("initialWindowHeight", 760)
+    reload_engine.setInitialProperties({"provider": provider})
+    reload_engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+    assert reload_engine.rootObjects()
+    root = reload_engine.rootObjects()[0]
+    application.processEvents()
+    reloaded_system_switch = root.findChild(
+        QObject, "settingsSystemTextScalingSwitch"
+    )
+    assert reloaded_system_switch is not None
+    assert reloaded_system_switch.property("checked") is False
+    reloaded_inherited_font_control = root.findChild(
+        QObject, "settingsRatingsDownloadButton"
+    )
+    assert reloaded_inherited_font_control is not None
+    assert reloaded_inherited_font_control.property("font").pixelSize() == 13
+    reloaded_persistence_message = root.findChild(
+        QObject, "settingsPersistenceMessage"
+    )
+    assert reloaded_persistence_message is not None
+    assert reloaded_persistence_message.property("font").pixelSize() == 11
+    reloaded_system_message = root.findChild(
+        QObject, "settingsSystemTextScalingMessage"
+    )
+    assert reloaded_system_message is not None
+    assert reloaded_system_message.property("text") == disabled_point_message
+    assert_accessible_status(reloaded_system_message, disabled_point_message)
+
+    assert (
+        reloaded_inherited_font_control.property("font").family(),
+        reloaded_inherited_font_control.property("font").styleName(),
+        reloaded_inherited_font_control.property("font").weight(),
+        reloaded_inherited_font_control.property("font").italic(),
+    ) == inherited_font_signature
+    reloaded_system_switch.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert reloaded_system_switch.property("checked") is True
+    assert reloaded_inherited_font_control.property("font").pixelSize() == (
+        resolved_point_size
+    )
+    assert reloaded_persistence_message.property("font").pixelSize() == (
+        expected_scaled_pixel_size(resolved_point_size)
+    )
+    assert reloaded_system_message.property("text") == enabled_point_message
+    assert_accessible_status(reloaded_system_message, enabled_point_message)
+    equal_font = application.font()
+    equal_font.setPixelSize(13)
+    application.setFont(equal_font)
+    application.processEvents()
+    resolved_equal_size = QFontInfo(application.font()).pixelSize()
+    assert resolved_equal_size == 13
+    assert reloaded_inherited_font_control.property("font").pixelSize() == 13
+    assert reloaded_persistence_message.property("font").pixelSize() == 11
+    enabled_equal_message = (
+        "Following system text size. The detected 100% scale matches "
+        "Draft Omen's default, so no visible size change is expected."
+    )
+    assert reloaded_system_message.property("text") == enabled_equal_message
+    assert_accessible_status(reloaded_system_message, enabled_equal_message)
+
+    reloaded_system_switch.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert reloaded_system_switch.property("checked") is False
+    disabled_equal_message = (
+        "Using Draft Omen's 100% baseline. The detected system scale is 100%."
+    )
+    assert reloaded_system_message.property("text") == disabled_equal_message
+    assert_accessible_status(reloaded_system_message, disabled_equal_message)
+    QTest.keyClick(root, Qt.Key_Space)
+    application.processEvents()
+    assert reloaded_system_switch.property("checked") is True
+    assert reloaded_system_message.property("text") == enabled_equal_message
+    assert_accessible_status(reloaded_system_message, enabled_equal_message)
+
     card_preview = root.findChild(QObject, "settingsCardPreviewSwitch")
     assert card_preview is not None
     accessible = QAccessible.queryAccessibleInterface(card_preview)
@@ -3287,7 +3508,7 @@ with TemporaryDirectory() as preferences_dir:
     application.processEvents()
     assert card_preview.property("checked") is was_checked
 
-    del engine
+    del reload_engine
 """
     completed = _run_qml_probe(probe)
 

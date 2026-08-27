@@ -136,7 +136,7 @@ Item {
                 Label {
                     text: root.draftHeading
                     color: Theme.text
-                    font.pixelSize: 22
+                    font.pixelSize: Theme.textPixelSize(22)
                     font.bold: true
                     Layout.fillWidth: true
                     elide: Text.ElideRight
@@ -165,7 +165,7 @@ Item {
                     visible: root.confidenceSummary.length > 0
                     text: root.confidenceSummary
                     color: Theme.text
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.textPixelSize(12)
                     font.bold: true
                     wrapMode: Text.WordWrap
                 }
@@ -173,7 +173,7 @@ Item {
                 Label {
                     text: root.sessionState.status.message
                     color: Theme.textMuted
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.textPixelSize(12)
                     Layout.fillWidth: true
                     elide: Text.ElideRight
                 }
@@ -232,7 +232,7 @@ Item {
                     Layout.fillWidth: true
                     text: root.emptyHeading
                     color: Theme.text
-                    font.pixelSize: 22
+                    font.pixelSize: Theme.textPixelSize(22)
                     font.bold: true
                     horizontalAlignment: Text.AlignHCenter
                 }
@@ -320,20 +320,20 @@ Item {
                             Layout.preferredWidth: 30
                             text: "#"
                             color: Theme.textMuted
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.textPixelSize(11)
                         }
                         Label {
                             objectName: "recommendationHeaderCard"
                             Layout.fillWidth: true
                             text: "CARD"
                             color: Theme.textMuted
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.textPixelSize(11)
                         }
-                        Label { Layout.preferredWidth: 70; text: "COLORS"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
-                        Label { Layout.preferredWidth: 58; text: "DO"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignRight }
-                        Label { Layout.preferredWidth: 68; text: "17L WR"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignRight }
-                        Label { Layout.preferredWidth: 44; text: "GRADE"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
-                        Label { Layout.preferredWidth: 82; text: "FIT"; color: Theme.textMuted; font.pixelSize: 11; horizontalAlignment: Text.AlignRight }
+                        Label { Layout.preferredWidth: 70; text: "COLORS"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); horizontalAlignment: Text.AlignHCenter }
+                        Label { Layout.preferredWidth: 58; text: "DO"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); horizontalAlignment: Text.AlignRight }
+                        Label { Layout.preferredWidth: 68; text: "17L WR"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); horizontalAlignment: Text.AlignRight }
+                        Label { Layout.preferredWidth: 44; text: "GRADE"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); horizontalAlignment: Text.AlignHCenter }
+                        Label { Layout.preferredWidth: 82; text: "FIT"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); horizontalAlignment: Text.AlignRight }
                     }
 
                     ListView {

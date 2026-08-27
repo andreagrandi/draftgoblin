@@ -43,7 +43,7 @@ Dialog {
             anchors.rightMargin: 16
             text: root.title
             color: Theme.text
-            font.pixelSize: 18
+            font.pixelSize: Theme.textPixelSize(18)
             font.bold: true
             verticalAlignment: Text.AlignVCenter
         }
@@ -65,7 +65,7 @@ Dialog {
             Layout.fillWidth: true
             text: "Draft Omen"
             color: Theme.text
-            font.pixelSize: 24
+            font.pixelSize: Theme.textPixelSize(24)
             font.bold: true
             horizontalAlignment: Text.AlignHCenter
             Accessible.name: text

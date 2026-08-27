@@ -89,7 +89,7 @@ Switch {
                 anchors.rightMargin: control.visualChecked ? 0 : 6
                 text: control.visualChecked ? "ON" : "OFF"
                 color: control.visualContentColor
-                font.pixelSize: 8
+                font.pixelSize: Theme.textPixelSize(8)
                 font.bold: true
                 horizontalAlignment: control.visualChecked ? Text.AlignLeft : Text.AlignRight
                 verticalAlignment: Text.AlignVCenter
@@ -114,7 +114,7 @@ Switch {
                 anchors.fill: parent
                 text: control.visualChecked ? "ON" : "OFF"
                 color: control.visualThumbContentColor
-                font.pixelSize: 8
+                font.pixelSize: Theme.textPixelSize(8)
                 font.bold: true
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter

@@ -185,7 +185,7 @@ Item {
             width: parent.width
             text: "RECENT PICKS"
             color: Theme.textMuted
-            font.pixelSize: 11
+            font.pixelSize: Theme.textPixelSize(11)
             font.bold: true
             font.letterSpacing: 1
         }
@@ -274,7 +274,7 @@ Item {
                 return "No image available"
             }
             color: Theme.textMuted
-            font.pixelSize: 15
+            font.pixelSize: Theme.textPixelSize(15)
             font.bold: true
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
@@ -282,17 +282,23 @@ Item {
             visible: !previewImage.visible
             Accessible.name: text
         }
-        HoverHandler {
-            id: previewHoverHandler
-            blocking: false
-            onHoveredChanged: {
-                if (hovered) {
-                    root.previewHovered = true
+        MouseArea {
+            id: previewHoverArea
+            anchors.fill: parent
+            z: 1
+            hoverEnabled: true
+            acceptedButtons: Qt.NoButton
+
+            onEntered: {
+                root.previewHovered = true
+                dismissTimer.stop()
+            }
+            onExited: {
+                root.previewHovered = false
+                if (root.thumbnailHovered)
                     dismissTimer.stop()
-                } else {
-                    root.previewHovered = false
+                else
                     dismissTimer.restart()
-                }
             }
         }
     }

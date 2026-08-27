@@ -32,14 +32,14 @@ Rectangle {
             Layout.fillWidth: true
             text: root.sessionState.status ? root.sessionState.status.message : "Starting"
             color: Theme.textMuted
-            font.pixelSize: 11
+            font.pixelSize: Theme.textPixelSize(11)
             elide: Text.ElideRight
         }
 
         Label {
             text: root.sessionState.ratings ? root.sessionState.ratings.message : "Ratings unavailable"
             color: Theme.textMuted
-            font.pixelSize: 11
+            font.pixelSize: Theme.textPixelSize(11)
             elide: Text.ElideRight
         }
 
@@ -47,7 +47,7 @@ Rectangle {
             objectName: "applicationVersionLabel"
             text: "v" + root.applicationVersion
             color: Theme.textMuted
-            font.pixelSize: 11
+            font.pixelSize: Theme.textPixelSize(11)
             Accessible.name: "Draft Omen version " + root.applicationVersion
         }
 
@@ -55,7 +55,7 @@ Rectangle {
             visible: !root.narrow
             text: "Data from 17Lands"
             color: Theme.primary
-            font.pixelSize: 11
+            font.pixelSize: Theme.textPixelSize(11)
         }
     }
 

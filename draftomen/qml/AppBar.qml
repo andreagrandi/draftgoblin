@@ -26,7 +26,7 @@ Rectangle {
             visible: root.narrow
             text: "DRAFTOMEN"
             color: Theme.primary
-            font.pixelSize: 18
+            font.pixelSize: Theme.textPixelSize(18)
             font.bold: true
             font.letterSpacing: 1.2
         }
@@ -55,7 +55,7 @@ Rectangle {
                     ? root.sessionState.draft.set_code + " · " + root.sessionState.draft.event_name
                     : "No active draft"
                 color: Theme.textMuted
-                font.pixelSize: 11
+                font.pixelSize: Theme.textPixelSize(11)
                 Layout.fillWidth: true
                 elide: Text.ElideRight
             }

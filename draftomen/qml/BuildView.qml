@@ -245,7 +245,7 @@ Item {
                     anchors.centerIn: parent
                     text: modelData
                     color: Theme.background
-                    font.pixelSize: 9
+                    font.pixelSize: Theme.textPixelSize(9)
                     font.bold: true
                 }
             }
@@ -254,14 +254,17 @@ Item {
             visible: manaPips.colors.length === 0
             text: "C"
             color: Theme.textMuted
-            font.pixelSize: 10
+            font.pixelSize: Theme.textPixelSize(10)
             font.bold: true
         }
     }
 
     component ManaCurve: Rectangle {
         Layout.fillWidth: true
-        Layout.preferredHeight: 154
+        Layout.preferredHeight: Math.max(
+            154,
+            manaCurveContent.implicitHeight + Theme.panelPadding * 2
+        )
         color: Theme.surfaceLow
         border.color: Theme.outline
         border.width: 1
@@ -271,8 +274,13 @@ Item {
         Accessible.description: "Horizontally labelled mana curve for the suggested deck."
 
         ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: Theme.panelPadding
+            id: manaCurveContent
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.leftMargin: Theme.panelPadding
+            anchors.rightMargin: Theme.panelPadding
+            anchors.topMargin: Theme.panelPadding
             spacing: 8
             ColumnLayout {
                 Layout.fillWidth: true
@@ -285,7 +293,7 @@ Item {
                         Layout.fillWidth: true
                         text: "MANA CURVE"
                         color: Theme.textMuted
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.textPixelSize(10)
                         font.bold: true
                         font.letterSpacing: 1
                     }
@@ -294,7 +302,7 @@ Item {
                         Layout.fillWidth: true
                         text: root.averageManaValueText()
                         color: Theme.textMuted
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.textPixelSize(11)
                         Accessible.name: text
                     }
                 }
@@ -302,7 +310,7 @@ Item {
                     Layout.fillWidth: true
                     text: "spells by mana value"
                     color: Theme.textMuted
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.textPixelSize(11)
                 }
             }
             RowLayout {
@@ -313,21 +321,22 @@ Item {
                     model: [0, 2, 3, 4, 5, 6]
                     delegate: ColumnLayout {
                         required property int modelData
+                        readonly property int cardCount: root.manaCount(modelData)
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         spacing: 4
                         Label {
                             Layout.alignment: Qt.AlignHCenter
-                            text: root.manaCount(modelData)
+                            text: cardCount
                             color: Theme.text
                             font.family: fixedFontFamily
                             font.bold: true
-                            Accessible.name: root.manaCount(modelData) + " cards at " + root.manaBucketLabel(modelData)
+                            Accessible.name: cardCount + " cards at " + root.manaBucketLabel(modelData)
                         }
                         Item { Layout.fillHeight: true }
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: Math.max(4, Math.min(56, root.manaCount(modelData) * 7))
+                            Layout.preferredHeight: Math.max(4, Math.min(56, cardCount * 7))
                             color: Theme.primary
                             radius: 2
                         }
@@ -335,7 +344,7 @@ Item {
                             Layout.alignment: Qt.AlignHCenter
                             text: root.manaBucketLabel(modelData).replace("MV ", "")
                             color: Theme.textMuted
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.textPixelSize(10)
                             font.bold: true
                         }
                     }
@@ -417,7 +426,7 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
-                Label { text: "Suggested deck"; color: Theme.text; font.pixelSize: 22; font.bold: true }
+                Label { text: "Suggested deck"; color: Theme.text; font.pixelSize: Theme.textPixelSize(22); font.bold: true }
                 Label {
                     Layout.fillWidth: true
                     text: "Recreate this build in Arena · Draft Omen remains read only"
@@ -429,7 +438,7 @@ Item {
                 visible: root.hasBuild
                 text: root.build.pair_override ? "OVERRIDE ACTIVE" : "AUTOMATIC PAIR"
                 color: root.build.pair_override ? Theme.warning : Theme.primary
-                font.pixelSize: 10
+                font.pixelSize: Theme.textPixelSize(10)
                 font.bold: true
                 font.letterSpacing: 1
             }
@@ -477,7 +486,7 @@ Item {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - 40, 440)
                 spacing: 12
-                Label { text: "No deck build available"; color: Theme.text; font.pixelSize: 20; font.bold: true }
+                Label { text: "No deck build available"; color: Theme.text; font.pixelSize: Theme.textPixelSize(20); font.bold: true }
                 Label { Layout.fillWidth: true; text: "Complete or recover a draft to request a suggested deck."; color: Theme.textMuted; wrapMode: Text.WordWrap }
                 DimensionalButton {
                     objectName: "buildRequestButton"
@@ -528,24 +537,24 @@ Item {
                             anchors.fill: parent
                             anchors.margins: Theme.panelPadding
                             spacing: 10
-                            Label { text: "DECK COMPOSITION"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1 }
+                            Label { text: "DECK COMPOSITION"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true; font.letterSpacing: 1 }
                             GridLayout {
                                 Layout.fillWidth: true
                                 columns: 2
                                 columnSpacing: 20
                                 rowSpacing: 8
-                                Label { text: root.build.deck_size; color: Theme.text; font.pixelSize: 22; font.bold: true }
-                                Label { text: root.countText(root.build.spell_count); color: Theme.primary; font.pixelSize: 22; font.bold: true }
-                                Label { text: "TOTAL CARDS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
-                                Label { text: "SPELLS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
-                                Label { objectName: "wideBuildCreatureCount"; text: root.countText(root.build.creature_count); color: Theme.primary; font.pixelSize: 18; font.bold: true }
-                                Label { objectName: "wideBuildInstantCount"; text: root.countText(root.build.instant_count); color: Theme.primary; font.pixelSize: 18; font.bold: true }
-                                Label { text: "CREATURES"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
-                                Label { text: "INSTANTS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
-                                Label { text: root.countText(root.build.land_count); color: Theme.warning; font.pixelSize: 18; font.bold: true }
-                                Label { text: root.build.deck_size === 40 ? "DECK SIZE READY" : "DECK SIZE CHECK"; color: root.build.deck_size === 40 ? Theme.primary : Theme.warning; font.pixelSize: 10; font.bold: true }
-                                Label { text: "LANDS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
-                                Label { text: "SUGGESTED DECK"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
+                                Label { text: root.build.deck_size; color: Theme.text; font.pixelSize: Theme.textPixelSize(22); font.bold: true }
+                                Label { text: root.countText(root.build.spell_count); color: Theme.primary; font.pixelSize: Theme.textPixelSize(22); font.bold: true }
+                                Label { text: "TOTAL CARDS"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true }
+                                Label { text: "SPELLS"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true }
+                                Label { objectName: "wideBuildCreatureCount"; text: root.countText(root.build.creature_count); color: Theme.primary; font.pixelSize: Theme.textPixelSize(18); font.bold: true }
+                                Label { objectName: "wideBuildInstantCount"; text: root.countText(root.build.instant_count); color: Theme.primary; font.pixelSize: Theme.textPixelSize(18); font.bold: true }
+                                Label { text: "CREATURES"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true }
+                                Label { text: "INSTANTS"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true }
+                                Label { text: root.countText(root.build.land_count); color: Theme.warning; font.pixelSize: Theme.textPixelSize(18); font.bold: true }
+                                Label { text: root.build.deck_size === 40 ? "DECK SIZE READY" : "DECK SIZE CHECK"; color: root.build.deck_size === 40 ? Theme.primary : Theme.warning; font.pixelSize: Theme.textPixelSize(10); font.bold: true }
+                                Label { text: "LANDS"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true }
+                                Label { text: "SUGGESTED DECK"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true }
                             }
                         }
                     }
@@ -563,7 +572,7 @@ Item {
                             anchors.fill: parent
                             anchors.margins: Theme.panelPadding
                             spacing: 7
-                            Label { text: "MANA BASE"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1 }
+                            Label { text: "MANA BASE"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true; font.letterSpacing: 1 }
                             Repeater {
                                 model: root.build.lands
                                 delegate: RowLayout {
@@ -620,7 +629,7 @@ Item {
                             Layout.preferredHeight: 48
                             Layout.leftMargin: Theme.panelPadding
                             Layout.rightMargin: Theme.panelPadding
-                            Label { text: "MAIN DECK SPELLS"; color: Theme.text; font.pixelSize: 12; font.bold: true; font.letterSpacing: 1 }
+                            Label { text: "MAIN DECK SPELLS"; color: Theme.text; font.pixelSize: Theme.textPixelSize(12); font.bold: true; font.letterSpacing: 1 }
                             Item { Layout.fillWidth: true }
                             Label { text: root.build.spell_count !== null ? root.build.spell_count + " cards" : ""; color: Theme.textMuted; font.family: fixedFontFamily }
                         }
@@ -655,7 +664,7 @@ Item {
                                                 anchors.leftMargin: 10
                                                 text: root.manaBucketLabel(modelData)
                                                 color: Theme.textMuted
-                                                font.pixelSize: 11
+                                                font.pixelSize: Theme.textPixelSize(11)
                                                 font.bold: true
                                                 Accessible.name: text
                                             }
@@ -681,7 +690,7 @@ Item {
                                             visible: root.manaCount(modelData) === 0
                                             text: "No spells at this mana value"
                                             color: Theme.textMuted
-                                            font.pixelSize: 11
+                                            font.pixelSize: Theme.textPixelSize(11)
                                             leftPadding: 10
                                         }
                                     }
@@ -722,8 +731,12 @@ Item {
                         radius: Theme.radius
                         ColumnLayout {
                             id: wideReasoning
-                            anchors.fill: parent
-                            anchors.margins: Theme.panelPadding
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.leftMargin: Theme.panelPadding
+                            anchors.rightMargin: Theme.panelPadding
+                            anchors.topMargin: Theme.panelPadding
                             spacing: 4
                             DimensionalButton {
                                 objectName: "wideBuildContextToggle"
@@ -742,7 +755,7 @@ Item {
                                 visible: root.contextExpanded
                                 Layout.fillWidth: true
                                 spacing: 4
-                                Label { text: "WHY THIS PAIR"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1 }
+                                Label { text: "WHY THIS PAIR"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true; font.letterSpacing: 1 }
                                 Label {
                                     Layout.fillWidth: true
                                     text: root.pairDescription
@@ -873,14 +886,14 @@ Item {
                             spacing: 6
                             RowLayout {
                                 Layout.fillWidth: true
-                                Label { text: root.build.deck_size; color: Theme.primary; font.pixelSize: 22; font.bold: true }
-                                Label { text: "/ 40 CARDS"; color: Theme.textMuted; font.pixelSize: 10; font.bold: true }
+                                Label { text: root.build.deck_size; color: Theme.primary; font.pixelSize: Theme.textPixelSize(22); font.bold: true }
+                                Label { text: "/ 40 CARDS"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); font.bold: true }
                                 Item { Layout.fillWidth: true }
                                 Label {
                                     text: root.countText(root.build.spell_count) + " spells · "
                                         + root.countText(root.build.land_count) + " lands"
                                     color: Theme.textMuted
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.textPixelSize(11)
                                 }
                             }
                             Label {
@@ -889,7 +902,7 @@ Item {
                                 text: root.countLabel(root.build.creature_count, "creature") + " · "
                                     + root.countLabel(root.build.instant_count, "instant")
                                 color: Theme.textMuted
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.textPixelSize(11)
                             }
                             Label {
                                 text: root.build.selected_pair + " · " + (root.build.pair_override ? "override" : "automatic")
@@ -900,7 +913,7 @@ Item {
                             Label {
                                 text: root.build.deck_size === 40 ? "DECK SIZE READY" : "DECK SIZE CHECK"
                                 color: root.build.deck_size === 40 ? Theme.primary : Theme.warning
-                                font.pixelSize: 10
+                                font.pixelSize: Theme.textPixelSize(10)
                                 font.bold: true
                                 font.letterSpacing: 1
                             }
@@ -984,7 +997,7 @@ Item {
                                     Label {
                                         text: root.manaBucketLabel(modelData) + " · " + root.manaCount(modelData)
                                         color: Theme.textMuted
-                                        font.pixelSize: 10
+                                        font.pixelSize: Theme.textPixelSize(10)
                                         font.bold: true
                                         font.letterSpacing: 1
                                         Accessible.name: text
@@ -1032,7 +1045,7 @@ Item {
                                     Layout.fillWidth: true
                                     ManaPips { colors: modelData.source_colors }
                                     Label { Layout.fillWidth: true; text: "×" + modelData.quantity + " " + modelData.name; color: Theme.text; wrapMode: Text.WordWrap }
-                                    Label { text: root.landSummary(modelData); color: Theme.textMuted; font.pixelSize: 10 }
+                                    Label { text: root.landSummary(modelData); color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10) }
                                 }
                             }
                         }

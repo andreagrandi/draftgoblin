@@ -35,7 +35,7 @@ Rectangle {
                 Layout.fillWidth: true
                 text: "DRAFTOMEN"
                 color: Theme.primary
-                font.pixelSize: 14
+                font.pixelSize: Theme.textPixelSize(14)
                 font.bold: true
                 font.letterSpacing: 1.2
                 horizontalAlignment: Text.AlignHCenter
@@ -206,7 +206,7 @@ Rectangle {
                 Layout.fillWidth: true
                 text: root.compact ? "Read only" : "Arena integration · Read only"
                 color: Theme.textMuted
-                font.pixelSize: 10
+                font.pixelSize: Theme.textPixelSize(10)
                 wrapMode: Text.WordWrap
             }
         }
