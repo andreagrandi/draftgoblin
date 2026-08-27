@@ -67,7 +67,8 @@ Rectangle {
         0,
         root.height - Theme.panelPadding * 2
             - previewHeading.implicitHeight
-            - (previewDetails.visible ? previewDetails.implicitHeight : 0)
+            - (previewDetails.visible
+                ? previewDetailsColumn.implicitHeight : 0)
             - previewLayout.rowSpacing * (previewDetails.visible ? 2 : 1)
     )
     readonly property real detailedImageFrameAvailableHeight: Math.max(
@@ -140,7 +141,7 @@ Rectangle {
             Layout.columnSpan: root.detailedIntel ? 2 : 1
             text: root.detailedIntel ? "FOCUSED INTEL" : "SELECTED CARD"
             color: root.detailedIntel ? Theme.primary : Theme.textMuted
-            font.pixelSize: 11
+            font.pixelSize: Theme.textPixelSize(11)
             font.bold: true
             font.letterSpacing: 1.2
         }
@@ -197,7 +198,7 @@ Rectangle {
                         return "No card selected"
                     }
                     color: Theme.text
-                    font.pixelSize: 16
+                    font.pixelSize: Theme.textPixelSize(16)
                     font.bold: true
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
@@ -213,14 +214,14 @@ Rectangle {
                         return "Card image unavailable"
                     }
                     color: Theme.textMuted
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.textPixelSize(11)
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
                 }
             }
         }
 
-        ColumnLayout {
+        Flickable {
             id: previewDetails
             objectName: "cardPreviewDetails"
             visible: root.recommendation !== null
@@ -231,139 +232,196 @@ Rectangle {
             Layout.maximumWidth: root.detailedIntel
                 ? Math.max(0, root.detailedContentWidth - root.imageFrameWidth)
                 : root.width
-            spacing: 6
+            Layout.preferredHeight: root.detailedIntel
+                ? root.imageFrameHeight
+                : previewDetailsColumn.implicitHeight
+            contentWidth: width
+            contentHeight: previewDetailsColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            activeFocusOnTab: root.detailedIntel
+            Accessible.role: Accessible.Pane
+            Accessible.name: "Scrollable card details"
+            Accessible.description: "Use Up and Down, Page Up, Page Down, Home, or End to scroll the card details."
 
-            Label {
-                objectName: "cardPreviewName"
-                Layout.fillWidth: true
-                text: root.recommendation ? root.recommendation.card.name : ""
-                color: Theme.text
-                font.pixelSize: 18
-                font.bold: true
-                wrapMode: Text.WordWrap
+            function scrollTo(position) {
+                contentY = Math.max(0, Math.min(
+                    position, Math.max(0, contentHeight - height)
+                ))
             }
 
-            Label {
-                objectName: "cardPreviewFacts"
-                Layout.fillWidth: true
-                text: {
-                    if (!root.recommendation)
-                        return ""
-                    if (root.detailedIntel)
-                        return root.colorsText + "  ·  "
-                            + root.recommendation.card.types.join(" · ")
-                            + "  ·  MV " + root.manaValueText
-                    return root.recommendation.card.types.join(" · ")
-                        + "   ·   MV " + root.recommendation.card.mana_value
+            Keys.onPressed: function(event) {
+                const pageStep = Math.max(1, height - 24)
+                const lineStep = 40
+                switch (event.key) {
+                case Qt.Key_Up:
+                    previewDetails.scrollTo(contentY - lineStep)
+                    break
+                case Qt.Key_Down:
+                    previewDetails.scrollTo(contentY + lineStep)
+                    break
+                case Qt.Key_PageUp:
+                    previewDetails.scrollTo(contentY - pageStep)
+                    break
+                case Qt.Key_PageDown:
+                    previewDetails.scrollTo(contentY + pageStep)
+                    break
+                case Qt.Key_Home:
+                    previewDetails.scrollTo(0)
+                    break
+                case Qt.Key_End:
+                    previewDetails.scrollTo(contentHeight - height)
+                    break
+                default:
+                    return
                 }
-                color: Theme.textMuted
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
+                event.accepted = true
             }
 
-            GridLayout {
-                visible: root.detailedIntel
-                objectName: "cardPreviewScores"
-                Layout.fillWidth: true
-                columns: 2
-                columnSpacing: 12
-                rowSpacing: 4
+            ScrollBar.vertical: ScrollBar {
+                objectName: "cardPreviewScrollBar"
+                policy: ScrollBar.AsNeeded
+                width: 8
+                Accessible.name: "Card details vertical scrollbar"
+            }
 
-                Label { text: "DO Score"; color: Theme.textMuted; font.pixelSize: 11 }
-                Label {
-                    text: root.recommendation ? root.recommendation.score : "—"
-                    color: Theme.primary
-                    font.family: fixedFontFamily
-                    font.pixelSize: 16
-                    font.bold: true
-                }
+            ColumnLayout {
+                id: previewDetailsColumn
+                width: previewDetails.width
+                spacing: 6
 
-                Label { text: "17L WR"; color: Theme.textMuted; font.pixelSize: 11 }
                 Label {
-                    text: root.winRateText
-                    color: Theme.text
-                    font.family: fixedFontFamily
-                    font.pixelSize: 15
-                }
-
-                Label { text: "Grade"; color: Theme.textMuted; font.pixelSize: 11 }
-                Label {
-                    text: root.recommendation
-                        ? root.recommendation.letter_grade || "—" : "—"
-                    color: Theme.warning
-                    font.pixelSize: 15
-                    font.bold: true
-                }
-
-                Label { text: "ALSA"; color: Theme.textMuted; font.pixelSize: 11 }
-                Label {
-                    text: root.alsaText
-                    color: Theme.text
-                    font.family: fixedFontFamily
-                    font.pixelSize: 15
-                }
-
-                Label { text: "Fit"; color: Theme.textMuted; font.pixelSize: 11 }
-                Label {
+                    objectName: "cardPreviewName"
                     Layout.fillWidth: true
-                    text: root.recommendation
-                        ? root.recommendation.color_fit || "Open" : "—"
+                    text: root.recommendation ? root.recommendation.card.name : ""
                     color: Theme.text
-                    elide: Text.ElideRight
+                    font.pixelSize: Theme.textPixelSize(18)
+                    font.bold: true
+                    wrapMode: Text.WordWrap
                 }
 
-                Label { text: "Source"; color: Theme.textMuted; font.pixelSize: 11 }
                 Label {
+                    objectName: "cardPreviewFacts"
                     Layout.fillWidth: true
-                    text: root.recommendation
-                        ? root.recommendation.source_label || "Unavailable" : "—"
-                    color: Theme.text
-                    elide: Text.ElideRight
-                }
-            }
-
-            RowLayout {
-                visible: !root.detailedIntel
-                Layout.fillWidth: true
-
-                Label {
-                    text: root.recommendation ? "DO " + root.recommendation.score : ""
-                    color: Theme.primary
-                    font.family: fixedFontFamily
-                    font.bold: true
-                }
-
-                Label {
-                    text: root.recommendation && root.recommendation.win_rate !== null
-                        ? "17L " + (root.recommendation.win_rate * 100).toFixed(1) + "%"
-                        : "17L —"
-                    color: Theme.textMuted
-                    font.family: fixedFontFamily
-                }
-
-                Label {
-                    text: root.recommendation
-                        ? root.recommendation.letter_grade || "—" : ""
-                    color: Theme.warning
-                    font.bold: true
-                }
-            }
-
-            Label {
-                objectName: "cardPreviewExplanation"
-                Layout.fillWidth: true
-                text: {
-                    if (!root.recommendation)
-                        return ""
-                    if (root.detailedIntel) {
-                        return root.recommendation.explanation
-                            || "Explanation unavailable."
+                    text: {
+                        if (!root.recommendation)
+                            return ""
+                        if (root.detailedIntel)
+                            return root.colorsText + "  ·  "
+                                + root.recommendation.card.types.join(" · ")
+                                + "  ·  MV " + root.manaValueText
+                        return root.recommendation.card.types.join(" · ")
+                            + "   ·   MV " + root.recommendation.card.mana_value
                     }
-                    return root.recommendation.explanation || ""
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.textPixelSize(12)
+                    wrapMode: Text.WordWrap
                 }
-                color: Theme.textMuted
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
+
+                GridLayout {
+                    visible: root.detailedIntel
+                    objectName: "cardPreviewScores"
+                    Layout.fillWidth: true
+                    columns: 2
+                    columnSpacing: 12
+                    rowSpacing: 4
+
+                    Label { text: "DO Score"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11) }
+                    Label {
+                        text: root.recommendation ? root.recommendation.score : "—"
+                        color: Theme.primary
+                        font.family: fixedFontFamily
+                        font.pixelSize: Theme.textPixelSize(16)
+                        font.bold: true
+                    }
+
+                    Label { text: "17L WR"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11) }
+                    Label {
+                        text: root.winRateText
+                        color: Theme.text
+                        font.family: fixedFontFamily
+                        font.pixelSize: Theme.textPixelSize(15)
+                    }
+
+                    Label { text: "Grade"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11) }
+                    Label {
+                        text: root.recommendation
+                            ? root.recommendation.letter_grade || "—" : "—"
+                        color: Theme.warning
+                        font.pixelSize: Theme.textPixelSize(15)
+                        font.bold: true
+                    }
+
+                    Label { text: "ALSA"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11) }
+                    Label {
+                        text: root.alsaText
+                        color: Theme.text
+                        font.family: fixedFontFamily
+                        font.pixelSize: Theme.textPixelSize(15)
+                    }
+
+                    Label { text: "Fit"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11) }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.recommendation
+                            ? root.recommendation.color_fit || "Open" : "—"
+                        color: Theme.text
+                        elide: Text.ElideRight
+                    }
+
+                    Label { text: "Source"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11) }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.recommendation
+                            ? root.recommendation.source_label || "Unavailable" : "—"
+                        color: Theme.text
+                        elide: Text.ElideRight
+                    }
+                }
+
+                RowLayout {
+                    visible: !root.detailedIntel
+                    Layout.fillWidth: true
+
+                    Label {
+                        text: root.recommendation ? "DO " + root.recommendation.score : ""
+                        color: Theme.primary
+                        font.family: fixedFontFamily
+                        font.bold: true
+                    }
+
+                    Label {
+                        text: root.recommendation && root.recommendation.win_rate !== null
+                            ? "17L " + (root.recommendation.win_rate * 100).toFixed(1) + "%"
+                            : "17L —"
+                        color: Theme.textMuted
+                        font.family: fixedFontFamily
+                    }
+
+                    Label {
+                        text: root.recommendation
+                            ? root.recommendation.letter_grade || "—" : ""
+                        color: Theme.warning
+                        font.bold: true
+                    }
+                }
+
+                Label {
+                    objectName: "cardPreviewExplanation"
+                    Layout.fillWidth: true
+                    text: {
+                        if (!root.recommendation)
+                            return ""
+                        if (root.detailedIntel) {
+                            return root.recommendation.explanation
+                                || "Explanation unavailable."
+                        }
+                        return root.recommendation.explanation || ""
+                    }
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.textPixelSize(12)
+                    wrapMode: Text.WordWrap
+                }
             }
         }
 

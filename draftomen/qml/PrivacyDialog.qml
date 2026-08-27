@@ -43,7 +43,7 @@ Dialog {
             anchors.rightMargin: 16
             text: root.title
             color: Theme.text
-            font.pixelSize: 18
+            font.pixelSize: Theme.textPixelSize(18)
             font.bold: true
             verticalAlignment: Text.AlignVCenter
             Accessible.name: text

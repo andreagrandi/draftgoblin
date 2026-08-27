@@ -42,7 +42,7 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
-                Label { text: "Backtest report"; color: Theme.text; font.pixelSize: 22; font.bold: true }
+                Label { text: "Backtest report"; color: Theme.text; font.pixelSize: Theme.textPixelSize(22); font.bold: true }
                 Label {
                     objectName: "backtestSubtitle"
                     Layout.fillWidth: true
@@ -79,7 +79,7 @@ Item {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - 40, 440)
                 spacing: 10
-                Label { text: "No backtest available"; color: Theme.text; font.pixelSize: 20; font.bold: true }
+                Label { text: "No backtest available"; color: Theme.text; font.pixelSize: Theme.textPixelSize(20); font.bold: true }
                 Label { Layout.fillWidth: true; text: "Complete or recover a draft to run a backtest. Published failures can be retried or dismissed above."; color: Theme.textMuted; wrapMode: Text.WordWrap }
             }
         }
@@ -109,8 +109,8 @@ Item {
                     ColumnLayout {
                         anchors.centerIn: parent
                         spacing: 3
-                        Label { Layout.alignment: Qt.AlignHCenter; text: modelData.value; color: modelData.label === "MATCHED" ? Theme.primary : Theme.text; font.family: fixedFontFamily; font.pixelSize: root.narrow ? 16 : 20; font.bold: true }
-                        Label { Layout.alignment: Qt.AlignHCenter; text: modelData.label; color: Theme.textMuted; font.pixelSize: 9; font.bold: true; font.letterSpacing: 0.8 }
+                        Label { Layout.alignment: Qt.AlignHCenter; text: modelData.value; color: modelData.label === "MATCHED" ? Theme.primary : Theme.text; font.family: fixedFontFamily; font.pixelSize: Theme.textPixelSize(root.narrow ? 16 : 20); font.bold: true }
+                        Label { Layout.alignment: Qt.AlignHCenter; text: modelData.label; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(9); font.bold: true; font.letterSpacing: 0.8 }
                     }
                 }
             }
@@ -150,18 +150,18 @@ Item {
                 RowLayout {
                     visible: !root.narrow
                     Layout.fillWidth: true
-                    Label { Layout.preferredWidth: 74; text: "PICK"; color: Theme.textMuted; font.pixelSize: 10 }
-                    Label { Layout.fillWidth: true; text: "RECOMMENDED"; color: Theme.textMuted; font.pixelSize: 10 }
-                    Label { Layout.fillWidth: true; text: "ACTUAL"; color: Theme.textMuted; font.pixelSize: 10 }
-                    Label { Layout.preferredWidth: 84; text: "RESULT"; color: Theme.textMuted; font.pixelSize: 10 }
-                    Label { Layout.preferredWidth: 70; text: "DO"; color: Theme.textMuted; font.pixelSize: 10 }
+                    Label { Layout.preferredWidth: 74; text: "PICK"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10) }
+                    Label { Layout.fillWidth: true; text: "RECOMMENDED"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10) }
+                    Label { Layout.fillWidth: true; text: "ACTUAL"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10) }
+                    Label { Layout.preferredWidth: 84; text: "RESULT"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10) }
+                    Label { Layout.preferredWidth: 70; text: "DO"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10) }
                     Label {
                         objectName: "backtestWinRateHeader"
                         visible: root.displayPreferences.secondaryStats
                         Layout.preferredWidth: 70
                         text: "WR"
                         color: Theme.textMuted
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.textPixelSize(10)
                     }
                     Label {
                         objectName: "backtestSourceHeader"
@@ -169,7 +169,7 @@ Item {
                         Layout.preferredWidth: 90
                         text: "SOURCE"
                         color: Theme.textMuted
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.textPixelSize(10)
                     }
                 }
                 ListView {
@@ -208,7 +208,11 @@ Item {
                             return modelData.recommended.name + " → " + actualName
                         }
                         width: ListView.view.width
-                        height: root.narrow ? (root.displayPreferences.secondaryStats ? 108 : 76) : 48
+                        height: root.narrow
+                            ? Math.max(root.displayPreferences.secondaryStats ? 108 : 76,
+                                narrowBacktestContent.implicitHeight
+                                + narrowBacktestContent.anchors.topMargin * 2)
+                            : 48
                         color: backtestRow.skipped ? Theme.warningDark : Theme.surface
                         border.color: Theme.outline
                         border.width: 1
@@ -268,9 +272,14 @@ Item {
                             }
                         }
                         ColumnLayout {
+                            id: narrowBacktestContent
                             visible: root.narrow
-                            anchors.fill: parent
-                            anchors.margins: 9
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.leftMargin: 9
+                            anchors.rightMargin: 9
+                            anchors.topMargin: 9
                             spacing: 2
                             RowLayout {
                                 Layout.fillWidth: true
@@ -283,7 +292,7 @@ Item {
                                 Layout.fillWidth: true
                                 text: "DO " + (modelData.recommended_score !== null && modelData.recommended_score !== undefined ? modelData.recommended_score : "—")
                                 color: Theme.textMuted
-                                font.pixelSize: 10
+                                font.pixelSize: Theme.textPixelSize(10)
                             }
                             GridLayout {
                                 objectName: "backtestNarrowSecondary" + index
@@ -292,16 +301,16 @@ Item {
                                 columns: 2
                                 columnSpacing: 8
                                 rowSpacing: 1
-                                Label { text: "WR " + (modelData.recommended_win_rate !== null && modelData.recommended_win_rate !== undefined ? (modelData.recommended_win_rate * 100).toFixed(1) + "%" : "—"); color: Theme.textMuted; font.pixelSize: 10 }
-                                Label { text: "Pool " + (modelData.pool_size !== null && modelData.pool_size !== undefined ? modelData.pool_size : "—"); color: Theme.textMuted; font.pixelSize: 10 }
-                                Label { text: "Offered " + (modelData.offered_count !== null && modelData.offered_count !== undefined ? modelData.offered_count : "—"); color: Theme.textMuted; font.pixelSize: 10 }
-                                Label { Layout.columnSpan: 2; Layout.fillWidth: true; text: modelData.data_source || "History unavailable"; color: Theme.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
+                                Label { text: "WR " + (modelData.recommended_win_rate !== null && modelData.recommended_win_rate !== undefined ? (modelData.recommended_win_rate * 100).toFixed(1) + "%" : "—"); color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10) }
+                                Label { text: "Pool " + (modelData.pool_size !== null && modelData.pool_size !== undefined ? modelData.pool_size : "—"); color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10) }
+                                Label { text: "Offered " + (modelData.offered_count !== null && modelData.offered_count !== undefined ? modelData.offered_count : "—"); color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10) }
+                                Label { Layout.columnSpan: 2; Layout.fillWidth: true; text: modelData.data_source || "History unavailable"; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(10); elide: Text.ElideRight }
                             }
                         }
                     }
                 }
             }
         }
-        Label { visible: root.hasReport; Layout.fillWidth: true; text: "This is an analytical comparison, not a player grade."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
+        Label { visible: root.hasReport; Layout.fillWidth: true; text: "This is an analytical comparison, not a player grade."; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); wrapMode: Text.WordWrap }
     }
 }

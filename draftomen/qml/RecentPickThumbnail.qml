@@ -62,7 +62,7 @@ Item {
                 return "No image available"
             }
             color: Theme.textMuted
-            font.pixelSize: 10
+            font.pixelSize: Theme.textPixelSize(10)
             font.bold: true
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter

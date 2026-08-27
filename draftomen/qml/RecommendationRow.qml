@@ -45,7 +45,7 @@ FocusScope {
 
     implicitHeight: wide
         ? Math.max(84, wideCardDetails.implicitHeight + 16)
-        : 112
+        : Math.max(112, narrowCardDetails.implicitHeight + 16)
 
     Accessible.role: Accessible.ListItem
     Accessible.name: "Rank " + recommendation.rank + ", "
@@ -163,7 +163,7 @@ FocusScope {
                             return "No image available"
                         }
                         color: Theme.textMuted
-                        font.pixelSize: 9
+                        font.pixelSize: Theme.textPixelSize(9)
                         font.bold: true
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -178,7 +178,6 @@ FocusScope {
                 visible: root.wide
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
-                Layout.fillHeight: true
                 spacing: 1
 
                 Label {
@@ -187,7 +186,7 @@ FocusScope {
                     Layout.minimumWidth: 0
                     text: root.recommendation.card.name
                     color: Theme.text
-                    font.pixelSize: 14
+                    font.pixelSize: Theme.textPixelSize(14)
                     font.bold: root.recommended || root.selected
                     wrapMode: Text.WordWrap
                     elide: Text.ElideNone
@@ -208,7 +207,7 @@ FocusScope {
                             + " · " + (root.recommendation.source_label
                                 || "Source unavailable")
                         color: Theme.textMuted
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.textPixelSize(11)
                         elide: Text.ElideRight
                     }
 
@@ -221,7 +220,7 @@ FocusScope {
                         Layout.maximumWidth: 102
                         text: root.stateText
                         color: root.stateColor
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.textPixelSize(10)
                         font.bold: true
                         font.letterSpacing: 0.8
                         horizontalAlignment: Text.AlignRight
@@ -235,7 +234,6 @@ FocusScope {
                 visible: !root.wide
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
-                Layout.fillHeight: true
                 spacing: 4
 
                 RowLayout {
@@ -249,7 +247,7 @@ FocusScope {
                         Layout.minimumWidth: 0
                         text: root.recommendation.card.name
                         color: Theme.text
-                        font.pixelSize: 14
+                        font.pixelSize: Theme.textPixelSize(14)
                         font.bold: root.recommended || root.selected
                         wrapMode: Text.WrapAnywhere
                         elide: Text.ElideNone
@@ -264,7 +262,7 @@ FocusScope {
                         Layout.maximumWidth: 102
                         text: root.stateText
                         color: root.stateColor
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.textPixelSize(10)
                         font.bold: true
                         font.letterSpacing: 0.8
                         horizontalAlignment: Text.AlignRight
@@ -300,7 +298,7 @@ FocusScope {
                         text: "DO " + root.recommendation.score
                         color: root.recommended ? Theme.primary : Theme.text
                         font.family: fixedFontFamily
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.textPixelSize(12)
                         font.bold: true
                     }
 
@@ -308,13 +306,13 @@ FocusScope {
                         text: "17L " + root.winRateText
                         color: Theme.text
                         font.family: fixedFontFamily
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.textPixelSize(12)
                     }
 
                     Label {
                         text: "Grade " + (root.recommendation.letter_grade || "—")
                         color: Theme.warning
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.textPixelSize(12)
                         font.bold: true
                     }
 
@@ -326,7 +324,7 @@ FocusScope {
                             + " · " + (root.recommendation.source_label
                                 || "Source unavailable")
                         color: Theme.textMuted
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.textPixelSize(11)
                         horizontalAlignment: Text.AlignRight
                         elide: Text.ElideRight
                     }

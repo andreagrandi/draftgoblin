@@ -13,6 +13,7 @@ from typing import Any, Literal, TypeAlias, cast
 from PySide6.QtCore import (
     QByteArray,
     QAbstractListModel,
+    QEvent,
     QModelIndex,
     QMetaObject,
     QObject,
@@ -24,6 +25,7 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
+from PySide6.QtGui import QFontInfo, QGuiApplication
 
 from draftomen.preferences import (
     GuiDisplayPreferences,
@@ -53,6 +55,8 @@ from draftomen.session import (
 SessionFactory = Callable[[SnapshotPublisher], LiveSession]
 _ImageRequestKind: TypeAlias = Literal["selected", "recommendation", "recent"]
 _OMITTED_SNAPSHOT_FIELDS = frozenset(("current_pack_event", "current_scored_pack"))
+
+_DEFAULT_APPLICATION_FONT_PIXEL_SIZE = 13
 
 
 _WORKER_ERROR_ID = "qt-worker-error"
@@ -162,6 +166,7 @@ class GuiPreferencesAdapter(QObject):
 
     preferencesChanged = Signal()
     persistenceChanged = Signal()
+    applicationFontPixelSizeChanged = Signal()
 
     def __init__(
         self,
@@ -174,6 +179,14 @@ class GuiPreferencesAdapter(QObject):
         self._preferences, self._persistence_message = load_gui_preferences(
             app_dir=app_dir,
         )
+        application = QGuiApplication.instance()
+        if isinstance(application, QGuiApplication):
+            application.installEventFilter(self)
+
+    def eventFilter(self, _watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.ApplicationFontChange:
+            self.applicationFontPixelSizeChanged.emit()
+        return super().eventFilter(_watched, event)
 
     @Property(bool, notify=preferencesChanged)
     def compactDensity(self) -> bool:
@@ -190,6 +203,22 @@ class GuiPreferencesAdapter(QObject):
     @Property(bool, notify=preferencesChanged)
     def detailedBuildContext(self) -> bool:
         return self._preferences.detailed_build_context
+
+    @Property(bool, notify=preferencesChanged)
+    def systemTextScaling(self) -> bool:
+        return self._preferences.system_text_scaling
+
+    @Property(int, notify=applicationFontPixelSizeChanged)
+    def applicationFontPixelSize(self) -> int:
+        application = QGuiApplication.instance()
+        if not isinstance(application, QGuiApplication):
+            return _DEFAULT_APPLICATION_FONT_PIXEL_SIZE
+        pixel_size = QFontInfo(application.font()).pixelSize()
+        return (
+            pixel_size
+            if pixel_size > 0
+            else _DEFAULT_APPLICATION_FONT_PIXEL_SIZE
+        )
 
     @Property(str, notify=persistenceChanged)
     def persistenceMessage(self) -> str:
@@ -210,6 +239,10 @@ class GuiPreferencesAdapter(QObject):
     @Slot(bool)
     def setDetailedBuildContext(self, enabled: bool) -> None:
         self._replace_preferences(detailed_build_context=enabled)
+
+    @Slot(bool)
+    def setSystemTextScaling(self, enabled: bool) -> None:
+        self._replace_preferences(system_text_scaling=enabled)
 
     def _replace_preferences(self, **changes: bool) -> None:
         updated = replace(self._preferences, **changes)

@@ -13,6 +13,9 @@ ApplicationWindow {
     visible: true
     title: applicationTitle
     color: Theme.background
+    font.pixelSize: guiPreferences.systemTextScaling
+        ? guiPreferences.applicationFontPixelSize
+        : Theme.baseFontPixelSize
 
     property string currentSurface: initialSurface
     readonly property bool narrow: width < Theme.narrowBreakpoint

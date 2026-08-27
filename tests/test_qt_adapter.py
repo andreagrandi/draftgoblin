@@ -867,14 +867,16 @@ def test_gui_preferences_adapter_persists_display_choices_independently(
     adapter.setSecondaryStats(False)
     adapter.setCardPreview(False)
     adapter.setDetailedBuildContext(False)
+    adapter.setSystemTextScaling(False)
     reloaded = GuiPreferencesAdapter(app_dir=tmp_path / "app")
 
-    assert changes == [True, True, True, True]
+    assert changes == [True, True, True, True, True]
     assert adapter.persistenceMessage == "Saved"
     assert reloaded.compactDensity is True
     assert reloaded.secondaryStats is False
     assert reloaded.cardPreview is False
     assert reloaded.detailedBuildContext is False
+    assert reloaded.systemTextScaling is False
 
 
 def test_live_adapter_keeps_selection_responsive_during_thumbnail_fetches(

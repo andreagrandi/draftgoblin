@@ -46,6 +46,19 @@ QtObject {
     readonly property int targetHeight: 42
     readonly property int narrowBreakpoint: 980
 
+    readonly property real baseFontPixelSize: 13
+
+    readonly property real textScale: {
+        if (!guiPreferences.systemTextScaling)
+            return 1
+        const applicationPixelSize = guiPreferences.applicationFontPixelSize
+        return applicationPixelSize > 0 ? applicationPixelSize / baseFontPixelSize : 1
+    }
+
+    function textPixelSize(basePixelSize) {
+        return Math.round(basePixelSize * textScale)
+    }
+
     function colorForMana(symbol) {
         if (symbol === "W") return whiteMana
         if (symbol === "U") return blueMana

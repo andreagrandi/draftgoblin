@@ -117,7 +117,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: "POOL SUMMARY"
                     color: Theme.textMuted
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.textPixelSize(11)
                     font.bold: true
                     font.letterSpacing: 1.2
                 }
@@ -193,7 +193,7 @@ Rectangle {
                 Label {
                     text: "COLOR DISTRIBUTION"
                     color: Theme.textMuted
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.textPixelSize(11)
                     font.bold: true
                     font.letterSpacing: 1
                 }
@@ -229,7 +229,7 @@ Rectangle {
                                     id: colorName
                                     text: root.colorLabel(modelData[0])
                                     color: Theme.textMuted
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.textPixelSize(11)
                                 }
 
                                 Label {
@@ -251,7 +251,7 @@ Rectangle {
                         Layout.fillWidth: true
                         text: "MANA CURVE"
                         color: Theme.textMuted
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.textPixelSize(11)
                         font.bold: true
                         font.letterSpacing: 1
                     }
@@ -260,7 +260,7 @@ Rectangle {
                         objectName: "poolManaCurveAverage"
                         text: root.averageManaValueText()
                         color: Theme.textMuted
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.textPixelSize(11)
                         Accessible.name: text
                     }
                 }
@@ -301,7 +301,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: root.manaLabel(index)
                                 color: Theme.textMuted
-                                font.pixelSize: 10
+                                font.pixelSize: Theme.textPixelSize(10)
                                 horizontalAlignment: Text.AlignHCenter
                             }
                         }

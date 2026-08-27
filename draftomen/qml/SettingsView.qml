@@ -10,6 +10,10 @@ Item {
     required property var sessionState
     required property bool narrow
     required property var displayPreferences
+    readonly property int effectiveSystemScalePercent: Math.round(
+        root.displayPreferences.applicationFontPixelSize
+            / Theme.baseFontPixelSize * 100
+    )
 
     ScrollView {
         id: settingsScroll
@@ -24,7 +28,7 @@ Item {
             Label {
                 text: "Settings"
                 color: Theme.text
-                font.pixelSize: 22
+                font.pixelSize: Theme.textPixelSize(22)
                 font.bold: true
             }
             Label {
@@ -51,7 +55,7 @@ Item {
                     Label {
                         text: "DRAFT GUIDANCE"
                         color: Theme.primary
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.textPixelSize(10)
                         font.bold: true
                         font.letterSpacing: 1.1
                     }
@@ -64,7 +68,7 @@ Item {
                                 Layout.fillWidth: true
                                 text: "Controls recommendation order and backtest comparison."
                                 color: Theme.textMuted
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.textPixelSize(11)
                                 wrapMode: Text.WordWrap
                             }
                         }
@@ -100,7 +104,7 @@ Item {
                                 Layout.fillWidth: true
                                 text: "Consider supported single-pip cards when fixing allows."
                                 color: Theme.textMuted
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.textPixelSize(11)
                                 wrapMode: Text.WordWrap
                             }
                         }
@@ -131,7 +135,7 @@ Item {
                     Label {
                         text: "DISPLAY"
                         color: Theme.primary
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.textPixelSize(10)
                         font.bold: true
                         font.letterSpacing: 1.1
                     }
@@ -140,7 +144,7 @@ Item {
                         ColumnLayout {
                             Layout.fillWidth: true
                             Label { text: "Compact density"; color: Theme.text; font.bold: true }
-                            Label { Layout.fillWidth: true; text: "Reduce list spacing while retaining 40px targets."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                            Label { Layout.fillWidth: true; text: "Reduce list spacing while retaining 40px targets."; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); wrapMode: Text.WordWrap }
                         }
                         SettingsSwitch {
                             objectName: "settingsCompactDensitySwitch"
@@ -155,7 +159,7 @@ Item {
                         ColumnLayout {
                             Layout.fillWidth: true
                             Label { text: "Secondary statistics"; color: Theme.text; font.bold: true }
-                            Label { Layout.fillWidth: true; text: "Show ALSA, mana value, and source details."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                            Label { Layout.fillWidth: true; text: "Show ALSA, mana value, and source details."; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); wrapMode: Text.WordWrap }
                         }
                         SettingsSwitch {
                             objectName: "settingsSecondaryStatsSwitch"
@@ -170,7 +174,7 @@ Item {
                         ColumnLayout {
                             Layout.fillWidth: true
                             Label { text: "Card image preview"; color: Theme.text; font.bold: true }
-                            Label { Layout.fillWidth: true; text: "Keep the selected card image visible when space allows."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                            Label { Layout.fillWidth: true; text: "Keep the selected card image visible when space allows."; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); wrapMode: Text.WordWrap }
                         }
                         SettingsSwitch {
                             objectName: "settingsCardPreviewSwitch"
@@ -185,7 +189,7 @@ Item {
                         ColumnLayout {
                             Layout.fillWidth: true
                             Label { text: "Detailed build context"; color: Theme.text; font.bold: true }
-                            Label { Layout.fillWidth: true; text: "Show pair reasoning and durable build warnings."; color: Theme.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                            Label { Layout.fillWidth: true; text: "Show pair reasoning and durable build warnings."; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); wrapMode: Text.WordWrap }
                         }
                         SettingsSwitch {
                             objectName: "settingsDetailedBuildContextSwitch"
@@ -200,7 +204,7 @@ Item {
                         Layout.fillWidth: true
                         text: root.displayPreferences.persistenceMessage
                         color: root.displayPreferences.persistenceMessage === "Saved" ? Theme.primary : Theme.warning
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.textPixelSize(11)
                         Accessible.name: text
                         Accessible.description: "Display preference persistence status: " + text
                     }
@@ -219,13 +223,36 @@ Item {
                     anchors.fill: parent
                     anchors.margins: 16
                     spacing: 8
-                    Label { text: "ACCESSIBILITY"; color: Theme.primary; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1.1 }
-                    Label { text: "System text scaling"; color: Theme.text; font.bold: true }
-                    Label {
+                    Label { text: "ACCESSIBILITY"; color: Theme.primary; font.pixelSize: Theme.textPixelSize(10); font.bold: true; font.letterSpacing: 1.1 }
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: "Draft Omen follows Qt and operating-system text and reduced-motion settings."
-                        color: Theme.textMuted
-                        wrapMode: Text.WordWrap
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Label { text: "Follow system text size"; color: Theme.text; font.bold: true }
+                            Label {
+                                objectName: "settingsSystemTextScalingMessage"
+                                Layout.fillWidth: true
+                                text: {
+                                    const percent = root.effectiveSystemScalePercent
+                                    if (!root.displayPreferences.systemTextScaling)
+                                        return "Using Draft Omen's 100% baseline. The detected system scale is " + percent + "%."
+                                    if (percent === 100)
+                                        return "Following system text size. The detected 100% scale matches Draft Omen's default, so no visible size change is expected."
+                                    return "Following system text size at the detected " + percent + "% scale."
+                                }
+                                color: Theme.textMuted
+                                wrapMode: Text.WordWrap
+                                Accessible.name: text
+                                Accessible.description: text
+                            }
+                        }
+                        SettingsSwitch {
+                            objectName: "settingsSystemTextScalingSwitch"
+                            checked: root.displayPreferences.systemTextScaling
+                            Accessible.name: "Follow system text size"
+                            Accessible.description: "Use the resolved system text size instead of Draft Omen's 100% baseline."
+                            onToggled: root.displayPreferences.setSystemTextScaling(checked)
+                        }
                     }
                 }
             }
@@ -242,7 +269,7 @@ Item {
                     anchors.fill: parent
                     anchors.margins: 16
                     spacing: 10
-                    Label { text: "DATA STATUS"; color: Theme.primary; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1.1 }
+                    Label { text: "DATA STATUS"; color: Theme.primary; font.pixelSize: Theme.textPixelSize(10); font.bold: true; font.letterSpacing: 1.1 }
                     Label { text: "Card metadata · " + root.sessionState.card_data.message; color: Theme.text }
                     Label { text: "Ratings · " + root.sessionState.ratings.message; color: Theme.textMuted }
                     Label { text: "Statistics attribution · 17Lands"; color: Theme.textMuted }

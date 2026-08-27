@@ -186,6 +186,7 @@ def test_gui_preferences_round_trip_and_isolate_display_choices(
         secondary_stats=False,
         card_preview=False,
         detailed_build_context=False,
+        system_text_scaling=False,
     )
 
     assert save_gui_preferences(preferences=expected, app_dir=app_dir) is None
@@ -199,6 +200,7 @@ def test_gui_preferences_round_trip_and_isolate_display_choices(
             "compact_density": True,
             "detailed_build_context": False,
             "secondary_stats": False,
+            "system_text_scaling": False,
         },
         "version": 1,
     }
