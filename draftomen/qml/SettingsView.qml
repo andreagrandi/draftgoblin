@@ -143,6 +143,21 @@ Item {
                         Layout.fillWidth: true
                         ColumnLayout {
                             Layout.fillWidth: true
+                            Label { text: "Show Backtest navigation"; color: Theme.text; font.bold: true }
+                            Label { Layout.fillWidth: true; text: "Show the Backtest button in the navigation rail."; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); wrapMode: Text.WordWrap }
+                        }
+                        SettingsSwitch {
+                            objectName: "settingsShowBacktestSwitch"
+                            checked: root.displayPreferences.showBacktest
+                            Accessible.name: "Show Backtest navigation"
+                            Accessible.description: "Show the Backtest button in the navigation rail."
+                            onToggled: root.displayPreferences.setShowBacktest(checked)
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ColumnLayout {
+                            Layout.fillWidth: true
                             Label { text: "Compact density"; color: Theme.text; font.bold: true }
                             Label { Layout.fillWidth: true; text: "Reduce list spacing while retaining 40px targets."; color: Theme.textMuted; font.pixelSize: Theme.textPixelSize(11); wrapMode: Text.WordWrap }
                         }

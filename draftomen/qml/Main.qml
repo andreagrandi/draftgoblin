@@ -89,6 +89,7 @@ ApplicationWindow {
             Layout.fillHeight: true
             currentSurface: window.currentSurface
             compact: window.narrow
+            displayPreferences: window.displayPreferences
             onSurfaceRequested: surface => window.currentSurface = surface
             onAboutRequested: opener => {
                 aboutDialog.returnFocusItem = opener

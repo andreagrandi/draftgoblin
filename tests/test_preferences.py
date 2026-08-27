@@ -187,6 +187,7 @@ def test_gui_preferences_round_trip_and_isolate_display_choices(
         card_preview=False,
         detailed_build_context=False,
         system_text_scaling=False,
+        show_backtest=True,
     )
 
     assert save_gui_preferences(preferences=expected, app_dir=app_dir) is None
@@ -200,6 +201,7 @@ def test_gui_preferences_round_trip_and_isolate_display_choices(
             "compact_density": True,
             "detailed_build_context": False,
             "secondary_stats": False,
+            "show_backtest": True,
             "system_text_scaling": False,
         },
         "version": 1,
@@ -218,6 +220,7 @@ def test_gui_preferences_recover_from_invalid_schema_and_fields(
                 "display": {
                     "compact_density": "yes",
                     "secondary_stats": False,
+                    "show_backtest": "yes",
                 },
             },
         ),
@@ -229,6 +232,7 @@ def test_gui_preferences_recover_from_invalid_schema_and_fields(
     assert preferences == GuiDisplayPreferences(secondary_stats=False)
     assert warning is not None
     assert "compact_density" in warning
+    assert "show_backtest" in warning
     path.write_text(json.dumps({"version": 2, "display": {}}), encoding="utf-8")
     _, unsupported_warning = load_gui_preferences(app_dir=path.parent)
     assert unsupported_warning is not None

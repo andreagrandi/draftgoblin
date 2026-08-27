@@ -10,6 +10,8 @@ Rectangle {
 
     required property string currentSurface
     required property bool compact
+    required property var displayPreferences
+    readonly property bool backtestNavigationVisible: root.displayPreferences.showBacktest
     signal surfaceRequested(string surface)
     signal aboutRequested(var opener)
     signal privacyRequested(var opener)
@@ -78,6 +80,8 @@ Rectangle {
 
                 Layout.fillWidth: true
                 Layout.preferredHeight: Theme.targetHeight
+                visible: navigationButton.modelData.key !== "backtest"
+                    || root.backtestNavigationVisible
                 text: root.compact
                     ? navigationButton.modelData.shortLabel
                     : navigationButton.modelData.label
