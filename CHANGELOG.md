@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Automatically open Deck Build and build the completed draft after the final pick.
 - Add a larger, borderless overlay for the two product screenshots.
 - Add a persisted toggle for following system text scaling in the desktop Settings, with effective scale feedback.
 - Show desktop display-preference autosave status in the bottom status bar.

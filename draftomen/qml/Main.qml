@@ -22,41 +22,74 @@ ApplicationWindow {
     readonly property var sessionState: provider.state
     readonly property var displayPreferences: guiPreferences
     property string automaticBuildContext: ""
+    property string pendingCompletedDraftBuildContext: ""
+    property string previousPublishedDraftContext: ""
+    property bool previousDraftCompleted: false
     readonly property string desktopApplicationVersion: applicationVersion
 
+    function observePublishedDraftState() {
+        const state = window.sessionState
+        const draft = state ? state.draft : null
+        const draftContext = (
+            draft && draft.account_id && draft.draft_id
+                ? draft.account_id + ":" + draft.draft_id
+                : ""
+        )
+        const draftCompleted = Boolean(draft && draft.completed)
+        const completedTransition = Boolean(
+            draftContext
+            && draftContext === window.previousPublishedDraftContext
+            && !window.previousDraftCompleted
+            && draftCompleted
+        )
+
+        window.previousPublishedDraftContext = draftContext
+        window.previousDraftCompleted = draftCompleted
+        if (completedTransition) {
+            window.pendingCompletedDraftBuildContext = draftContext
+            window.currentSurface = "build"
+        }
+        Qt.callLater(window.requestCompletedDraftBuild)
+    }
+
     function requestCompletedDraftBuild() {
-        const errors = window.sessionState ? window.sessionState.errors : null
+        const state = window.sessionState
+        const errors = state ? state.errors : null
         if (errors && errors.some(error => error && error.operation === "build")) {
             window.automaticBuildContext = ""
             return
         }
 
-        const progress = window.sessionState ? window.sessionState.progress : null
+        const progress = state ? state.progress : null
         if (progress && progress.operation === "build")
             return
 
         if (window.currentSurface !== "build")
             return
 
-        const draft = window.sessionState ? window.sessionState.draft : null
-        const pool = window.sessionState ? window.sessionState.pool : null
-        const cardData = window.sessionState ? window.sessionState.card_data : null
+        const draft = state ? state.draft : null
+        const pool = state ? state.pool : null
+        const cardData = state ? state.card_data : null
         if (!draft || !draft.completed || !pool || pool.total_cards <= 0
-                || !cardData || cardData.phase !== "ready"
-                || window.sessionState.build)
+                || !cardData || cardData.phase !== "ready")
             return
 
         const context = draft.account_id + ":" + draft.draft_id
-        if (window.automaticBuildContext === context)
+        const completedTransitionPending = (
+            window.pendingCompletedDraftBuildContext === context
+        )
+        if (!completedTransitionPending
+                && (state.build || window.automaticBuildContext === context))
             return
 
         window.automaticBuildContext = context
+        window.pendingCompletedDraftBuildContext = ""
         window.provider.requestBuild("")
     }
 
     onCurrentSurfaceChanged: Qt.callLater(window.requestCompletedDraftBuild)
-    onSessionStateChanged: Qt.callLater(window.requestCompletedDraftBuild)
-    Component.onCompleted: Qt.callLater(window.requestCompletedDraftBuild)
+    onSessionStateChanged: window.observePublishedDraftState()
+    Component.onCompleted: window.observePublishedDraftState()
 
     header: AppBar {
         narrow: window.narrow
