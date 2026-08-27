@@ -455,6 +455,19 @@
     background: #080b14;
   }
 
+  .showcase-image-trigger {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: zoom-in;
+  }
+
+  .showcase-image-trigger:focus-visible {
+    outline-offset: -4px;
+  }
+
   .showcase-card img {
     width: 100%;
     height: auto;
@@ -476,6 +489,56 @@
     color: #95a1bc;
     font-size: 0.87rem;
     line-height: 1.5;
+  }
+
+  body:has(.image-lightbox[open]) {
+    overflow: hidden;
+  }
+
+  .image-lightbox,
+  .image-lightbox img,
+  .image-lightbox-close {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .image-lightbox {
+    width: fit-content;
+    max-width: none;
+    height: fit-content;
+    max-height: none;
+    margin: auto;
+    padding: 0;
+    overflow: visible;
+    background: transparent;
+  }
+
+  .image-lightbox::backdrop {
+    background: rgb(3 5 12 / 0.9);
+  }
+
+  .image-lightbox img {
+    width: auto;
+    max-width: calc(100vw - 2rem);
+    height: auto;
+    max-height: calc(100vh - 2rem);
+    object-fit: contain;
+  }
+
+  .image-lightbox-close {
+    position: fixed;
+    z-index: 1;
+    top: 1rem;
+    right: 1rem;
+    width: 2.75rem;
+    height: 2.75rem;
+    padding: 0;
+    background: transparent;
+    color: var(--color-base-content);
+    cursor: pointer;
+    font-size: 2rem;
+    line-height: 1;
   }
 
   .callout {
