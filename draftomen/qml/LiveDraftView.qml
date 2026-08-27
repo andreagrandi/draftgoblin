@@ -13,12 +13,45 @@ Item {
     required property bool narrow
     required property var displayPreferences
 
-    // The wide recommendation list needs this content width for its fixed
-    // metric columns and a two-line card name plus metadata.
-    readonly property int wideRecommendationsMinimumWidth: 762 + 450 + Theme.gutter
+    // Keep the documented 1440px layout wide while making room for the
+    // larger details pane; the recommendation list remains scrollable.
+    readonly property int wideCardDetailsWidth: 550
+    readonly property int wideRecommendationsMinimumListWidth: 662
+    readonly property int wideRecommendationsMinimumWidth:
+        root.wideRecommendationsMinimumListWidth
+            + root.wideCardDetailsWidth + Theme.gutter
+    readonly property int wideCardPreviewMinimumHeight: 410
+    readonly property int widePoolDetailsMinimumHeight: 180
+    readonly property int wideRecommendationsMinimumHeight:
+        root.wideCardPreviewMinimumHeight + Theme.gutter
+            + root.widePoolDetailsMinimumHeight
+    readonly property real wideRecommendationsAvailableHeight:
+        root.height - draftHeader.implicitHeight
+            - (stateBanner.visible ? stateBanner.implicitHeight : 0)
+            - Theme.gutter * 2
     readonly property bool wideRecommendations: !root.narrow
         && root.width >= root.wideRecommendationsMinimumWidth
+        && root.wideRecommendationsAvailableHeight
+            >= root.wideRecommendationsMinimumHeight
 
+    // Preserve the normal recommendation/detail balance while reserving
+    // enough height for the details tab at the supported compact minimum.
+    readonly property int narrowRecommendationPreferredHeight: 220
+    readonly property int narrowDetailsPreferredHeight: 340
+    readonly property int narrowDetailsMinimumHeight: 276
+    readonly property int narrowLayoutSpacing: 8
+    readonly property real narrowRecommendationAvailableHeight:
+        root.height - draftHeader.implicitHeight
+            - (stateBanner.visible ? stateBanner.implicitHeight : 0)
+            - Theme.gutter * 2
+            - detailTabs.implicitHeight - root.narrowLayoutSpacing * 2
+            - root.narrowDetailsMinimumHeight
+    readonly property real narrowRecommendationMinimumHeight: Math.max(
+        0, Math.min(
+            root.narrowRecommendationPreferredHeight,
+            root.narrowRecommendationAvailableHeight
+        )
+    )
     readonly property bool hasRecommendations: sessionState.recommendations
         && sessionState.recommendations.cards
         && sessionState.recommendations.cards.length > 0
@@ -91,6 +124,7 @@ Item {
         spacing: Theme.gutter
 
         RowLayout {
+            id: draftHeader
             Layout.fillWidth: true
             spacing: 16
 
@@ -173,6 +207,8 @@ Item {
         }
 
         StateBanner {
+            id: stateBanner
+            objectName: "liveStateBanner"
             Layout.fillWidth: true
             sessionState: root.sessionState
         }
@@ -266,7 +302,7 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumWidth: 500
+                Layout.minimumWidth: root.wideRecommendationsMinimumListWidth
                 color: "transparent"
 
                 ColumnLayout {
@@ -325,8 +361,8 @@ Item {
             }
 
             ColumnLayout {
-                Layout.preferredWidth: 450
-                Layout.maximumWidth: 450
+                Layout.preferredWidth: root.wideCardDetailsWidth
+                Layout.maximumWidth: root.wideCardDetailsWidth
                 Layout.fillHeight: true
                 Layout.minimumWidth: 350
                 spacing: Theme.gutter
@@ -334,10 +370,12 @@ Item {
                 CardPreview {
                     objectName: "wideLiveCardPreview"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 380
-                    Layout.minimumHeight: 350
+                    Layout.preferredHeight: 430
+                    Layout.minimumHeight: root.wideCardPreviewMinimumHeight
                     recommendation: root.selectedRecommendation
                     detailedIntel: true
+                    detailedImageMaximumWidth: 250
+                    detailedImageWidthRatio: 0.58
                     loading: root.sessionState.card_data.phase === "loading"
                     imageState: root.sessionState.card_image
                     constrainImageFrameToHeight: true
@@ -347,7 +385,7 @@ Item {
                     objectName: "wideLivePoolDetails"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumHeight: 180
+                    Layout.minimumHeight: root.widePoolDetailsMinimumHeight
                     pool: root.sessionState.pool
                     narrow: root.narrow
                 }
@@ -358,13 +396,13 @@ Item {
         visible: !root.wideRecommendations && root.hasRecommendations
         Layout.fillWidth: true
         Layout.fillHeight: true
-        spacing: 8
+        spacing: root.narrowLayoutSpacing
 
         ListView {
             objectName: "narrowRecommendationList"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumHeight: 220
+            Layout.minimumHeight: root.narrowRecommendationMinimumHeight
             spacing: root.displayPreferences.compactDensity ? 3 : 6
             clip: true
             model: root.wideRecommendations ? null : root.recommendationModel
@@ -405,7 +443,8 @@ Item {
 
         StackLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 340
+            Layout.preferredHeight: root.narrowDetailsPreferredHeight
+            Layout.minimumHeight: root.narrowDetailsMinimumHeight
             currentIndex: detailTabs.currentIndex
 
             CardPreview {

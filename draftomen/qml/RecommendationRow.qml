@@ -43,7 +43,9 @@ FocusScope {
         return Theme.outline
     }
 
-    implicitHeight: wide ? 84 : 112
+    implicitHeight: wide
+        ? Math.max(84, wideCardDetails.implicitHeight + 16)
+        : 112
 
     Accessible.role: Accessible.ListItem
     Accessible.name: "Rank " + recommendation.rank + ", "
