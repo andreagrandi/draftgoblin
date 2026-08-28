@@ -13,6 +13,15 @@ Item {
     required property bool narrow
     required property var displayPreferences
 
+    ButtonGroup {
+        id: wideRecommendationFilterGroup
+        exclusive: true
+    }
+    ButtonGroup {
+        id: narrowRecommendationFilterGroup
+        exclusive: true
+    }
+
     // Keep the documented 1440px layout wide while making room for the
     // larger details pane; the recommendation list remains scrollable.
     readonly property int wideCardDetailsWidth: 550
@@ -55,6 +64,9 @@ Item {
     readonly property bool hasRecommendations: sessionState.recommendations
         && sessionState.recommendations.cards
         && sessionState.recommendations.cards.length > 0
+    readonly property string recommendationFilterMode:
+        root.recommendationModel
+            ? root.recommendationModel.filterMode : ""
     readonly property bool hasSetupGuidance: Boolean(
         sessionState.status && sessionState.status.setup_guidance
     )
@@ -310,6 +322,55 @@ Item {
                     spacing: 6
 
                     RowLayout {
+                        objectName: "wideRecommendationFilter"
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 14
+                        Layout.rightMargin: 12
+                        spacing: 8
+
+                        Label {
+                            text: "Card filter"
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.textPixelSize(11)
+                            font.bold: true
+                        }
+
+                        DimensionalButton {
+                            objectName: "wideRecommendationOnColorFilter"
+                            text: "On Color"
+                            checkable: true
+                            checked: root.recommendationFilterMode === "on_color"
+                            accented: checked
+                            ButtonGroup.group: wideRecommendationFilterGroup
+                            Accessible.name: "On Color"
+                            Accessible.description:
+                                "Show only current-pick cards matching the current draft colors."
+                            onClicked: {
+                                if (root.recommendationModel)
+                                    root.recommendationModel.setFilterMode(
+                                        "on_color"
+                                    )
+                            }
+                        }
+
+                        DimensionalButton {
+                            objectName: "wideRecommendationAllFilter"
+                            text: "All"
+                            checkable: true
+                            checked: root.recommendationFilterMode === "all"
+                            accented: checked
+                            ButtonGroup.group: wideRecommendationFilterGroup
+                            Accessible.name: "All"
+                            Accessible.description:
+                                "Show every card in the current pick."
+                            onClicked: {
+                                if (root.recommendationModel)
+                                    root.recommendationModel.setFilterMode("all")
+                            }
+                        }
+                    }
+
+                    RowLayout {
                         Layout.fillWidth: true
                         Layout.leftMargin: 14
                         Layout.rightMargin: 12
@@ -422,22 +483,76 @@ Item {
             }
         }
 
-        TabBar {
-            id: detailTabs
-            objectName: "liveDetailTabs"
+        // Share the existing detail-tab allocation so the filter stays by
+        // the list without adding another vertical row.
+        RowLayout {
+            id: narrowRecommendationControls
+            objectName: "narrowRecommendationControls"
             Layout.fillWidth: true
-            currentIndex: 0
-            Accessible.name: "Live draft details"
+            spacing: root.narrowLayoutSpacing
 
-            DimensionalTabButton {
-                objectName: "liveCardDetailsTab"
-                text: "Card details"
-                Accessible.name: "Card details"
+            RowLayout {
+                id: narrowRecommendationFilter
+                objectName: "narrowRecommendationFilter"
+                spacing: 8
+
+                Label {
+                    text: "Card filter"
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.textPixelSize(11)
+                    font.bold: true
+                }
+
+                DimensionalButton {
+                    objectName: "narrowRecommendationOnColorFilter"
+                    text: "On Color"
+                    checkable: true
+                    checked: root.recommendationFilterMode === "on_color"
+                    accented: checked
+                    ButtonGroup.group: narrowRecommendationFilterGroup
+                    Accessible.name: "On Color"
+                    Accessible.description:
+                        "Show only current-pick cards matching the current draft colors."
+                    onClicked: {
+                        if (root.recommendationModel)
+                            root.recommendationModel.setFilterMode("on_color")
+                    }
+                }
+
+                DimensionalButton {
+                    objectName: "narrowRecommendationAllFilter"
+                    text: "All"
+                    checkable: true
+                    checked: root.recommendationFilterMode === "all"
+                    accented: checked
+                    ButtonGroup.group: narrowRecommendationFilterGroup
+                    Accessible.name: "All"
+                    Accessible.description:
+                        "Show every card in the current pick."
+                    onClicked: {
+                        if (root.recommendationModel)
+                            root.recommendationModel.setFilterMode("all")
+                    }
+                }
             }
-            DimensionalTabButton {
-                objectName: "livePoolTab"
-                text: "Pool"
-                Accessible.name: "Pool details"
+
+            TabBar {
+                id: detailTabs
+                objectName: "liveDetailTabs"
+                Layout.fillWidth: true
+                currentIndex: 0
+                Accessible.name: "Live draft details"
+
+                DimensionalTabButton {
+                    objectName: "liveCardDetailsTab"
+                    text: "Card details"
+                    Accessible.name: "Card details"
+                }
+                DimensionalTabButton {
+                    objectName: "livePoolTab"
+                    text: "Pool"
+                    Accessible.name: "Pool details"
+                }
             }
         }
 

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a clearly labelled On Color / All filter to the Live Draft recommendation list.
+
 ## [0.3.1] - 2026-08-28
 
 - Fix stable release startup and Linux validation with valid workflow syntax, permissions, and Qt runtime dependencies.

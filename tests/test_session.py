@@ -16,9 +16,16 @@ from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.cardimages import CardImageError, CardImageService
 from draftomen.events import (
     AccountEvent,
+    DraftCompletedEvent,
     DraftStartedEvent,
     PackOfferedEvent,
+    PickMadeEvent,
     QuickDraftDetectedEvent,
+)
+from draftomen.pickengine import (
+    ColorCommitment,
+    ScoreNormalization,
+    ScoredPack,
 )
 from draftomen.pool import (
     DraftPick,
@@ -78,6 +85,7 @@ from draftomen.seventeen import (
     SeventeenLandsDownloadProgress,
     SeventeenLandsFormatData,
 )
+from draftomen.splash import SplashState
 
 PROJECT_ROOT = Path(__file__).parent.parent
 FIXTURE_LOG_PATH = PROJECT_ROOT / "tests" / "fixtures" / "quick-draft-msh-player.log"
@@ -151,6 +159,50 @@ def test_pool_aggregates_apply_card_quantities_and_skip_lands() -> None:
     )
     assert mana_curve == (0, 0, 2, 0, 0, 0, 1)
     assert average_mana_value == pytest.approx(11 / 3)
+
+
+def test_pool_state_publishes_canonical_commitment_colors(
+    tmp_path: Path,
+) -> None:
+    commitment = ColorCommitment(
+        pick_index=7,
+        pool_size=6,
+        color_weights=(
+            ("W", 3.0),
+            ("U", 2.0),
+            ("B", 0.0),
+            ("R", 0.0),
+            ("G", 0.0),
+        ),
+        inferred_pair="WU",
+        level=0.5,
+    )
+    scored_pack = ScoredPack(
+        cards=(),
+        normalization=ScoreNormalization(
+            lower_rating=0.0,
+            upper_rating=1.0,
+            neutral_rating=0.5,
+        ),
+        source_summary="fixture",
+        commitment=commitment,
+        splash_state=SplashState(
+            enabled=True,
+            base_pair="WU",
+            active_color=None,
+            picked_card_count=6,
+            fixing_sources=(),
+            aggressive=False,
+        ),
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        card_database=CardDatabase(cards={}),
+    )
+
+    pool = session._pool_state(pool_grp_ids=(), scored_pack=scored_pack)
+
+    assert pool.current_colors == ("W", "U")
 
 
 def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> None:
@@ -243,6 +295,7 @@ def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> Non
             total_cards=2,
             target_cards=42,
             inferred_pair="WU",
+            current_colors=("W", "U"),
             commitment=0.5,
         ),
         progress=ProgressState(
@@ -268,6 +321,7 @@ def test_live_session_snapshot_covers_complete_frontend_state_immutably() -> Non
     assert snapshot.draft == draft
     assert snapshot.recommendations.cards == (recommendation,)
     assert snapshot.pool.cards == (pool_card,)
+    assert snapshot.pool.current_colors == ("W", "U")
     assert snapshot.pool.target_cards == 42
     assert snapshot.progress is not None
     assert snapshot.progress.completed == 1
@@ -579,6 +633,99 @@ def test_live_session_publishes_consumed_events_with_resulting_state(
     assert published[-1].snapshot is session.snapshot
     assert published[-1].scored_pack is not None
     assert published[-1].snapshot.recommendations.cards
+
+
+def test_live_session_account_pick_retains_recommendations_and_colors(
+    tmp_path: Path,
+) -> None:
+    published: list[LiveSessionEvent] = []
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        ratings_loader=lambda set_code: _fixture_ratings_data(set_code=set_code),
+        event_publisher=published.append,
+    )
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+
+    session.process_lines(lines=fixture_lines[:10])
+    before_pick = session.snapshot
+    before_scores = tuple(
+        (recommendation.score, recommendation.win_rate)
+        for recommendation in before_pick.recommendations.cards
+    )
+    assert before_pick.recommendations.cards
+    assert before_pick.pool.current_colors
+    assert before_pick.ratings.phase == DataLoadPhase.READY
+    published.clear()
+
+    session.process_lines(lines=(fixture_lines[10],))
+
+    pick_publication = next(
+        item for item in published if isinstance(item.event, PickMadeEvent)
+    )
+    after_pick = pick_publication.snapshot
+    assert after_pick is session.snapshot
+    assert after_pick.recommendations.cards == before_pick.recommendations.cards
+    assert tuple(
+        (recommendation.score, recommendation.win_rate)
+        for recommendation in after_pick.recommendations.cards
+    ) == before_scores
+    assert after_pick.ratings == before_pick.ratings
+    assert after_pick.current_scored_pack is before_pick.current_scored_pack
+    assert after_pick.pool.current_colors == before_pick.pool.current_colors
+
+
+def test_live_session_accountless_pick_retains_recommendations_and_colors(
+    tmp_path: Path,
+) -> None:
+    published: list[LiveSessionEvent] = []
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        ratings_loader=lambda set_code: _fixture_ratings_data(set_code=set_code),
+        event_publisher=published.append,
+    )
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+
+    session.process_lines(lines=fixture_lines[2:10])
+    before_pick = session.snapshot
+    before_scores = tuple(
+        (recommendation.score, recommendation.win_rate)
+        for recommendation in before_pick.recommendations.cards
+    )
+    assert before_pick.active_account is None
+    assert before_pick.recommendations.cards
+    assert before_pick.pool.current_colors
+    assert before_pick.ratings.phase == DataLoadPhase.READY
+    published.clear()
+
+    session.process_lines(lines=(fixture_lines[10],))
+
+    pick_publication = next(
+        item for item in published if isinstance(item.event, PickMadeEvent)
+    )
+    after_pick = pick_publication.snapshot
+    assert after_pick is session.snapshot
+    assert after_pick.recommendations.cards == before_pick.recommendations.cards
+    assert tuple(
+        (recommendation.score, recommendation.win_rate)
+        for recommendation in after_pick.recommendations.cards
+    ) == before_scores
+    assert after_pick.ratings == before_pick.ratings
+    assert after_pick.current_scored_pack is before_pick.current_scored_pack
+    assert after_pick.pool.current_colors == before_pick.pool.current_colors
+
+    published.clear()
+    session.process_lines(lines=(fixture_lines[132],))
+
+    completion_publication = next(
+        item for item in published if isinstance(item.event, DraftCompletedEvent)
+    )
+    cleared = completion_publication.snapshot
+    assert cleared.recommendations.cards == ()
+    assert cleared.pool.current_colors == ()
 
 
 def test_live_session_startup_scan_processes_previous_then_current_once(

@@ -321,6 +321,7 @@ class PoolState:
     mana_curve: tuple[int, ...] = ()
     average_mana_value: float | None = None
     target_cards: int = 42
+    current_colors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2774,10 +2775,24 @@ class LiveSession:
         *,
         pool_grp_ids: tuple[int, ...],
         scored_pack: ScoredPack | None = None,
+        retained_current_colors: tuple[str, ...] | None = None,
     ) -> PoolState:
+        commitment = None if scored_pack is None else scored_pack.commitment
+        inferred_pair = (
+            None if commitment is None else commitment.inferred_pair
+        )
+        current_colors = (
+            retained_current_colors
+            if retained_current_colors is not None
+            else tuple(inferred_pair or ())
+        )
         database = self._card_database
         if database is None:
-            return PoolState(total_cards=len(pool_grp_ids), target_cards=42)
+            return PoolState(
+                total_cards=len(pool_grp_ids),
+                target_cards=42,
+                current_colors=current_colors,
+            )
 
         counts = Counter(pool_grp_ids)
         cards = tuple(
@@ -2791,20 +2806,17 @@ class LiveSession:
             pool_grp_ids=pool_grp_ids,
         )
         color_distribution, mana_curve, average_mana_value = self._pool_aggregates(
-            cards=cards
+            cards=cards,
         )
         return PoolState(
             cards=cards,
             recent_picks=recent_picks,
             total_cards=len(pool_grp_ids),
             target_cards=42,
-            inferred_pair=(
-                None
-                if scored_pack is None
-                else scored_pack.commitment.inferred_pair
-            ),
+            inferred_pair=inferred_pair,
+            current_colors=current_colors,
             commitment=(
-                0.0 if scored_pack is None else scored_pack.commitment.level
+                0.0 if commitment is None else commitment.level
             ),
             color_distribution=color_distribution,
             mana_curve=mana_curve,
@@ -3038,6 +3050,11 @@ class LiveSession:
                     card_image=card_image,
                     pool=self._pool_state(
                         pool_grp_ids=self._transient_pool_grp_ids,
+                        retained_current_colors=(
+                            self.snapshot.pool.current_colors
+                            if keep_recommendations
+                            else None
+                        ),
                     ),
                     progress=None,
                     errors=errors,
@@ -3233,6 +3250,11 @@ class LiveSession:
                     card_image=card_image,
                     pool=self._pool_state(
                         pool_grp_ids=state.pool_grp_ids,
+                        retained_current_colors=(
+                            self.snapshot.pool.current_colors
+                            if isinstance(event, PickMadeEvent)
+                            else None
+                        ),
                     ),
                     progress=None,
                     errors=errors,

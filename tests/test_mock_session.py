@@ -31,6 +31,7 @@ def test_ready_mock_snapshot_covers_every_desktop_data_surface() -> None:
     assert snapshot.recommendations.cards[0].explanation
     assert snapshot.recommendations.confidence_summary is None
     assert snapshot.pool.total_cards == 24
+    assert snapshot.pool.current_colors == ("W", "G")
     assert snapshot.pool.target_cards == 42
     assert sum(
         pool_card.quantity for pool_card in snapshot.pool.cards

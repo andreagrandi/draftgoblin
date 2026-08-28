@@ -1689,7 +1689,7 @@ from pathlib import Path
 import time
 from tempfile import TemporaryDirectory
 
-from PySide6.QtCore import QMetaObject, QObject, QPointF, Qt, QUrl
+from PySide6.QtCore import QMetaObject, QObject, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QAccessible, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickItem
@@ -1711,6 +1711,12 @@ def find_visual_item(item: QQuickItem, object_name: str) -> QQuickItem | None:
         if found is not None:
             return found
     return None
+
+
+def mouse_center(item: QQuickItem) -> QPoint:
+    point = item.mapToScene(QPointF(item.width() / 2, item.height() / 2))
+    return QPoint(round(point.x()), round(point.y()))
+
 
 def assert_visual_item_inside(parent: QQuickItem, child: QQuickItem) -> None:
     parent_top_left = parent.mapToScene(QPointF(0, 0))
@@ -1854,6 +1860,56 @@ assert wide_pool is not None and wide_pool.isVisible()
 assert wide_row is not None and wide_row.isVisible()
 assert second_row is not None and second_row.isVisible()
 assert third_row is not None and third_row.isVisible()
+
+wide_on_color_filter = root.findChild(QObject, "wideRecommendationOnColorFilter")
+wide_all_filter = root.findChild(QObject, "wideRecommendationAllFilter")
+assert wide_on_color_filter is not None and wide_all_filter is not None
+assert wide_on_color_filter.property("text") == "On Color"
+assert wide_all_filter.property("text") == "All"
+assert wide_all_filter.property("checked") is True
+recommendation_model = provider.recommendationsModel
+source_recommendation_ids = [
+    recommendation["card"]["grp_id"]
+    for recommendation in provider.state["recommendations"]["cards"]
+]
+on_color_ids = [
+    recommendation["card"]["grp_id"]
+    for recommendation in provider.state["recommendations"]["cards"]
+    if not recommendation["card"]["colors"]
+    or all(
+        color in provider.state["pool"]["current_colors"]
+        for color in recommendation["card"]["colors"]
+    )
+]
+QTest.mouseClick(
+    root,
+    Qt.LeftButton,
+    Qt.NoModifier,
+    mouse_center(wide_on_color_filter),
+)
+application.processEvents()
+assert wide_on_color_filter.property("checked") is True
+assert recommendation_model.rowCount() == len(on_color_ids)
+assert [
+    recommendation_model.data(
+        recommendation_model.index(index, 0),
+        recommendation_model.MODEL_DATA_ROLE,
+    )["card"]["grp_id"]
+    for index in range(recommendation_model.rowCount())
+] == on_color_ids
+assert [
+    recommendation["card"]["grp_id"]
+    for recommendation in provider.state["recommendations"]["cards"]
+] == source_recommendation_ids
+QTest.mouseClick(
+    root,
+    Qt.LeftButton,
+    Qt.NoModifier,
+    mouse_center(wide_all_filter),
+)
+application.processEvents()
+assert wide_all_filter.property("checked") is True
+assert recommendation_model.rowCount() == len(source_recommendation_ids)
 
 second_row.forceActiveFocus()
 QTest.keyClick(root, Qt.Key_Return)
@@ -2200,6 +2256,36 @@ fallback_banner_bottom = fallback_banner.mapToItem(
 fallback_list_top = fallback_list.mapToItem(
     live_view, QPointF(0, 0)
 ).y()
+
+narrow_controls = find_visual_item(
+    root.contentItem(), "narrowRecommendationControls"
+)
+narrow_on_color_filter = root.findChild(QObject, "narrowRecommendationOnColorFilter")
+narrow_all_filter = root.findChild(QObject, "narrowRecommendationAllFilter")
+assert narrow_controls is not None and narrow_controls.isVisible()
+assert narrow_on_color_filter is not None and narrow_all_filter is not None
+assert_visual_item_inside(live_view, narrow_controls)
+assert_visual_item_inside(narrow_controls, narrow_on_color_filter)
+assert_visual_item_inside(narrow_controls, narrow_all_filter)
+assert narrow_all_filter.property("checked") is True
+QTest.mouseClick(
+    root,
+    Qt.LeftButton,
+    Qt.NoModifier,
+    mouse_center(narrow_on_color_filter),
+)
+application.processEvents()
+assert narrow_on_color_filter.property("checked") is True
+assert recommendation_model.rowCount() == len(on_color_ids)
+QTest.mouseClick(
+    root,
+    Qt.LeftButton,
+    Qt.NoModifier,
+    mouse_center(narrow_all_filter),
+)
+application.processEvents()
+assert narrow_all_filter.property("checked") is True
+assert recommendation_model.rowCount() == len(source_recommendation_ids)
 fallback_tabs_top = fallback_tabs.mapToItem(
     live_view, QPointF(0, 0)
 ).y()
@@ -2209,6 +2295,14 @@ fallback_tabs_bottom = fallback_tabs.mapToItem(
 fallback_preview_top = fallback_preview.mapToItem(
     live_view, QPointF(0, 0)
 ).y()
+fallback_controls_top = narrow_controls.mapToItem(
+    live_view, QPointF(0, 0)
+).y()
+fallback_controls_bottom = narrow_controls.mapToItem(
+    live_view, QPointF(0, narrow_controls.height())
+).y()
+assert fallback_list_bottom <= fallback_controls_top
+assert fallback_controls_bottom <= fallback_preview_top
 assert fallback_list_bottom <= fallback_tabs_top
 assert fallback_tabs_bottom <= fallback_preview_top
 assert fallback_banner_bottom <= fallback_list_top
@@ -2334,15 +2428,25 @@ minimum_list = find_visual_item(
     root.contentItem(), "narrowRecommendationList"
 )
 minimum_preview = find_visual_item(root.contentItem(), "narrowLiveCardPreview")
+minimum_controls = find_visual_item(
+    root.contentItem(), "narrowRecommendationControls"
+)
+minimum_filter = find_visual_item(
+    root.contentItem(), "narrowRecommendationFilter"
+)
 assert minimum_list is not None and minimum_list.isVisible()
 minimum_banner = find_visual_item(
     root.contentItem(), "liveStateBanner"
 )
 minimum_tabs = find_visual_item(root.contentItem(), "liveDetailTabs")
 assert minimum_banner is not None and minimum_banner.isVisible()
+assert minimum_controls is not None and minimum_controls.isVisible()
 assert minimum_tabs is not None and minimum_tabs.isVisible()
+assert minimum_filter is not None and minimum_filter.isVisible()
 assert_visual_item_inside(root.contentItem(), minimum_banner)
 assert_visual_item_inside(root.contentItem(), minimum_list)
+assert_visual_item_inside(root.contentItem(), minimum_controls)
+assert_visual_item_inside(minimum_controls, minimum_filter)
 assert_visual_item_inside(root.contentItem(), minimum_tabs)
 assert minimum_list.height() < 120
 assert minimum_preview is not None and minimum_preview.isVisible()
@@ -2382,6 +2486,14 @@ minimum_tabs_top = minimum_tabs.mapToItem(
 minimum_tabs_bottom = minimum_tabs.mapToItem(
     root.contentItem(), QPointF(0, minimum_tabs.height())
 ).y()
+minimum_controls_top = minimum_controls.mapToItem(
+    root.contentItem(), QPointF(0, 0)
+).y()
+minimum_controls_bottom = minimum_controls.mapToItem(
+    root.contentItem(), QPointF(0, minimum_controls.height())
+).y()
+assert minimum_list_bottom <= minimum_controls_top
+assert minimum_controls_bottom <= minimum_preview_top
 assert minimum_banner_bottom <= minimum_list_top
 assert minimum_list_bottom <= minimum_tabs_top
 assert minimum_tabs_bottom <= minimum_preview_top
@@ -2983,15 +3095,34 @@ root.resize(760, 900)
 root.setProperty("currentSurface", "live")
 application.processEvents()
 live_tabs = root.findChild(QObject, "liveDetailTabs")
+narrow_controls = find_visual_item(
+    root.contentItem(), "narrowRecommendationControls"
+)
+narrow_filter = find_visual_item(
+    root.contentItem(), "narrowRecommendationFilter"
+)
 narrow_live_preview = find_visual_item(root.contentItem(), "narrowLiveCardPreview")
 narrow_live_pool = find_visual_item(root.contentItem(), "narrowLivePoolDetails")
 narrow_row = find_visual_item(root.contentItem(), "narrowRecommendationRow1")
 assert live_tabs is not None and live_tabs.property("currentIndex") == 0
+assert narrow_controls is not None and narrow_controls.isVisible()
+assert narrow_filter is not None and narrow_filter.isVisible()
 assert narrow_live_preview is not None and narrow_live_preview.isVisible()
 assert narrow_live_pool is not None and narrow_live_pool.isVisible() is False
 assert narrow_row is not None and narrow_row.height() >= 100
-assert narrow_row.width() == live_tabs.width()
-assert narrow_live_preview.width() == live_tabs.width()
+assert narrow_row.width() == narrow_controls.width()
+assert narrow_live_preview.width() == narrow_controls.width()
+assert_visual_item_inside(narrow_controls, narrow_filter)
+assert_visual_item_inside(narrow_controls, live_tabs)
+narrow_filter_right = narrow_filter.mapToItem(
+    narrow_controls, QPointF(narrow_filter.width(), 0)
+).x()
+narrow_tabs_left = live_tabs.mapToItem(narrow_controls, QPointF(0, 0)).x()
+narrow_tabs_right = live_tabs.mapToItem(
+    narrow_controls, QPointF(live_tabs.width(), 0)
+).x()
+assert narrow_filter_right <= narrow_tabs_left
+assert narrow_tabs_right <= narrow_controls.width()
 narrow_frame = find_visual_item(narrow_live_preview, "cardPreviewImageFrame")
 assert narrow_frame is not None and narrow_frame.isVisible()
 assert narrow_frame.width() >= 195
