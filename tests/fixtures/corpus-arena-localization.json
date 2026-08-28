@@ -1,0 +1,10 @@
+[
+  {
+    "langkey": "en",
+    "keys": [
+      {"id": 1001, "text": "Hoblin Adept"},
+      {"id": 2001, "text": "Creature"},
+      {"id": 2002, "text": "Goblin Wizard"}
+    ]
+  }
+]

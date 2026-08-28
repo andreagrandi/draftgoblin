@@ -225,3 +225,6 @@ __marimo__/
 
 # Pi subagents
 .pi-subagents/
+# Draft Omen development corpus inputs and generated artifacts
+.draftomen/corpus-cache/
+.draftomen/corpus-artifacts/

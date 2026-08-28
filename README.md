@@ -82,6 +82,10 @@ draftomen-tui
 draftomen-tui watch --plain
 ```
 
+For development-only semantic analysis, use the reproducible [card corpus
+workflow](docs/corpus.md). It keeps pinned source bytes and locks outside
+tracked data and emits deterministic artifacts for offline consumers.
+
 Use the arrow keys or `j`/`k` to browse cards, `s` to change the ranking,
 `b` to open the current build, `c` to configure the view and optional splash
 recommendations, and `q` to quit.

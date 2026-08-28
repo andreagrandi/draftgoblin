@@ -74,6 +74,7 @@ files = [
     "draftomen/cardimages.py",
     "draftomen/cli.py",
     "draftomen/config.py",
+    "draftomen/corpus.py",
     "draftomen/deckbuilder.py",
     "draftomen/events.py",
     "draftomen/logfollow.py",
