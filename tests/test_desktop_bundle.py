@@ -165,7 +165,7 @@ def test_native_specs_preserve_project_metadata() -> None:
 
     project = _read_project_metadata()
     project_version = project["version"]
-    assert project_version == "0.3.0"
+    assert project_version == "0.3.1"
     expected_common_args = {
         "--company-name=Draft Omen",
         f"--product-name={EXPECTED_PRODUCT_NAME}",
