@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -128,7 +129,10 @@ def test_arena_local_data_builds_current_set_metadata(tmp_path: Path) -> None:
 
 def test_mtgjson_set_metadata_resolves_grp_ids_from_name_seeds() -> None:
     database = augment_card_database_with_mtgjson_set(
-        CardDatabase(cards={}),
+        CardDatabase(
+            cards={},
+            generated_at=datetime(2026, 8, 23, 12, 0, tzinfo=UTC),
+        ),
         set_code="MSH",
         seeds=(
             CardMetadataSeed(
@@ -163,6 +167,7 @@ def test_mtgjson_set_metadata_resolves_grp_ids_from_name_seeds() -> None:
         ),
     )
 
+    assert database.generated_at == datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
     spider = database.lookup(grp_id=105097)
     assert spider.name == "Arena Spider"
     assert spider.colors == ("G",)
@@ -190,7 +195,7 @@ def test_cached_scryfall_data_is_augmented_with_arena_local_data(
         '"image_uris":{"normal":"https://cards.example/spider.jpg"}}\n',
         encoding="utf-8",
     )
-    refresh_card_database(app_dir=app_dir, bulk_file=bulk_path)
+    refreshed = refresh_card_database(app_dir=app_dir, bulk_file=bulk_path)
 
     database = load_or_refresh_card_database(
         app_dir=app_dir,
@@ -202,6 +207,7 @@ def test_cached_scryfall_data_is_augmented_with_arena_local_data(
     assert database.lookup(grp_id=105097).image_uri == "https://cards.example/spider.jpg"
     assert database.lookup(grp_id=105200).name == "Arena Dual"
     assert database.unresolved_grp_ids(grp_ids=(105097, 999999, 105200)) == (999999,)
+    assert database.generated_at == refreshed.generated_at
 
 
 def test_unknown_grp_id_returns_explicit_marker() -> None:
@@ -220,13 +226,59 @@ def test_unknown_grp_id_returns_explicit_marker() -> None:
 def test_refresh_writes_cache_and_loads_cached_database_offline(
     tmp_path: Path,
 ) -> None:
-    database = refresh_card_database(app_dir=tmp_path, bulk_file=SCRYFALL_BULK_SAMPLE_PATH)
+    database = refresh_card_database(
+        app_dir=tmp_path,
+        bulk_file=SCRYFALL_BULK_SAMPLE_PATH,
+    )
 
     cache_path = card_database_cache_path(app_dir=tmp_path)
     loaded = load_card_database(app_dir=tmp_path)
 
     assert cache_path.exists()
     assert loaded.lookup(grp_id=105097) == database.lookup(grp_id=105097)
+    assert database.generated_at is not None
+    assert database.generated_at.tzinfo is not None
+    assert loaded.generated_at == database.generated_at
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert payload["generated_at"] == database.generated_at.isoformat()
+
+
+def test_cacheable_refresh_replaces_older_persisted_generated_at(tmp_path: Path) -> None:
+    old_generated_at = datetime(2000, 1, 1, tzinfo=UTC)
+    save_card_database(
+        CardDatabase(cards={}, generated_at=old_generated_at),
+        app_dir=tmp_path,
+    )
+
+    refreshed = refresh_card_database(
+        app_dir=tmp_path,
+        bulk_file=SCRYFALL_BULK_SAMPLE_PATH,
+    )
+    loaded = load_card_database(app_dir=tmp_path)
+
+    assert refreshed.generated_at is not None
+    assert refreshed.generated_at > old_generated_at
+    assert loaded.generated_at == refreshed.generated_at
+
+
+@pytest.mark.parametrize("generated_at", [None, "not-a-timestamp"])
+def test_cache_load_treats_missing_or_malformed_generated_at_as_unknown(
+    tmp_path: Path,
+    generated_at: object,
+) -> None:
+    database = build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+    payload = database.to_json()
+    if generated_at is None:
+        payload.pop("generated_at")
+    else:
+        payload["generated_at"] = generated_at
+    cache_path = card_database_cache_path(app_dir=tmp_path)
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = load_card_database(app_dir=tmp_path)
+
+    assert loaded.cards == database.cards
+    assert loaded.generated_at is None
 
 
 def test_load_without_cache_raises_actionable_error(tmp_path: Path) -> None:
@@ -291,6 +343,7 @@ def test_failed_scryfall_refresh_keeps_existing_canonical_cache(
 
     assert fallback.lookup(grp_id=105097).name == "Arena Spider"
     assert cache_path.read_text(encoding="utf-8") == cache_before
+    assert fallback.generated_at is None
 
 
 def test_load_or_refresh_preserves_runtime_arena_fallback(
@@ -314,6 +367,7 @@ def test_load_or_refresh_preserves_runtime_arena_fallback(
 
     assert fallback.lookup(grp_id=105097).name == "Arena Spider"
     assert not card_database_cache_path(app_dir=tmp_path / "runtime-app").exists()
+    assert fallback.generated_at is None
 
 
 def test_refresh_data_cli_builds_cache_from_vendored_bulk_sample(

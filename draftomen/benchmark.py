@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from os import PathLike
 from typing import TypeAlias
 
@@ -588,7 +588,8 @@ def _database_with_rating_metadata(
             types=("Unknown",),
         )
 
-    return CardDatabase(
+    return replace(
+        card_database,
         cards=cards,
         image_uris_by_name=dict(card_database.image_uris_by_name),
     )

@@ -4,6 +4,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from os import PathLike
 from pathlib import Path
 from typing import cast
@@ -23,6 +24,7 @@ from draftomen.qt_adapter import (
     SessionAdapter,
 )
 from draftomen.session import (
+    CardDataState,
     CardImageFetchResult,
     ChangeRanking,
     ChangeSplashPreference,
@@ -435,6 +437,23 @@ def test_session_adapter_converts_local_image_path_to_file_url(
     )
     assert adapter.state["card_image"]["image_path"] == (
         QUrl.fromLocalFile(str(image_path)).toString()
+    )
+
+
+def test_session_adapter_exposes_card_data_update_time_in_qvariant_map() -> None:
+    timestamp = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+    adapter = SessionAdapter(
+        snapshot=LiveSessionSnapshot(
+            card_data=CardDataState(
+                phase=DataLoadPhase.READY,
+                message="Card metadata is ready.",
+                last_successful_update=timestamp.isoformat(),
+            )
+        )
+    )
+
+    assert adapter.state["card_data"]["last_successful_update"] == (
+        timestamp.isoformat()
     )
 
 

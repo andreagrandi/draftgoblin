@@ -319,6 +319,63 @@ def test_watch_mana_icons_flag_is_explicit_tui_opt_in(
     assert captured["mana_icons_enabled"] is True
 
 
+def test_watch_tui_ratings_loader_forwards_refresh_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    refresh_values: list[bool] = []
+
+    def fake_run_tui_watch(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    def fake_metadata_loader_factory(**kwargs: object) -> object:
+        captured["load_ratings"] = kwargs["load_ratings"]
+        return kwargs["load_ratings"]
+
+    def fake_load_or_refresh(
+        *,
+        set_code: str,
+        app_dir: Path | None = None,
+        refresh: bool,
+        progress_callback: object,
+    ) -> object:
+        refresh_values.append(refresh)
+        return object()
+
+    monkeypatch.setattr(cli, "run_tui_watch", fake_run_tui_watch)
+    monkeypatch.setattr(
+        cli,
+        "metadata_augmenting_ratings_progress_loader",
+        fake_metadata_loader_factory,
+    )
+    monkeypatch.setattr(cli, "load_or_refresh_17lands_data", fake_load_or_refresh)
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+
+    assert (
+        main(
+            argv=[
+                "watch",
+                "--log-path",
+                str(log_path),
+                "--bulk-file",
+                str(SCRYFALL_BULK_SAMPLE_PATH),
+                "--once",
+            ]
+        )
+        == 0
+    )
+
+    factory = captured["ratings_progress_loader_factory"]
+    load_ratings = factory(CardDatabase(cards={}))  # type: ignore[operator]
+    load_ratings("TST", lambda progress: None, refresh=False)  # type: ignore[operator]
+    load_ratings("TST", lambda progress: None, refresh=True)  # type: ignore[operator]
+
+    assert refresh_values == [False, True]
+
+
 def test_build_pool_file_selects_pair_offline(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

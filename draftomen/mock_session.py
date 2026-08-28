@@ -401,6 +401,7 @@ def _ready_snapshot() -> LiveSessionSnapshot:
         card_data=CardDataState(
             phase=DataLoadPhase.READY,
             message="Card metadata ready.",
+            last_successful_update="2026-08-23T12:00:00+00:00",
         ),
         ratings=RatingsState(
             set_code="OTJ",
@@ -408,6 +409,7 @@ def _ready_snapshot() -> LiveSessionSnapshot:
             message="Quick Draft ratings ready.",
             rated_cards=14,
             total_cards=14,
+            last_successful_update="2026-08-23T12:00:00+00:00",
         ),
         recommendations=RecommendationState(
             ranking_mode="score",
@@ -473,6 +475,7 @@ def _snapshot_for_scenario(*, scenario: MockScenario) -> LiveSessionSnapshot:
                 message="Downloading OTJ ratings.",
                 rated_cards=340,
                 total_cards=1000,
+                last_successful_update="2026-08-23T12:00:00+00:00",
             ),
             progress=ProgressState(
                 operation=OperationKind.RATINGS,
