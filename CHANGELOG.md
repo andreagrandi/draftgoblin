@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Fix stable release startup and Linux validation with valid workflow syntax, permissions, and Qt runtime dependencies.
+- Ignore late TUI session worker updates once Textual shutdown begins.
 
 ## [0.3.0] - 2026-08-28
 

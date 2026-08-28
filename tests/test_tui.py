@@ -2044,6 +2044,30 @@ def test_tui_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
     asyncio.run(_assert_slow_ratings_refresh_stays_responsive(tmp_path=tmp_path))
 
 
+def test_tui_drops_session_publication_after_shutdown(tmp_path: Path) -> None:
+    asyncio.run(_assert_tui_drops_session_publication_after_shutdown(tmp_path=tmp_path))
+
+
+async def _assert_tui_drops_session_publication_after_shutdown(
+    tmp_path: Path,
+) -> None:
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 24)):
+        ratings_label = app.query_one("#ratings-download-label", Static)
+        await ratings_label.remove()
+        app._pick_label = "before-shutdown"
+        app._session_error = "before-shutdown"
+        app._running = False
+        assert not app.is_running
+
+        app._apply_session_snapshot(app.session.snapshot)
+        app._publish_session_snapshot(app.session.snapshot)
+
+        assert app._pick_label == "before-shutdown"
+        assert app._session_error == "before-shutdown"
+
+
 def test_tui_offers_missing_ratings_download_and_rescores_when_ready(
     tmp_path: Path,
 ) -> None:
