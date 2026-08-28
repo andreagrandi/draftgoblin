@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Fix the stable release workflow by using a supported GitHub Actions concurrency setting.
+- Fix stable release startup with supported concurrency syntax and reusable-workflow permissions.
 
 ## [0.3.0] - 2026-08-28
 
