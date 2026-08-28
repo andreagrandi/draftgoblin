@@ -24,7 +24,7 @@ plugins = imageformats,platforms,platformthemes,styles
 
 [nuitka]
 mode = onefile
-extra_args = --quiet --noinclude-qt-translations --company-name="Draft Omen" --product-name="Draft Omen" --file-version=0.2.0 --product-version=0.2.0 --macos-app-name="Draft Omen" --macos-app-version=0.2.0 --macos-signed-app-name=io.github.andreagrandi.draftomen
+extra_args = --quiet --noinclude-qt-translations --company-name="Draft Omen" --product-name="Draft Omen" --file-version=0.3.0 --product-version=0.3.0 --macos-app-name="Draft Omen" --macos-app-version=0.3.0 --macos-signed-app-name=io.github.andreagrandi.draftomen
 macos.permissions =
 
 # Fonts: none are bundled. The application intentionally uses Qt's system fixed
