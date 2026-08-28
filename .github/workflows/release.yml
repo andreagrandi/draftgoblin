@@ -118,7 +118,8 @@ jobs:
     name: Build native desktop bundles
     uses: ./.github/workflows/native-bundles.yml
     permissions:
-      contents: read
+      actions: read
+      contents: write
 
   homebrew:
     needs: publish
