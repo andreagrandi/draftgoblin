@@ -1,0 +1,19 @@
+{
+  "data": {
+    "cards": [
+      {
+        "uuid": "uuid-42",
+        "name": "Hoblin Adept",
+        "text": "When Hoblin Adept enters the battlefield, draw two cards.",
+        "type": "Creature — Goblin Wizard",
+        "colors": ["R"],
+        "manaCost": "{1}{R}",
+        "manaValue": 2,
+        "rarity": "uncommon",
+        "setCode": "hbl",
+        "number": "42",
+        "identifiers": {"scryfallId": "sf-hob-42"}
+      }
+    ]
+  }
+}

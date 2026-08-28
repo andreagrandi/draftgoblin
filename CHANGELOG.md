@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-- Add a clearly labelled On Color / All filter to the Live Draft recommendation list.
+- Add a development-only reproducible card corpus workflow with pinned Scryfall,
+  current and legacy Arena mapping inputs, MTGJSON inputs, deterministic
+  normalized artifacts, and coverage reports for offline semantic-analysis work.
 
 ## [0.3.1] - 2026-08-28
 

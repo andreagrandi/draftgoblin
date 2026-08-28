@@ -1,0 +1,13 @@
+[
+  {
+    "grpid": 42,
+    "titleId": 1001,
+    "cardTypeTextId": 2001,
+    "subtypeTextId": 2002,
+    "colors": [4],
+    "cmc": 2,
+    "castingcost": "1oR",
+    "rarity": 3,
+    "linkedFaces": []
+  }
+]

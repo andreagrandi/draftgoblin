@@ -31,6 +31,15 @@ from draftomen.carddb import (
     load_or_refresh_card_database,
     refresh_card_database,
 )
+from draftomen.corpus import (
+    CorpusError,
+    DEFAULT_ARTIFACT_DIR,
+    DEFAULT_CACHE_DIR,
+    SelectionSpec,
+    build_corpus,
+    build_default_source_specs,
+    load_source_config,
+)
 from draftomen.config import COLOR_PAIRS
 from draftomen.deckbuilder import (
     DeckBuilderError,
@@ -435,6 +444,77 @@ def build_parser() -> argparse.ArgumentParser:
             "instead of the cached card database."
         ),
     )
+    corpus_parser = subparsers.add_parser(
+        name="corpus-build",
+        help="Build the development-only semantic analysis card corpus.",
+        description=(
+            "Acquire pinned Scryfall/Arena/MTGJSON inputs and emit deterministic "
+            "offline normalized rows and coverage reports."
+        ),
+    )
+    corpus_parser.add_argument(
+        "--source-spec",
+        type=Path,
+        default=Path("draftomen/corpus_sources.json"),
+        help="JSON source and selection configuration (default: draftomen/corpus_sources.json).",
+    )
+    corpus_parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help="Development cache for source bytes and lock metadata.",
+    )
+    corpus_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory for deterministic normalized.jsonl and coverage.json artifacts.",
+    )
+    corpus_parser.add_argument(
+        "--arena-data-dir",
+        type=Path,
+        default=None,
+        help="Local MTG Arena Data directory containing data_cards* and data_loc* files.",
+    )
+    corpus_parser.add_argument(
+        "--scryfall-file",
+        type=Path,
+        default=None,
+        help="Use a local Scryfall JSONL(.gz) fixture instead of the configured URL.",
+    )
+    corpus_parser.add_argument(
+        "--mtgjson-file",
+        type=Path,
+        action="append",
+        default=[],
+        help="Add a local MTGJSON set JSON file (repeatable).",
+    )
+    corpus_parser.add_argument(
+        "--mtgjson-set",
+        action="append",
+        default=[],
+        help="Add a remote MTGJSON set code (repeatable).",
+    )
+    corpus_parser.add_argument(
+        "--set-code",
+        action="append",
+        default=[],
+        help="Select a set explicitly; repeat for multiple sets.",
+    )
+    corpus_parser.add_argument(
+        "--selection",
+        choices=("broad", "explicit"),
+        default=None,
+        help="Selection policy override (default: value in source spec).",
+    )
+    corpus_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use only locked, checksum-verified source bytes.",
+    )
+    corpus_parser.add_argument("--timeout", type=int, default=60)
+    corpus_parser.set_defaults(handler=handle_corpus_build)
+
     structure_parser.add_argument(
         "--app-dir",
         type=Path,
@@ -814,6 +894,63 @@ def _load_benchmark_ratings_data(*, args: argparse.Namespace) -> SeventeenLandsD
         )
 
     return ratings_data
+
+def handle_corpus_build(args: argparse.Namespace) -> int:
+    """Build deterministic development-only corpus artifacts."""
+
+    try:
+        configured_specs, configured_selection = load_source_config(args.source_spec)
+        specs = list(configured_specs)
+        if args.scryfall_file is not None:
+            specs = [spec for spec in specs if spec.kind != "scryfall"]
+            specs.extend(
+                build_default_source_specs(scryfall_file=args.scryfall_file)
+            )
+        if args.arena_data_dir is not None:
+            specs.extend(
+                spec
+                for spec in build_default_source_specs(arena_data_dir=args.arena_data_dir)
+                if spec.kind == "arena"
+            )
+        if args.mtgjson_file:
+            specs.extend(
+                spec
+                for spec in build_default_source_specs(
+                    mtgjson_files=args.mtgjson_file
+                )
+                if spec.kind == "mtgjson"
+            )
+        if args.mtgjson_set:
+            specs.extend(
+                spec
+                for spec in build_default_source_specs(set_codes=args.mtgjson_set)
+                if spec.kind == "mtgjson"
+            )
+        unique_specs = tuple({spec.name: spec for spec in specs}.values())
+        if args.set_code:
+            selection = SelectionSpec(mode="explicit", sets=tuple(args.set_code))
+        elif args.selection is not None:
+            selection = SelectionSpec(
+                mode=args.selection,
+                sets=configured_selection.sets if args.selection == "explicit" else (),
+            )
+        else:
+            selection = configured_selection
+        normalized, report, acquisition, selected = build_corpus(
+            source_specs=unique_specs,
+            cache_dir=args.cache_dir or DEFAULT_CACHE_DIR,
+            output_dir=args.output_dir or DEFAULT_ARTIFACT_DIR,
+            selection=selection,
+            offline=args.offline,
+            timeout_seconds=args.timeout,
+        )
+    except CorpusError as error:
+        print(f"corpus-build failed: {error}", file=sys.stderr)
+        return 1
+
+    print(f"built {len(selected)} normalized cards at {normalized}.")
+    print(f"coverage report at {report}; source lock at {acquisition.lock_path}.")
+    return 0
 
 
 def handle_refresh_data(args: argparse.Namespace) -> int:

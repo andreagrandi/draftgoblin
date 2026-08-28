@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "name": "scryfall-default-cards",
+      "kind": "scryfall",
+      "url": "https://api.scryfall.com/bulk-data",
+      "attribution": "Scryfall (https://scryfall.com)",
+      "license": "Scryfall API and data use is subject to the Scryfall API Terms (https://scryfall.com/docs/api) and Wizards Fan Content Policy (https://company.wizards.com/en/legal/fancontentpolicy); no separate Scryfall data license is asserted.",
+      "required": true
+    }
+  ],
+  "selection": {
+    "mode": "broad",
+    "sets": []
+  }
+}

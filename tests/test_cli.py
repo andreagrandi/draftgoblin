@@ -92,6 +92,71 @@ def test_subcommands_are_registered_with_help_text(
     assert expected_help in captured.out
 
 
+def test_corpus_build_cli_local_then_offline_is_byte_stable(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fixture_dir = Path(__file__).parent / "fixtures"
+    source_spec = tmp_path / "sources.json"
+    source_spec.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "sources": [
+                    {
+                        "name": "scryfall",
+                        "kind": "scryfall",
+                        "path": str(fixture_dir / "corpus-scryfall.jsonl"),
+                    },
+                    {
+                        "name": "arena-cards",
+                        "kind": "arena",
+                        "path": str(fixture_dir / "corpus-arena-cards.json"),
+                    },
+                    {
+                        "name": "arena-localization",
+                        "kind": "arena",
+                        "path": str(fixture_dir / "corpus-arena-localization.json"),
+                    },
+                    {
+                        "name": "mtgjson",
+                        "kind": "mtgjson",
+                        "path": str(fixture_dir / "corpus-mtgjson.json"),
+                    },
+                ],
+                "selection": {"mode": "explicit", "sets": ["hbl", "dsk"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cache_dir = tmp_path / "cache"
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    common = [
+        "corpus-build",
+        "--source-spec",
+        str(source_spec),
+        "--cache-dir",
+        str(cache_dir),
+    ]
+
+    assert main([*common, "--output-dir", str(first_dir)]) == 0
+    first_output = capsys.readouterr()
+    assert "built" in first_output.out
+    assert first_output.err == ""
+
+    assert main([*common, "--output-dir", str(second_dir), "--offline"]) == 0
+    second_output = capsys.readouterr()
+    assert "built" in second_output.out
+    assert second_output.err == ""
+    assert (first_dir / "normalized.jsonl").read_bytes() == (
+        second_dir / "normalized.jsonl"
+    ).read_bytes()
+    assert (first_dir / "coverage.json").read_bytes() == (
+        second_dir / "coverage.json"
+    ).read_bytes()
+
+
 def test_splash_is_default_on_and_each_user_flow_can_disable_it() -> None:
     parser = build_parser()
 
