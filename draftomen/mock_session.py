@@ -226,6 +226,7 @@ def _pool() -> PoolState:
         total_cards=24,
         target_cards=42,
         inferred_pair="White · Green",
+        current_colors=("W", "G"),
         commitment=0.64,
         color_distribution=(("W", 0), ("U", 3), ("B", 3), ("R", 0), ("G", 15), ("C", 3)),
         mana_curve=(0, 3, 6, 12, 0, 0, 0),

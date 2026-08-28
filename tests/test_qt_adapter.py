@@ -39,10 +39,11 @@ from draftomen.session import (
     LiveSession,
     LiveSessionCommand,
     LiveSessionSnapshot,
+    PoolState,
     Recommendation,
     RecommendationState,
-    RequestBacktest,
     RequestBuild,
+    RequestBacktest,
     RequestRatingsDownload,
     RetryError,
     SnapshotPublisher,
@@ -428,6 +429,7 @@ def test_session_adapter_converts_local_image_path_to_file_url(
             ),
             selected_grp_id=1,
         ),
+        pool=PoolState(current_colors=("W", "U")),
     )
 
     adapter = SessionAdapter(snapshot=snapshot)
@@ -438,6 +440,7 @@ def test_session_adapter_converts_local_image_path_to_file_url(
     assert adapter.state["card_image"]["image_path"] == (
         QUrl.fromLocalFile(str(image_path)).toString()
     )
+    assert adapter.state["pool"]["current_colors"] == ["W", "U"]
 
 
 def test_session_adapter_exposes_card_data_update_time_in_qvariant_map() -> None:
@@ -489,6 +492,59 @@ def test_recommendation_model_updates_rows_without_reset_churn() -> None:
     assert model.rowCount() == 0
     model.replace(rows=rows(image_suffix="restored"))
     assert model.rowCount() == 12
+
+
+def test_recommendation_model_color_projection_is_reactive_and_non_mutating() -> None:
+    model = RecommendationListModel()
+    rows = [
+        {"rank": 1, "score": 90, "card": {"grp_id": 1, "colors": ["W"]}},
+        {"rank": 2, "score": 80, "card": {"grp_id": 2, "colors": ["U"]}},
+        {"rank": 3, "score": 70, "card": {"grp_id": 3, "colors": ["W", "G"]}},
+        {"rank": 4, "score": 60, "card": {"grp_id": 4, "colors": []}},
+    ]
+    original_rows = [dict(row, card=dict(row["card"])) for row in rows]
+    mode_changes: list[object] = []
+    color_changes: list[object] = []
+    model.filterModeChanged.connect(lambda: mode_changes.append(True))
+    model.currentColorsChanged.connect(lambda: color_changes.append(True))
+
+    model.replace(rows=rows, current_colors=["W"])
+    assert model.filterMode == RecommendationListModel.ALL_FILTER_MODE
+    assert model.rowCount() == len(rows)
+
+    model.setFilterMode(RecommendationListModel.ON_COLOR_FILTER_MODE)
+    assert model.filterMode == RecommendationListModel.ON_COLOR_FILTER_MODE
+    assert [
+        model.data(model.index(index, 0), RecommendationListModel.MODEL_DATA_ROLE)
+        for index in range(model.rowCount())
+    ] == [rows[0], rows[3]]
+    assert rows == original_rows
+
+    model.replace(rows=rows, current_colors=["U"])
+    assert model.currentColors == ["U"]
+    assert [
+        model.data(model.index(index, 0), RecommendationListModel.MODEL_DATA_ROLE)
+        for index in range(model.rowCount())
+    ] == [rows[1], rows[3]]
+    assert rows == original_rows
+
+    model.replace(rows=rows, current_colors=[])
+    assert model.currentColors == []
+    assert [
+        model.data(model.index(index, 0), RecommendationListModel.MODEL_DATA_ROLE)
+        for index in range(model.rowCount())
+    ] == [rows[3]]
+    assert rows == original_rows
+
+    model.setFilterMode(RecommendationListModel.ALL_FILTER_MODE)
+    assert model.rowCount() == len(rows)
+    assert [
+        model.data(model.index(index, 0), RecommendationListModel.MODEL_DATA_ROLE)
+        for index in range(model.rowCount())
+    ] == rows
+    assert mode_changes == [True, True]
+    assert color_changes == [True, True, True]
+    assert rows == original_rows
 
 
 def _process_until(

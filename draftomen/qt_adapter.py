@@ -95,15 +95,23 @@ def _to_qml_value(value: Any) -> Any:
 
 
 class RecommendationListModel(QAbstractListModel):
-    """Publish recommendation rows through a narrow Qt item model.
-    Each row is the same plain mapping available in the immutable state projection.
+    """Publish complete recommendations with a display-only color projection.
+    Filtering never changes the immutable recommendation values or ordering.
     """
 
     MODEL_DATA_ROLE = Qt.ItemDataRole.UserRole + 1
+    ALL_FILTER_MODE = "all"
+    ON_COLOR_FILTER_MODE = "on_color"
+
+    filterModeChanged = Signal()
+    currentColorsChanged = Signal()
 
     def __init__(self, *, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        self._source_rows: list[dict[str, Any]] = []
         self._rows: list[dict[str, Any]] = []
+        self._filter_mode = self.ALL_FILTER_MODE
+        self._current_colors: tuple[str, ...] = ()
 
     def roleNames(self) -> dict[int, QByteArray]:
         return {self.MODEL_DATA_ROLE: QByteArray(b"modelData")}
@@ -120,23 +128,70 @@ class RecommendationListModel(QAbstractListModel):
             return self._rows[index.row()]
         return None
 
-    def replace(self, *, rows: list[dict[str, Any]]) -> None:
-        if rows == self._rows:
+    @Property(str, notify=filterModeChanged)
+    def filterMode(self) -> str:
+        return self._filter_mode
+
+    @Property("QStringList", notify=currentColorsChanged)
+    def currentColors(self) -> list[str]:
+        return list(self._current_colors)
+
+    @Slot(str)
+    def setFilterMode(self, mode: str) -> None:
+        if mode not in (self.ALL_FILTER_MODE, self.ON_COLOR_FILTER_MODE):
+            raise ValueError(f"Unsupported recommendation filter mode: {mode!r}.")
+        if mode == self._filter_mode:
+            return
+        self._filter_mode = mode
+        self._replace_visible_rows()
+        self.filterModeChanged.emit()
+
+    def replace(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        current_colors: tuple[str, ...] | list[str] = (),
+    ) -> None:
+        next_source_rows = list(rows)
+        next_current_colors = tuple(
+            str(color).upper() for color in current_colors
+        )
+        colors_changed = next_current_colors != self._current_colors
+        source_changed = next_source_rows != self._source_rows
+        if not colors_changed and not source_changed:
+            return
+
+        self._source_rows = next_source_rows
+        self._current_colors = next_current_colors
+        self._replace_visible_rows()
+        if colors_changed:
+            self.currentColorsChanged.emit()
+
+    def _replace_visible_rows(self) -> None:
+        visible_rows = self._source_rows
+        if self._filter_mode == self.ON_COLOR_FILTER_MODE:
+            visible_rows = [
+                row
+                for row in visible_rows
+                if self._row_matches_current_colors(row=row)
+            ]
+
+        if visible_rows == self._rows:
             return
 
         previous_count = len(self._rows)
-        next_count = len(rows)
+        next_count = len(visible_rows)
         shared_count = min(previous_count, next_count)
-        changed_rows = [
-            row
-            for row in range(shared_count)
-            if self._rows[row] != rows[row]
+        changed_indices = [
+            index
+            for index in range(shared_count)
+            if self._rows[index] != visible_rows[index]
         ]
 
-        if changed_rows:
-            self._rows[:shared_count] = rows[:shared_count]
-            first_changed = changed_rows[0]
-            last_changed = changed_rows[-1]
+        if changed_indices:
+            self._rows[:shared_count] = visible_rows[:shared_count]
+            first_changed = changed_indices[0]
+            last_changed = changed_indices[-1]
             self.dataChanged.emit(
                 self.index(first_changed, 0),
                 self.index(last_changed, 0),
@@ -159,8 +214,23 @@ class RecommendationListModel(QAbstractListModel):
                 previous_count,
                 next_count - 1,
             )
-            self._rows.extend(rows[previous_count:])
+            self._rows.extend(visible_rows[previous_count:])
             self.endInsertRows()
+
+    def _row_matches_current_colors(self, *, row: dict[str, Any]) -> bool:
+        """Apply pair color semantics without changing recommendation values.
+        Colorless cards remain eligible because they require no colored source.
+        """
+        card = row.get("card")
+        if not isinstance(card, dict):
+            return False
+        colors = card.get("colors")
+        if not isinstance(colors, (list, tuple)):
+            return False
+        card_colors = tuple(str(color).upper() for color in colors)
+        if not card_colors:
+            return True
+        return all(color in self._current_colors for color in card_colors)
 
 
 class _GuiPreferencesSaveThread(QThread):
@@ -519,8 +589,12 @@ class SessionAdapter(QObject):
             return
         self._state = state
         recommendations = state.get("recommendations") or {}
+        pool = state.get("pool") or {}
         rows = recommendations.get("cards") or []
-        self._recommendations_model.replace(rows=list(rows))
+        self._recommendations_model.replace(
+            rows=list(rows),
+            current_colors=list(pool.get("current_colors") or []),
+        )
         self.stateChanged.emit()
 
 
