@@ -1253,11 +1253,17 @@ class DraftomenTuiApp(App[None]):
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.call_from_thread(self._record_error, str(error))
 
+    def _session_publication_is_allowed(self) -> bool:
+        """Allow presentation updates only while Textual is running."""
+        return self.is_running
+
     def _publish_session_snapshot(self, snapshot: LiveSessionSnapshot) -> None:
         """Marshal one immutable shared snapshot onto Textual's thread.
         Pack projections travel with the snapshot so account state stays coherent.
         """
 
+        if not self._session_publication_is_allowed():
+            return
         if (
             self.is_running
             and self._textual_thread_id is not None
@@ -1276,6 +1282,8 @@ class DraftomenTuiApp(App[None]):
         Events drive view transitions without re-owning application state.
         """
 
+        if not self._session_publication_is_allowed():
+            return
         if (
             self.is_running
             and self._textual_thread_id is not None
@@ -1290,6 +1298,8 @@ class DraftomenTuiApp(App[None]):
         self,
         snapshot: LiveSessionSnapshot,
     ) -> None:
+        if not self._session_publication_is_allowed():
+            return
         previous_identity = (self._active_account_id, self._draft_id)
         account = snapshot.active_account
         draft = snapshot.draft
@@ -1347,6 +1357,8 @@ class DraftomenTuiApp(App[None]):
         self._render_all()
 
     def _apply_session_event(self, published: LiveSessionEvent) -> None:
+        if not self._session_publication_is_allowed():
+            return
         event = published.event
         if isinstance(
             event,
