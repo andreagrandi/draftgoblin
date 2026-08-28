@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-28
+
 - Fix stable release startup and Linux validation with valid workflow syntax, permissions, and Qt runtime dependencies.
 - Package unsigned macOS native bundles as Finder-native compressed DMG images with an Applications shortcut.
 - Ignore late TUI session worker updates once Textual shutdown begins.
