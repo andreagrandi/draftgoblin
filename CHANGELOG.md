@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-28
+
 - Automatically open Deck Build and build the completed draft after the final pick.
 - Add a larger, borderless overlay for the two product screenshots.
 - Add a persisted toggle for following system text scaling in the desktop Settings, with effective scale feedback.
