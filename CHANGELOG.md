@@ -3,7 +3,9 @@
 ## [Unreleased]
 
 - Fix stable release startup and Linux validation with valid workflow syntax, permissions, and Qt runtime dependencies.
+- Package unsigned macOS native bundles as Finder-native compressed DMG images with an Applications shortcut.
 - Ignore late TUI session worker updates once Textual shutdown begins.
+- Link website download buttons directly to versioned native assets, show the release version, and validate website output in stable releases.
 
 ## [0.3.0] - 2026-08-28
 

@@ -27,15 +27,44 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
       - name: Check tag matches package version
         shell: bash
         run: |
+          set -euo pipefail
           package_version="$(uv version --short)"
+          website_version="$(node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const metadata = JSON.parse(readFileSync("website/package.json", "utf8"));
+            if (typeof metadata.version !== "string" || metadata.version.length === 0) {
+              throw new Error("website/package.json must contain a non-empty string version.");
+            }
+            process.stdout.write(metadata.version);
+          ')"
           tag_version="${GITHUB_REF_NAME#v}"
           if [[ "${tag_version}" != "${package_version}" ]]; then
             echo "Tag ${GITHUB_REF_NAME} does not match package version ${package_version}."
             exit 1
           fi
+          if [[ "${tag_version}" != "${website_version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match website/package.json version ${website_version}."
+            exit 1
+          fi
+
+      - name: Install website dependencies
+        run: npm ci --prefix website
+
+      - name: Build website
+        run: npm run build --prefix website
+
+      - name: Validate website release output
+        run: node website/scripts/check-release-output.mjs "${GITHUB_REF_NAME}"
 
       - name: Validate release changelog
         run: >-
@@ -169,12 +198,12 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          macos_name="draftomen-${RELEASE_TAG}-unsigned-macos.tar"
+          macos_name="draftomen-${RELEASE_TAG}-unsigned-macos.dmg"
           windows_name="draftomen-${RELEASE_TAG}-unsigned-windows.exe"
           checksums_name="draftomen-${RELEASE_TAG}-unsigned-sha256sums.txt"
 
           mkdir -p release-assets/published
-          mv release-assets/macos/Draftomen-unsigned-macos.tar \
+          mv release-assets/macos/Draftomen-unsigned-macos.dmg \
             "release-assets/published/${macos_name}"
           mv release-assets/windows/Draftomen-unsigned-windows.exe \
             "release-assets/published/${windows_name}"
@@ -202,7 +231,7 @@ jobs:
               --notes-file release-notes.md
           fi
           gh release upload "${RELEASE_TAG}" \
-            "release-assets/published/draftomen-${RELEASE_TAG}-unsigned-macos.tar" \
+            "release-assets/published/draftomen-${RELEASE_TAG}-unsigned-macos.dmg" \
             "release-assets/published/draftomen-${RELEASE_TAG}-unsigned-windows.exe" \
             "release-assets/published/draftomen-${RELEASE_TAG}-unsigned-sha256sums.txt" \
             --clobber

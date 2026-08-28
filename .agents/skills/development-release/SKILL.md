@@ -107,7 +107,7 @@ if ! printf '%s' "$release_json" | jq -e \
   --arg title "$expected_title" --arg build "$build_id" \
   --arg workflow "$workflow_url" --arg run "$run_id" --arg commit "$head_sha" \
   --arg changes_section "$expected_changes_section" \
-  --arg macos "draftomen-${build_id}-unsigned-macos.tar" \
+  --arg macos "draftomen-${build_id}-unsigned-macos.dmg" \
   --arg windows "draftomen-${build_id}-unsigned-windows.exe" \
   --arg checksums "draftomen-${build_id}-unsigned-sha256sums.txt" \
   '(.tagName == "development") and (.isPrerelease == true) and

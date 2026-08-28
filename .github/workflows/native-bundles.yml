@@ -31,7 +31,7 @@ jobs:
             platform: macos
             config: pysidedeploy.macos.spec
             bundle: Draftomen-unsigned-macos.app
-            artifact: Draftomen-unsigned-macos.tar
+            artifact: Draftomen-unsigned-macos.dmg
             artifact_name: draftomen-macos-unsigned-development
             smoke_timeout: 60
           - os: windows-latest
@@ -98,27 +98,43 @@ jobs:
       - name: Build unsigned bundle
         run: uv run pyside6-deploy --config-file "${{ matrix.config }}" --force
 
-      - name: Archive macOS unsigned development bundle
+      - name: Create macOS unsigned development DMG
         if: matrix.platform == 'macos'
-        run: >-
-          tar -cf
-          "dist-native/macos-unsigned/${{ matrix.artifact }}"
-          -C "dist-native/macos-unsigned"
-          "${{ matrix.bundle }}"
-
-      - name: Smoke-test extracted macOS bundle with deterministic mock data
-        if: matrix.platform == 'macos'
+        shell: bash
         run: |
           set -euo pipefail
-          extracted_bundle="$RUNNER_TEMP/draftomen-macos-bundle"
-          rm -rf "$extracted_bundle"
-          mkdir -p "$extracted_bundle"
-          tar -xpf \
-            "dist-native/macos-unsigned/${{ matrix.artifact }}" \
-            -C "$extracted_bundle"
+          staging="$RUNNER_TEMP/draftomen-macos-dmg"
+          rm -rf "$staging"
+          mkdir -p "$staging"
+          mv \
+            "dist-native/macos-unsigned/${{ matrix.bundle }}" \
+            "$staging/${{ matrix.bundle }}"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname "Draft Omen" -srcfolder "$staging" -ov -format UDZO \
+            "dist-native/macos-unsigned/${{ matrix.artifact }}"
+
+      - name: Smoke-test mounted macOS DMG with deterministic mock data
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mountpoint="$RUNNER_TEMP/draftomen-macos-mount"
+          rm -rf "$mountpoint"
+          mkdir -p "$mountpoint"
+          cleanup() {
+            hdiutil detach "$mountpoint" >/dev/null 2>&1 || true
+            rm -rf "$mountpoint"
+          }
+          trap cleanup EXIT
+          hdiutil attach -readonly -nobrowse \
+            -mountpoint "$mountpoint" \
+            "dist-native/macos-unsigned/${{ matrix.artifact }}"
           uv run python tests/bundle_smoke.py \
             --timeout "${{ matrix.smoke_timeout }}" \
-            "$extracted_bundle/${{ matrix.bundle }}"
+            "$mountpoint/${{ matrix.bundle }}"
+          hdiutil detach "$mountpoint"
+          trap - EXIT
+          rm -rf "$mountpoint"
 
       - name: Smoke-test Windows executable with deterministic mock data
         if: matrix.platform == 'windows'
@@ -223,11 +239,11 @@ jobs:
             exit 0
           fi
 
-          macos_name="draftomen-${BUILD_IDENTIFIER}-unsigned-macos.tar"
+          macos_name="draftomen-${BUILD_IDENTIFIER}-unsigned-macos.dmg"
           windows_name="draftomen-${BUILD_IDENTIFIER}-unsigned-windows.exe"
           checksums_name="draftomen-${BUILD_IDENTIFIER}-unsigned-sha256sums.txt"
           mkdir -p release-assets/published
-          mv release-assets/macos/Draftomen-unsigned-macos.tar \
+          mv release-assets/macos/Draftomen-unsigned-macos.dmg \
             "release-assets/published/${macos_name}"
           mv release-assets/windows/Draftomen-unsigned-windows.exe \
             "release-assets/published/${windows_name}"

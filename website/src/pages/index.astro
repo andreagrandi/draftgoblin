@@ -1,8 +1,12 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import packageMetadata from '../../package.json';
 
 const repositoryUrl = 'https://github.com/andreagrandi/draftomen';
-const releaseUrl = 'https://github.com/andreagrandi/draftomen/releases/latest';
+const releaseTag = `v${packageMetadata.version}`;
+const releaseAssetBaseUrl = `${repositoryUrl}/releases/download/${releaseTag}`;
+const macosDownloadUrl = `${releaseAssetBaseUrl}/draftomen-${releaseTag}-unsigned-macos.dmg`;
+const windowsDownloadUrl = `${releaseAssetBaseUrl}/draftomen-${releaseTag}-unsigned-windows.exe`;
 ---
 
 <BaseLayout
@@ -20,17 +24,17 @@ const releaseUrl = 'https://github.com/andreagrandi/draftomen/releases/latest';
           with visible data, and helps turn a completed pool into a playable deck.
         </p>
         <div class="download-group" aria-label="Download Draft Omen">
-          <a class="btn btn-primary download-button" href={releaseUrl}>
+          <a class="btn btn-primary download-button" href={macosDownloadUrl}>
             <span aria-hidden="true">⌘</span>
-            <span>Download for macOS<small>Latest release</small></span>
+            <span>Download for macOS<small>{releaseTag} · unsigned .dmg</small></span>
           </a>
-          <a class="btn btn-secondary download-button" href={releaseUrl}>
+          <a class="btn btn-secondary download-button" href={windowsDownloadUrl}>
             <span aria-hidden="true">⊞</span>
-            <span>Download for Windows<small>Latest release</small></span>
+            <span>Download for Windows<small>{releaseTag} · unsigned .exe</small></span>
           </a>
         </div>
         <p class="install-note">
-          Choose the matching OS asset on GitHub. Prefer the terminal? See the{" "}
+          These buttons download unsigned builds directly. Prefer the terminal? See the{" "}
           <a href="/docs/">setup and mechanism docs</a>.
         </p>
       </div>

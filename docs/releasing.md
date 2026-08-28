@@ -71,11 +71,23 @@ extracted changelog content.
 The rolling prerelease contains exactly three unsigned assets for the current
 build:
 
-- `draftomen-<build-id>-unsigned-macos.tar`
+- `draftomen-<build-id>-unsigned-macos.dmg`
 - `draftomen-<build-id>-unsigned-windows.exe`
 - `draftomen-<build-id>-unsigned-sha256sums.txt`
 
 The checksum file contains SHA-256 checksums for the macOS and Windows assets.
+The macOS asset is a compressed, read-only DMG with a `Draft Omen` volume
+containing the app at its root and an `Applications` symlink to `/Applications`.
+For manual testing, download the Actions artifact ZIP, extract the DMG, attach
+it read-only and without Finder browsing with `hdiutil attach -readonly
+-nobrowse -mountpoint <temporary-mount> <file>.dmg`, and run
+`tests/bundle_smoke.py` against the mounted app. Detach the image afterward even
+when the smoke test fails (an `EXIT` trap is recommended); alternatively open
+the DMG in Finder and drag the app onto its `Applications` shortcut. The DMG is
+unsigned, and the app has only Nuitka's required ad-hoc signature (no developer
+or distribution identity or notarization). Arrange platform-appropriate signing
+and notarization before redistributing the copied app.
+
 Development releases do not publish Python packages to PyPI, update
 Homebrew, or replace an immutable stable release.
 
@@ -145,9 +157,16 @@ brew install andreagrandi/tap/draftomen
 draftomen-tui --version
 QT_QPA_PLATFORM=offscreen draftomen --provider mock --smoke-test
 ```
-
 The public GitHub Release for `v<version>` must be published with the promoted
 dated changelog body and the two native bundle assets plus checksum file. The
-Homebrew formula is updated only after the immutable PyPI release succeeds. If
-a PyPI release is broken, yank it with a reason and publish a corrected patch
-release rather than replacing its files.
+macOS release asset is
+`draftomen-v<version>-unsigned-macos.dmg`. Download the release asset, open it
+in Finder or attach it read-only and without Finder browsing with
+`hdiutil attach -readonly -nobrowse -mountpoint <temporary-mount> <file>.dmg`,
+and run `tests/bundle_smoke.py` against the mounted app. Use an `EXIT` trap to
+detach the image even when smoke testing fails. To distribute it, drag the app
+onto the DMG's `Applications` shortcut in Finder, then eject the image; arrange
+platform-appropriate signing and notarization before redistributing the copied
+app. The Homebrew formula is updated only after the immutable PyPI release
+succeeds. If a PyPI release is broken, yank it with a reason and publish a
+corrected patch release rather than replacing its files.
