@@ -14,6 +14,7 @@ from draftomen.benchmark import (
 )
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.cli import main
+from draftomen.pickengine import PickEngine
 from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
     RatingSampleCounts,
@@ -73,6 +74,29 @@ def test_benchmark_metadata_augmentation_preserves_card_data_update_time() -> No
     )
 
     assert augmented.generated_at == timestamp
+
+
+def test_rating_metadata_fallback_keeps_colors_eligible_for_scoring() -> None:
+    database = _database_with_rating_metadata(
+        card_database=CardDatabase(cards={}),
+        ratings_data=_benchmark_ratings_data(),
+    )
+    fallback = database.lookup(grp_id=1)
+
+    assert fallback.unknown is False
+    assert fallback.colors == ("W",)
+    assert fallback.types == ("Unknown",)
+    assert fallback.arena_id == 1
+
+    scored = PickEngine(ratings_data=_benchmark_ratings_data()).score_pack(
+        offered_grp_ids=(3,),
+        card_database=database,
+        pool_grp_ids=(1, 2),
+        pick_index=5,
+    )
+    weights = dict(scored.commitment.color_weights)
+    assert weights["W"] > 0
+    assert weights["U"] > 0
 
 
 def test_benchmark_picks_cli_reads_local_public_draft_data(

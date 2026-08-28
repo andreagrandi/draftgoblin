@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from draftomen.carddb import (
     CardDatabase,
     CardInfo,
     CardMetadataSeed,
+    card_database_cache_path,
     load_card_database,
 )
 from draftomen.config import COLOR_PAIRS, PICK_ENGINE
@@ -23,6 +25,7 @@ from draftomen.seventeen import (
     SeventeenLandsDownloadProgress,
     SeventeenLandsError,
     build_17lands_structure_targets_from_draft_rows,
+    augment_card_database_from_ratings,
     has_cached_17lands_data,
     load_17lands_structure_targets,
     load_cached_17lands_data,
@@ -302,6 +305,72 @@ def test_cached_17lands_data_uses_empty_primary_when_cache_is_missing(
     assert rating.metadata.source == NEUTRAL_PRIOR_SOURCE
 
 
+def test_schema_three_ratings_wrapper_skips_mtgjson_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ratings_data = load_or_refresh_17lands_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path / "ratings",
+        clock=FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC)),
+        fetch_json=RecordingFetcher(),
+        thin_sample_minimum=500,
+    )
+    ratings_data = replace(
+        ratings_data,
+        fallback=None,
+        primary=replace(
+            ratings_data.primary,
+            card_ratings={1001: ratings_data.primary.card_ratings[1001]},
+        ),
+    )
+
+    cache_path = card_database_cache_path(app_dir=tmp_path / "cards")
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "source": "scryfall-default-cards",
+                "generated_at": None,
+                "cards": {
+                    "1001": {
+                        "grp_id": 1001,
+                        "name": "Legacy Card",
+                        "colors": ["W"],
+                        "mana_value": 2,
+                        "rarity": "common",
+                        "types": ["Creature"],
+                    }
+                },
+                "image_uris_by_name": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    database = load_card_database(app_dir=tmp_path / "cards")
+
+    def fail_mtgjson_download(**_kwargs: object) -> tuple[object, ...]:
+        pytest.fail("resolved schema-3 cards must not download MTGJSON")
+
+    monkeypatch.setattr(
+        "draftomen.carddb.download_mtgjson_set_cards",
+        fail_mtgjson_download,
+    )
+    loader = metadata_augmenting_ratings_progress_loader(
+        database=database,
+        load_ratings=lambda set_code, progress_callback, *, refresh: ratings_data,
+        app_dir=tmp_path / "persist",
+        persist_database=False,
+    )
+
+    loaded = loader("TST", lambda progress: None, refresh=False)
+
+    assert loaded is ratings_data
+    assert database.lookup(grp_id=1001).source_provenance == ("unknown",)
+
+
 def test_progress_loader_recovers_and_persists_current_set_card_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -357,6 +426,70 @@ def test_progress_loader_recovers_and_persists_current_set_card_metadata(
     assert (1001, "Fixture Quick Bomb") in captured_seeds
     assert database.lookup(grp_id=1001) == recovered_card
     assert load_card_database(app_dir=app_dir).lookup(grp_id=1001) == recovered_card
+
+
+def test_ratings_metadata_noop_preserves_cards_without_persisting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ratings_data = load_or_refresh_17lands_data(
+        set_code="TST",
+        event_format=QUICK_DRAFT_FORMAT,
+        app_dir=tmp_path / "ratings",
+        clock=FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC)),
+        fetch_json=RecordingFetcher(),
+        thin_sample_minimum=500,
+    )
+    existing_cards = {
+        1001: CardInfo(
+            grp_id=1001,
+            name="Existing Card",
+            colors=("W",),
+            mana_value=2.0,
+            rarity="common",
+            types=("Creature",),
+        ),
+        2001: CardInfo(
+            grp_id=2001,
+            name="Another Existing Card",
+            colors=("U",),
+            mana_value=3.0,
+            rarity="uncommon",
+            types=("Instant",),
+        ),
+    }
+    database = CardDatabase(cards=existing_cards.copy())
+    save_calls: list[tuple[object, object]] = []
+
+    def return_same_database(
+        base: CardDatabase,
+        *,
+        set_code: str,
+        seeds: Iterable[CardMetadataSeed],
+    ) -> CardDatabase:
+        assert base is database
+        assert set_code == "TST"
+        assert tuple(seeds)
+        return base
+
+    monkeypatch.setattr(
+        "draftomen.seventeen.augment_card_database_with_mtgjson_set",
+        return_same_database,
+    )
+    monkeypatch.setattr(
+        "draftomen.seventeen.save_card_database",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+    )
+
+    augment_card_database_from_ratings(
+        database=database,
+        set_code="TST",
+        ratings_data=ratings_data,
+        app_dir=tmp_path / "app",
+    )
+
+    assert database.cards == existing_cards
+    assert save_calls == []
 
 
 def test_pair_win_rates_are_available_for_all_ten_pairs(tmp_path: Path) -> None:

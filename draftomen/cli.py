@@ -645,14 +645,9 @@ def handle_replay(args: argparse.Namespace) -> int:
         output = replay_log_file(
             logfile=args.logfile,
             card_database=database,
-            ratings_loader=metadata_augmenting_ratings_loader(
-                database=database,
-                load_ratings=lambda set_code: load_cached_17lands_data(
-                    set_code=set_code,
-                    app_dir=args.app_dir,
-                ),
+            ratings_loader=lambda set_code: load_cached_17lands_data(
+                set_code=set_code,
                 app_dir=args.app_dir,
-                persist_database=args.bulk_file is None,
             ),
             splash_enabled=args.splash_enabled,
         )
