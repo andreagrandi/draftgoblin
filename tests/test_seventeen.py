@@ -113,6 +113,31 @@ def test_17lands_format_data_is_cached_and_not_refetched_within_24h(
     ).exists()
 
 
+def test_17lands_refresh_refetches_fresh_cache(
+    tmp_path: Path,
+) -> None:
+    clock = FrozenClock(datetime(2026, 7, 3, 12, 0, tzinfo=UTC))
+    fetcher = RecordingFetcher()
+
+    load_or_refresh_17lands_data(
+        set_code="TST",
+        app_dir=tmp_path,
+        clock=clock,
+        fetch_json=fetcher,
+    )
+    fetcher.urls.clear()
+
+    load_or_refresh_17lands_data(
+        set_code="TST",
+        app_dir=tmp_path,
+        clock=clock,
+        fetch_json=fetcher,
+        refresh=True,
+    )
+
+    assert len(fetcher.urls) == 4
+
+
 def test_first_17lands_download_reports_request_progress_and_builds_cache(
     tmp_path: Path,
 ) -> None:
@@ -299,6 +324,7 @@ def test_progress_loader_recovers_and_persists_current_set_card_metadata(
         types=("Creature",),
     )
     captured_seeds: list[tuple[int, str]] = []
+    refresh_values: list[bool] = []
 
     def recover_metadata(
         base: CardDatabase,
@@ -318,13 +344,16 @@ def test_progress_loader_recovers_and_persists_current_set_card_metadata(
     app_dir = tmp_path / "app"
     loader = metadata_augmenting_ratings_progress_loader(
         database=database,
-        load_ratings=lambda set_code, progress_callback: ratings_data,
+        load_ratings=lambda set_code, progress_callback, *, refresh: (
+            refresh_values.append(refresh) or ratings_data
+        ),
         app_dir=app_dir,
     )
 
-    loaded = loader("TST", lambda progress: None)
+    loaded = loader("TST", lambda progress: None, refresh=True)
 
     assert loaded is ratings_data
+    assert refresh_values == [True]
     assert (1001, "Fixture Quick Bomb") in captured_seeds
     assert database.lookup(grp_id=1001) == recovered_card
     assert load_card_database(app_dir=app_dir).lookup(grp_id=1001) == recovered_card

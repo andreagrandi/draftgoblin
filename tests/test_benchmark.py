@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from draftomen.benchmark import (
+    _database_with_rating_metadata,
     build_pick_benchmark_report_from_rows,
     format_pick_benchmark_report,
 )
@@ -62,6 +63,16 @@ def test_pick_benchmark_compares_wr_and_do_score_by_phase() -> None:
     assert "DO vs 17L actual-pick rank: better 1 (33.3%)" in output
     assert "Default ranking decision: DO Score is the default" in output
     assert "Non-ML heuristic candidate from misses" in output
+
+
+def test_benchmark_metadata_augmentation_preserves_card_data_update_time() -> None:
+    timestamp = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+    augmented = _database_with_rating_metadata(
+        card_database=CardDatabase(cards={}, generated_at=timestamp),
+        ratings_data=_benchmark_ratings_data(),
+    )
+
+    assert augmented.generated_at == timestamp
 
 
 def test_benchmark_picks_cli_reads_local_public_draft_data(

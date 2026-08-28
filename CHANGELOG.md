@@ -7,6 +7,8 @@
 - Add a persisted toggle for following system text scaling in the desktop Settings, with effective scale feedback.
 - Show desktop display-preference autosave status in the bottom status bar.
 - Keep Backtest navigation hidden by default, with a persisted Settings visibility toggle.
+- Show the latest successful card-data update time in Settings, with a clear never-updated state.
+- Make manual ratings refresh bypass ready/cache short-circuits, expose download progress in Settings, and show the visible ratings refresh time.
 
 - Replace the README and website screenshots with current GUI views for live picks and suggested decks.
 

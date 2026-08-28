@@ -7,11 +7,12 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from enum import StrEnum
 from os import PathLike
 from pathlib import Path
 from threading import RLock
-from typing import TypeAlias
+from typing import Protocol, TypeAlias
 
 from draftomen.audit import DraftAuditStore
 from draftomen.backtest import (
@@ -76,10 +77,22 @@ EventPublisher: TypeAlias = Callable[["LiveSessionEvent"], None]
 CardDatabaseLoader: TypeAlias = Callable[[], CardDatabase]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
 RatingsLoaderFactory: TypeAlias = Callable[[CardDatabase], RatingsLoader]
-RatingsProgressLoader: TypeAlias = Callable[
-    [str, DownloadProgressCallback],
-    SeventeenLandsData,
-]
+
+
+class RatingsProgressLoader(Protocol):
+    def __call__(
+        self,
+        set_code: str,
+        progress_callback: DownloadProgressCallback,
+        *,
+        refresh: bool,
+    ) -> SeventeenLandsData:
+        """Load ratings while reporting request progress.
+        The callback receives download progress updates during loading.
+        """
+        ...
+
+
 RatingsProgressLoaderFactory: TypeAlias = Callable[
     [CardDatabase],
     RatingsProgressLoader,
@@ -227,6 +240,7 @@ class CardDataState:
 
     phase: DataLoadPhase = DataLoadPhase.UNAVAILABLE
     message: str = "Card metadata is not configured."
+    last_successful_update: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +254,7 @@ class RatingsState:
     message: str = "17Lands ratings are not configured."
     rated_cards: int | None = None
     total_cards: int | None = None
+    last_successful_update: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -686,6 +701,9 @@ class LiveSession:
             card_data = CardDataState(
                 phase=DataLoadPhase.READY,
                 message="Card metadata is ready.",
+                last_successful_update=_last_successful_update(
+                    database=card_database
+                ),
             )
         elif card_database_loader is not None:
             card_data = CardDataState(
@@ -1527,7 +1545,8 @@ class LiveSession:
         self._publish(
             snapshot=replace(
                 self.snapshot,
-                card_data=CardDataState(
+                card_data=replace(
+                    self.snapshot.card_data,
                     phase=DataLoadPhase.LOADING,
                     message="Loading card metadata.",
                 ),
@@ -1629,7 +1648,8 @@ class LiveSession:
             self._publish(
                 snapshot=replace(
                     self.snapshot,
-                    card_data=CardDataState(
+                    card_data=replace(
+                        self.snapshot.card_data,
                         phase=DataLoadPhase.FAILED,
                         message=session_error.message,
                     ),
@@ -1647,6 +1667,9 @@ class LiveSession:
                 card_data=CardDataState(
                     phase=DataLoadPhase.READY,
                     message="Card metadata is ready.",
+                    last_successful_update=_last_successful_update(
+                        database=database
+                    ),
                 ),
                 progress=None,
                 errors=self._without_error_id(error_id="card-data"),
@@ -1729,7 +1752,7 @@ class LiveSession:
                 self._publish_active_ratings_state(state=state)
                 return
 
-        self._load_ratings(set_code=normalized_set_code)
+        self._load_ratings(set_code=normalized_set_code, refresh=False)
 
     def _request_ratings_download(self, *, set_code: str) -> None:
         normalized_set_code = set_code.upper()
@@ -1741,17 +1764,21 @@ class LiveSession:
                 f"Ratings download set {normalized_set_code!r} does not match "
                 f"active set {active_set_code!r}."
             )
-        if self._ratings_data_by_set.get(normalized_set_code) is not None:
-            return
 
-        self._load_ratings(set_code=normalized_set_code)
+        self._load_ratings(set_code=normalized_set_code, refresh=True)
 
-    def _load_ratings(self, *, set_code: str) -> None:
+    def _load_ratings(self, *, set_code: str, refresh: bool) -> None:
         if self._ratings_loader is None and self._ratings_progress_loader is None:
+            previous_state = self._ratings_state_by_set.get(set_code)
             state = RatingsState(
                 set_code=set_code,
                 phase=DataLoadPhase.UNAVAILABLE,
                 message=f"No 17Lands ratings loader is available for {set_code}.",
+                last_successful_update=(
+                    None
+                    if previous_state is None
+                    else previous_state.last_successful_update
+                ),
             )
             self._ratings_state_by_set[set_code] = state
             self._publish_active_ratings_state(state=state)
@@ -1770,6 +1797,7 @@ class LiveSession:
                         set_code=set_code,
                         progress=progress,
                     ),
+                    refresh=refresh,
                 )
             elif self._ratings_loader is not None:
                 ratings_data = self._ratings_loader(set_code)
@@ -1783,19 +1811,26 @@ class LiveSession:
         )
 
     def _begin_ratings_load(self, *, set_code: str) -> bool:
-        loading_state = RatingsState(
-            set_code=set_code,
-            phase=DataLoadPhase.LOADING,
-            message=f"Checking 17Lands data for {set_code}.",
-        )
-        loading_progress = ProgressState(
-            operation=OperationKind.RATINGS,
-            message=f"Checking 17Lands data for {set_code}",
-            completed=0,
-        )
         with self._state_lock:
             if set_code in self._loading_rating_sets:
                 return False
+
+            previous_state = self._ratings_state_by_set.get(set_code)
+            loading_state = RatingsState(
+                set_code=set_code,
+                phase=DataLoadPhase.LOADING,
+                message=f"Checking 17Lands data for {set_code}.",
+                last_successful_update=(
+                    None
+                    if previous_state is None
+                    else previous_state.last_successful_update
+                ),
+            )
+            loading_progress = ProgressState(
+                operation=OperationKind.RATINGS,
+                message=f"Checking 17Lands data for {set_code}",
+                completed=0,
+            )
 
             self._loading_rating_sets.add(set_code)
             self._ratings_state_by_set[set_code] = loading_state
@@ -1869,6 +1904,7 @@ class LiveSession:
         error_message: str | None,
     ) -> None:
         self._loading_rating_sets.discard(set_code)
+        previous_state = self._ratings_state_by_set.get(set_code)
         if ratings_data is None:
             detail = error_message or "no ratings were returned"
             session_error = SessionError(
@@ -1883,6 +1919,11 @@ class LiveSession:
                 phase=DataLoadPhase.FAILED,
                 message=(
                     f"{session_error.message} Neutral-prior scores remain active."
+                ),
+                last_successful_update=(
+                    None
+                    if previous_state is None
+                    else previous_state.last_successful_update
                 ),
             )
             self._ratings_data_by_set[set_code] = None
@@ -1907,6 +1948,9 @@ class LiveSession:
             set_code=set_code,
             phase=DataLoadPhase.READY,
             message=f"17Lands ratings are ready for {set_code}.",
+            last_successful_update=_ratings_last_successful_update(
+                ratings_data=ratings_data
+            ),
         )
         self._ratings_state_by_set[set_code] = state
         self._ratings_progress_by_set.pop(set_code, None)
@@ -3377,6 +3421,47 @@ class LiveSession:
                 scored_pack=scored_pack,
             )
         )
+
+
+def _ratings_last_successful_update(
+    *, ratings_data: SeventeenLandsData
+) -> str | None:
+    """Return primary ratings freshness as a QML-safe UTC ISO-8601 string.
+    Invalid or naive 17Lands cache metadata is treated as never updated.
+    """
+
+    fetched_at = getattr(
+        getattr(ratings_data, "primary", None),
+        "fetched_at",
+        None,
+    )
+    if (
+        not isinstance(fetched_at, datetime)
+        or fetched_at.tzinfo is None
+        or fetched_at.utcoffset() is None
+    ):
+        return None
+
+    try:
+        return fetched_at.astimezone(UTC).isoformat()
+    except (OverflowError, OSError, TypeError, ValueError):
+        return None
+
+
+def _last_successful_update(*, database: CardDatabase) -> str | None:
+    """Return a database refresh time as a QML-safe UTC ISO-8601 string.
+    Unknown or naive cache metadata is treated as never updated.
+    """
+
+    generated_at = database.generated_at
+    if (
+        not isinstance(generated_at, datetime)
+        or generated_at.tzinfo is None
+        or generated_at.utcoffset() is None
+    ):
+        return None
+
+    return generated_at.astimezone(UTC).isoformat()
 
 
 def _waiting_for_draft_status(*, setup_guidance: bool) -> ApplicationStatus:

@@ -43,7 +43,12 @@ from draftomen.seventeen import (
     SeventeenLandsDownloadProgress,
     SeventeenLandsFormatData,
 )
-from draftomen.session import ApplicationPhase, DataLoadPhase, OperationKind
+from draftomen.session import (
+    ApplicationPhase,
+    DataLoadPhase,
+    OperationKind,
+    RatingsProgressLoader,
+)
 from draftomen.splash import SplashAssessment
 from draftomen.tui import (
     MANA_CARD_TYPE_GLYPHS,
@@ -2052,6 +2057,8 @@ async def _assert_missing_ratings_download_rescores_pack(tmp_path: Path) -> None
     def progress_loader(
         set_code: str,
         progress_callback: Callable[[SeventeenLandsDownloadProgress], None],
+        *,
+        refresh: bool,
     ) -> SeventeenLandsData:
         progress_callback(
             SeventeenLandsDownloadProgress(
@@ -2520,11 +2527,7 @@ def _tui_app(
     card_database: CardDatabase | None = None,
     card_database_loader: Callable[[], CardDatabase] | None = None,
     ratings_loader: Callable[[str], SeventeenLandsData] | None = None,
-    ratings_progress_loader: Callable[
-        [str, Callable[[SeventeenLandsDownloadProgress], None]],
-        SeventeenLandsData,
-    ]
-    | None = None,
+    ratings_progress_loader: RatingsProgressLoader | None = None,
     ratings_cache_checker: Callable[[str], bool] | None = None,
     image_preview_enabled: bool | None = None,
     mana_icons_enabled: bool = False,

@@ -48,6 +48,7 @@ from draftomen.replay import ReplayError, replay_log_file
 from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
+    DownloadProgressCallback,
     SeventeenLandsData,
     augment_card_database_from_ratings,
     SeventeenLandsError,
@@ -493,6 +494,19 @@ def handle_watch(args: argparse.Namespace) -> int:
                 ),
             )
 
+        def load_ratings(
+            set_code: str,
+            progress_callback: DownloadProgressCallback,
+            *,
+            refresh: bool,
+        ) -> SeventeenLandsData:
+            return load_or_refresh_17lands_data(
+                set_code=set_code,
+                app_dir=args.app_dir,
+                refresh=refresh,
+                progress_callback=progress_callback,
+            )
+
         return run_tui_watch(
             log_path=log_path,
             card_database_loader=lambda: _load_watch_card_database(args=args),
@@ -503,13 +517,7 @@ def handle_watch(args: argparse.Namespace) -> int:
             ratings_progress_loader_factory=lambda database: (
                 metadata_augmenting_ratings_progress_loader(
                     database=database,
-                    load_ratings=lambda set_code, progress_callback: (
-                        load_or_refresh_17lands_data(
-                            set_code=set_code,
-                            app_dir=args.app_dir,
-                            progress_callback=progress_callback,
-                        )
-                    ),
+                    load_ratings=load_ratings,
                     app_dir=args.app_dir,
                     persist_database=args.bulk_file is None,
                 )

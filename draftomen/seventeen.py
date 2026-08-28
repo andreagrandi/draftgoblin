@@ -855,12 +855,12 @@ def metadata_augmenting_ratings_progress_loader(
     *,
     database: CardDatabase,
     load_ratings: Callable[
-        [str, DownloadProgressCallback],
+        [str, DownloadProgressCallback, bool],
         SeventeenLandsData,
     ],
     app_dir: PathInput | None = None,
     persist_database: bool = True,
-) -> Callable[[str, DownloadProgressCallback], SeventeenLandsData]:
+) -> Callable[[str, DownloadProgressCallback, bool], SeventeenLandsData]:
     """Wrap progress-aware ratings loading with current-set metadata recovery.
     The returned loader preserves the frontend-neutral progress contract.
     """
@@ -868,8 +868,14 @@ def metadata_augmenting_ratings_progress_loader(
     def load_and_augment(
         set_code: str,
         progress_callback: DownloadProgressCallback,
+        *,
+        refresh: bool,
     ) -> SeventeenLandsData:
-        ratings_data = load_ratings(set_code, progress_callback)
+        ratings_data = load_ratings(
+            set_code,
+            progress_callback,
+            refresh=refresh,
+        )
         augment_card_database_from_ratings(
             database=database,
             set_code=set_code,

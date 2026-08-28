@@ -121,6 +121,81 @@ def test_live_gui_uses_shared_metadata_augmenting_factory(
     assert factory_calls == [(database, app_dir, True)]
 
 
+def test_qml_settings_renders_card_and_ratings_update_fallback_and_value() -> None:
+    probe = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QObject, QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+
+from draftomen import __version__
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.qt_mock import MockSessionAdapter
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+provider = MockSessionAdapter(session=MockLiveSession(scenario="loading"))
+with TemporaryDirectory() as preferences_dir:
+    preferences = GuiPreferencesAdapter(app_dir=preferences_dir)
+    engine = QQmlApplicationEngine()
+    qml_directory = Path.cwd() / "draftomen" / "qml"
+    engine.addImportPath(str(qml_directory))
+    context = engine.rootContext()
+    context.setContextProperty("fixedFontFamily", _fixed_font_family())
+    context.setContextProperty("sessionProvider", provider)
+    context.setContextProperty("applicationTitle", "Draft Omen")
+    context.setContextProperty("applicationVersion", __version__)
+    context.setContextProperty("guiPreferences", preferences)
+    context.setContextProperty("initialSurface", "settings")
+    context.setContextProperty("initialWindowWidth", 900)
+    context.setContextProperty("initialWindowHeight", 760)
+    engine.setInitialProperties({"provider": provider})
+    engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+    assert engine.rootObjects()
+    root = engine.rootObjects()[0]
+    application.processEvents()
+
+    card_message = root.findChild(QObject, "settingsCardDataMessage")
+    card_update_label = root.findChild(QObject, "settingsCardDataLastUpdated")
+    ratings_update_label = root.findChild(QObject, "settingsRatingsLastUpdated")
+    assert card_message is not None
+    assert card_update_label is not None
+    assert ratings_update_label is not None
+    assert card_message.property("text") == "Loading card metadata."
+    assert card_update_label.property("text") == "Card metadata updated · Never updated"
+    assert ratings_update_label.property("text") == "17Lands ratings updated · Never updated"
+    assert not any(
+        str(item.property("text")) == "Statistics attribution · 17Lands"
+        for item in root.findChildren(QObject)
+    )
+
+    provider.selectScenario("ready")
+    application.processEvents()
+    assert card_message.property("text") == "Card metadata ready."
+    assert str(card_update_label.property("text")).startswith("Card metadata updated · ")
+    assert "2026" in card_update_label.property("text")
+    assert "Never updated" not in card_update_label.property("text")
+    assert str(ratings_update_label.property("text")).startswith("17Lands ratings updated · ")
+    assert "2026" in ratings_update_label.property("text")
+    assert "Never updated" not in ratings_update_label.property("text")
+
+    preferences.shutdown()
+    del engine
+"""
+    completed = _run_qml_probe(probe)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+    assert "TypeError" not in completed.stderr
+
+
 def test_qml_renders_full_pre_draft_setup_guidance_offscreen() -> None:
     probe = """
 from dataclasses import replace
@@ -1210,6 +1285,131 @@ assert provider.state["ratings"]["phase"] == "loading"
     completed = _run_qml_probe(probe)
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_qml_settings_ratings_progress_and_styled_download_dialog_offscreen() -> None:
+    probe = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QObject, QUrl, Qt
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtTest import QTest
+
+from draftomen import __version__
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.qt_mock import MockSessionAdapter
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+provider = MockSessionAdapter(session=MockLiveSession(scenario="ready"))
+preferences_dir = TemporaryDirectory()
+preferences = GuiPreferencesAdapter(app_dir=preferences_dir.name)
+engine = QQmlApplicationEngine()
+qml_directory = Path.cwd() / "draftomen" / "qml"
+engine.addImportPath(str(qml_directory))
+context = engine.rootContext()
+context.setContextProperty("fixedFontFamily", _fixed_font_family())
+context.setContextProperty("sessionProvider", provider)
+context.setContextProperty("applicationTitle", "Draft Omen")
+context.setContextProperty("applicationVersion", __version__)
+context.setContextProperty("guiPreferences", preferences)
+context.setContextProperty("initialSurface", "settings")
+context.setContextProperty("initialWindowWidth", 900)
+context.setContextProperty("initialWindowHeight", 700)
+engine.setInitialProperties({"provider": provider})
+engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+root = engine.rootObjects()[0]
+application.processEvents()
+
+progress_container = root.findChild(QObject, "settingsRatingsProgressContainer")
+progress_message = root.findChild(QObject, "settingsRatingsProgressMessage")
+progress_bar = root.findChild(QObject, "settingsRatingsProgressBar")
+card_update = root.findChild(QObject, "settingsCardDataLastUpdated")
+ratings_update = root.findChild(QObject, "settingsRatingsLastUpdated")
+download = root.findChild(QObject, "settingsRatingsDownloadButton")
+assert progress_container is not None
+assert progress_message is not None
+assert progress_bar is not None
+assert card_update is not None
+assert ratings_update is not None
+assert download is not None
+assert str(card_update.property("text")).startswith("Card metadata updated · ")
+assert str(ratings_update.property("text")).startswith("17Lands ratings updated · ")
+assert "Never updated" not in card_update.property("text")
+assert "Never updated" not in ratings_update.property("text")
+assert progress_container.property("visible") is False
+assert download.property("enabled") is True
+assert download.property("text") == "Download 17Lands ratings"
+
+download.forceActiveFocus()
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+dialog = root.findChild(QObject, "settingsRatingsDownloadDialog")
+background = root.findChild(QObject, "settingsRatingsDownloadDialogBackground")
+header = root.findChild(QObject, "settingsRatingsDownloadDialogHeader")
+footer = root.findChild(QObject, "settingsRatingsDownloadDialogFooter")
+footer_background = root.findChild(
+    QObject, "settingsRatingsDownloadDialogFooterBackground"
+)
+title = root.findChild(QObject, "settingsRatingsDownloadDialogTitle")
+dialog_message = root.findChild(QObject, "settingsRatingsDownloadDialogMessage")
+confirm = root.findChild(QObject, "settingsRatingsDownloadConfirmButton")
+assert dialog is not None and dialog.property("visible") is True
+assert background is not None
+assert header is not None
+assert footer is not None
+assert footer_background is not None
+assert title is not None
+assert dialog_message is not None
+assert confirm is not None
+assert title.property("text") == "Download 17Lands ratings?"
+assert dialog_message.property("text") == (
+    "Download text-only card performance ratings and color-pair win rates "
+    "from 17Lands for OTJ? No card images are downloaded."
+)
+assert confirm.property("text") == "Download 17Lands ratings"
+assert background.property("color").name() == "#11142a"
+assert background.property("radius") == 4
+assert header.property("color").name() == "#191d3b"
+assert header.property("height") == 52
+assert footer.property("visible") is True
+assert footer_background.property("color").name() == "#191d3b"
+
+confirm.forceActiveFocus()
+QTest.keyClick(root, Qt.Key_Space)
+application.processEvents()
+assert dialog.property("visible") is False
+assert provider.state["ratings"]["phase"] == "loading"
+assert provider.state["progress"]["operation"] == "ratings"
+assert progress_container.property("visible") is True
+assert progress_message.property("text") == "Downloading OTJ ratings"
+assert progress_bar.property("visible") is True
+assert progress_bar.property("indeterminate") is False
+assert progress_bar.property("value") == 340
+assert progress_bar.property("to") == 1000
+assert download.property("enabled") is False
+
+provider.selectScenario("ready")
+application.processEvents()
+assert progress_container.property("visible") is False
+assert progress_bar.property("visible") is False
+assert download.property("enabled") is True
+
+preferences.shutdown()
+del engine
+"""
+    completed = _run_qml_probe(probe)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+    assert "TypeError" not in completed.stderr
 
 
 def test_qml_recent_pick_preview_uses_delayed_bounded_hover_offscreen() -> None:

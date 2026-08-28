@@ -168,6 +168,7 @@ class CardDatabase:
 
     cards: dict[int, CardInfo]
     image_uris_by_name: dict[str, str] = field(default_factory=dict)
+    generated_at: datetime | None = None
 
     def __len__(self) -> int:
         return len(self.cards)
@@ -211,7 +212,7 @@ class CardDatabase:
         return {
             "schema_version": CACHE_SCHEMA_VERSION,
             "source": "scryfall-default-cards",
-            "generated_at": datetime.now(tz=UTC).isoformat(),
+            "generated_at": _utc_isoformat(value=self.generated_at),
             "cards": {
                 str(grp_id): card.to_json()
                 for grp_id, card in sorted(self.cards.items())
@@ -256,6 +257,7 @@ class CardDatabase:
         return cls(
             cards=cards,
             image_uris_by_name=_image_uris_by_name_from_json(data=data),
+            generated_at=_optional_datetime(data.get("generated_at")),
         )
 
 
@@ -370,6 +372,7 @@ def refresh_card_database(
             "Scryfall refresh did not produce a cacheable card metadata result."
         )
     if cacheable:
+        database = replace(database, generated_at=datetime.now(tz=UTC))
         save_card_database(database, app_dir=app_dir, cache_path=cache_path)
     return database
 
@@ -600,10 +603,7 @@ def augment_card_database_with_mtgjson_set(
             cards_by_uuid=cards_by_uuid,
         )
 
-    return CardDatabase(
-        cards=cards,
-        image_uris_by_name=database.image_uris_by_name,
-    )
+    return replace(database, cards=cards)
 
 
 def download_mtgjson_set_cards(
@@ -1034,7 +1034,11 @@ def _merge_card_databases(
 
     image_uris_by_name = dict(base.image_uris_by_name)
     image_uris_by_name.update(overlay.image_uris_by_name)
-    return CardDatabase(cards=cards, image_uris_by_name=image_uris_by_name)
+    return replace(
+        base,
+        cards=cards,
+        image_uris_by_name=image_uris_by_name,
+    )
 
 
 SCRYFALL_IMAGE_URI_KEYS = (
@@ -1797,6 +1801,40 @@ def _optional_str(value: Any, *, field_name: str) -> str | None:
         return None
 
     return _required_str(value, field_name=field_name)
+
+
+def _optional_datetime(value: Any) -> datetime | None:
+    """Parse a timezone-aware ISO-8601 timestamp when available.
+    Legacy or malformed values are treated as unknown metadata.
+    """
+
+    if not isinstance(value, str) or value == "":
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+
+    return parsed.astimezone(UTC)
+
+
+def _utc_isoformat(*, value: datetime | None) -> str | None:
+    """Serialize an aware timestamp as canonical UTC ISO-8601 text.
+    Naive values cannot identify a successful UTC refresh.
+    """
+
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
+        return None
+
+    return value.astimezone(UTC).isoformat()
 
 
 def _required_int(value: Any, *, field_name: str) -> int:

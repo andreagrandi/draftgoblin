@@ -150,10 +150,13 @@ def _live_session_factory(
     def load_ratings(
         set_code: str,
         progress_callback: DownloadProgressCallback,
+        *,
+        refresh: bool,
     ) -> SeventeenLandsData:
         return load_or_refresh_17lands_data(
             set_code=set_code,
             app_dir=app_dir,
+            refresh=refresh,
             progress_callback=progress_callback,
         )
 

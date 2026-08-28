@@ -84,6 +84,7 @@ from draftomen.session import (
     LiveSessionSnapshot,
     OperationKind,
     PoolState,
+    RatingsProgressLoader,
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
@@ -100,10 +101,6 @@ PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
 CardDatabaseLoader: TypeAlias = Callable[[], CardDatabase]
 RatingsLoaderFactory: TypeAlias = Callable[[CardDatabase], RatingsLoader]
-RatingsProgressLoader: TypeAlias = Callable[
-    [str, DownloadProgressCallback],
-    SeventeenLandsData,
-]
 RatingsProgressLoaderFactory: TypeAlias = Callable[
     [CardDatabase],
     RatingsProgressLoader,

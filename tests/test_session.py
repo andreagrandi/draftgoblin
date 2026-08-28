@@ -105,6 +105,21 @@ def test_default_live_session_snapshot_has_neutral_initial_state() -> None:
     assert snapshot.backtest is None
 
 
+def test_live_session_exposes_injected_card_database_update_time(
+    tmp_path: Path,
+) -> None:
+    timestamp = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=replace(_fixture_card_database(), generated_at=timestamp),
+    )
+
+    assert session.snapshot.card_data.last_successful_update == (
+        timestamp.isoformat()
+    )
+
+
 def test_pool_aggregates_apply_card_quantities_and_skip_lands() -> None:
     colorless_card = replace(_card(), grp_id=124, colors=(), mana_value=None)
     blue_card = replace(_card(), grp_id=125, colors=("U",), mana_value=7.0)
@@ -848,6 +863,7 @@ def test_live_session_loads_cached_ratings_scores_all_ranking_modes_and_audits_c
         message="17Lands ratings are ready for MSH.",
         rated_cards=2,
         total_cards=14,
+        last_successful_update="2026-08-23T12:00:00+00:00",
     )
     assert session.snapshot.recommendations.source_summary == (
         "QuickDraft + Premier fallback + neutral prior"
@@ -944,13 +960,15 @@ def test_live_session_missing_ratings_use_neutral_priors_until_download_complete
     tmp_path: Path,
 ) -> None:
     published: list[LiveSessionSnapshot] = []
-    load_calls: list[str] = []
+    load_calls: list[tuple[str, bool]] = []
 
     def ratings_loader(
         set_code: str,
         progress_callback: DownloadProgressCallback,
+        *,
+        refresh: bool,
     ) -> SeventeenLandsData:
-        load_calls.append(set_code)
+        load_calls.append((set_code, refresh))
         progress_callback(
             SeventeenLandsDownloadProgress(
                 completed_requests=1,
@@ -987,7 +1005,7 @@ def test_live_session_missing_ratings_use_neutral_priors_until_download_complete
     published.clear()
     downloaded = session.dispatch(command=RequestRatingsDownload(set_code="MSH"))
 
-    assert load_calls == ["MSH"]
+    assert load_calls == [("MSH", True)]
     assert downloaded.ratings.phase == DataLoadPhase.READY
     assert downloaded.progress is None
     assert downloaded.recommendations.cards[0].card.grp_id == 104894
@@ -1003,6 +1021,133 @@ def test_live_session_missing_ratings_use_neutral_priors_until_download_complete
     )
     assert any(
         snapshot.progress is not None and snapshot.progress.completed == 4
+        for snapshot in published
+    )
+
+
+def test_live_session_explicit_ratings_refresh_reloads_ready_data(
+    tmp_path: Path,
+) -> None:
+    published: list[LiveSessionSnapshot] = []
+    load_calls: list[tuple[str, bool]] = []
+
+    def ratings_loader(
+        set_code: str,
+        progress_callback: DownloadProgressCallback,
+        *,
+        refresh: bool,
+    ) -> SeventeenLandsData:
+        load_calls.append((set_code, refresh))
+        progress_callback(
+            SeventeenLandsDownloadProgress(
+                completed_requests=1,
+                total_requests=4,
+                message="Refreshing Quick Draft ratings",
+            )
+        )
+        fetched_at = datetime(
+            2026,
+            8,
+            23 if len(load_calls) == 1 else 24,
+            12,
+            tzinfo=UTC,
+        )
+        return _fixture_ratings_data(set_code=set_code, fetched_at=fetched_at)
+
+    cache_checks: list[str] = []
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        ratings_progress_loader=ratings_loader,
+        ratings_cache_checker=lambda set_code: (
+            cache_checks.append(set_code) or True
+        ),
+        snapshot_publisher=published.append,
+    )
+    _process_until_recommendations(
+        session=session,
+        lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
+    )
+
+    assert load_calls == [("MSH", False)]
+    assert cache_checks == ["MSH"]
+    assert session.snapshot.ratings.phase == DataLoadPhase.READY
+    assert session.snapshot.ratings.last_successful_update == (
+        "2026-08-23T12:00:00+00:00"
+    )
+
+    published.clear()
+    refreshed = session.dispatch(command=RequestRatingsDownload(set_code="MSH"))
+
+    assert load_calls == [("MSH", False), ("MSH", True)]
+    assert cache_checks == ["MSH"]
+    assert refreshed.ratings.phase == DataLoadPhase.READY
+    assert refreshed.ratings.last_successful_update == (
+        "2026-08-24T12:00:00+00:00"
+    )
+    assert refreshed.progress is None
+    assert any(
+        snapshot.ratings.phase == DataLoadPhase.LOADING
+        and snapshot.progress == ProgressState(
+            operation=OperationKind.RATINGS,
+            message="Refreshing Quick Draft ratings",
+            completed=1,
+            total=4,
+        )
+        for snapshot in published
+    )
+    assert any(
+        snapshot.ratings.phase == DataLoadPhase.READY
+        and snapshot.progress is None
+        for snapshot in published
+    )
+def test_live_session_ratings_refresh_retains_timestamp_while_loading_and_on_failure(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+    published: list[LiveSessionSnapshot] = []
+
+    def ratings_loader(set_code: str) -> SeventeenLandsData:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            raise RuntimeError("temporary service failure")
+        fetched_at = datetime(
+            2026,
+            8,
+            23 if attempts == 1 else 24,
+            12,
+            tzinfo=UTC,
+        )
+        return _fixture_ratings_data(set_code=set_code, fetched_at=fetched_at)
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        ratings_loader=ratings_loader,
+        ratings_cache_checker=lambda set_code: True,
+        snapshot_publisher=published.append,
+    )
+    _process_until_recommendations(
+        session=session,
+        lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines(),
+    )
+
+    previous_timestamp = "2026-08-23T12:00:00+00:00"
+    assert session.snapshot.ratings.last_successful_update == previous_timestamp
+    card_timestamp = session.snapshot.card_data.last_successful_update
+
+    published.clear()
+    failed = session.dispatch(command=RequestRatingsDownload(set_code="MSH"))
+
+    assert failed.ratings.phase == DataLoadPhase.FAILED
+    assert failed.ratings.last_successful_update == previous_timestamp
+    assert failed.card_data.last_successful_update == card_timestamp
+    assert any(
+        snapshot.ratings.phase == DataLoadPhase.LOADING
+        and snapshot.ratings.last_successful_update == previous_timestamp
         for snapshot in published
     )
 
@@ -1066,8 +1211,10 @@ def test_live_session_card_data_load_failure_and_retry_publish_complete_states(
         attempts += 1
         if attempts == 1:
             raise RuntimeError("card cache unavailable")
-
-        return _fixture_card_database()
+        return replace(
+            _fixture_card_database(),
+            generated_at=datetime(2026, 8, 23, 12, 0, tzinfo=UTC),
+        )
 
     session = LiveSession(
         log_path=tmp_path / "Player.log",
@@ -1081,6 +1228,7 @@ def test_live_session_card_data_load_failure_and_retry_publish_complete_states(
     failed = session.load_card_data()
 
     assert failed.card_data.phase == DataLoadPhase.FAILED
+    assert failed.card_data.last_successful_update is None
     assert failed.progress is None
     assert failed.errors[0].error_id == "card-data"
     assert any(
@@ -1096,6 +1244,7 @@ def test_live_session_card_data_load_failure_and_retry_publish_complete_states(
     assert ready.card_data == CardDataState(
         phase=DataLoadPhase.READY,
         message="Card metadata is ready.",
+        last_successful_update="2026-08-23T12:00:00+00:00",
     )
     assert ready.errors == ()
 
@@ -1167,6 +1316,8 @@ def test_inactive_ratings_worker_caches_result_without_publishing_stale_state(
     def ratings_loader(
         set_code: str,
         progress_callback: DownloadProgressCallback,
+        *,
+        refresh: bool,
     ) -> SeventeenLandsData:
         load_calls.append(set_code)
         load_started.set()
@@ -2902,8 +3053,16 @@ def _fixture_card_database(*, with_image_uris: bool = False) -> CardDatabase:
     )
 
 
-def _fixture_ratings_data(*, set_code: str) -> SeventeenLandsData:
-    fetched_at = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+def _fixture_ratings_data(
+    *,
+    set_code: str,
+    fetched_at: datetime | None = None,
+) -> SeventeenLandsData:
+    fetched_at = (
+        datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+        if fetched_at is None
+        else fetched_at
+    )
     return SeventeenLandsData(
         set_code=set_code,
         requested_format=QUICK_DRAFT_FORMAT,
