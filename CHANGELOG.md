@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix the stable release workflow by using a supported GitHub Actions concurrency setting.
+
 ## [0.3.0] - 2026-08-28
 
 - Automatically open Deck Build and build the completed draft after the final pick.
