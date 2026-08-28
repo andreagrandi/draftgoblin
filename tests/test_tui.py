@@ -45,6 +45,7 @@ from draftomen.seventeen import (
 )
 from draftomen.session import (
     ApplicationPhase,
+    CardView,
     DataLoadPhase,
     OperationKind,
     RatingsProgressLoader,
@@ -55,10 +56,13 @@ from draftomen.tui import (
     MANA_ICON_GLYPHS,
     DraftomenTuiApp,
     MissingRatingsScreen,
+    _card_info_from_view,
+    _card_view_is_unknown,
     _format_card_colors,
     _format_card_types,
     _format_pick_card_name,
     _format_splash_details,
+    _format_tui_card_view,
 )
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
@@ -1269,6 +1273,34 @@ def test_tui_mana_icon_mapping_preserves_plain_fallback() -> None:
         card=multicolor,
         mana_icons_enabled=True,
     ) == f"{MANA_CARD_TYPE_GLYPHS['Creature']} Creature — Wizard"
+
+
+def test_tui_card_view_roundtrip_preserves_partial_arena_unknown() -> None:
+    card = CardView(
+        grp_id=9001,
+        name="Partial Arena Card",
+        colors=("R",),
+        rarity="rare",
+        types=("Unknown",),
+        mana_cost="{2}{R}",
+        mana_value=3.0,
+        image_path=None,
+        unknown=True,
+        arena_id=9001,
+        source_provenance=("arena",),
+    )
+
+    restored = _card_info_from_view(card=card)
+
+    assert card.unknown is True
+    assert _card_view_is_unknown(card=card) is True
+    assert restored.unknown is True
+    assert restored.rarity == "rare"
+    assert restored.types == ("Unknown",)
+    assert restored.arena_id == 9001
+    assert _format_tui_card_view(card=card) == (
+        "Partial Arena Card [Unknown] (grpId 9001)"
+    )
 
 
 def test_tui_mana_icons_toggle_updates_tui_surfaces(tmp_path: Path) -> None:

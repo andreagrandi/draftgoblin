@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from draftomen.carddb import CardDatabase, build_card_database_from_bulk_file, refresh_card_database
+from draftomen.carddb import (
+    CardDatabase,
+    build_card_database_from_bulk_file,
+    card_database_cache_path,
+    refresh_card_database,
+)
 from draftomen.cli import main
 from draftomen.replay import replay_log_file
 from draftomen.seventeen import (
@@ -16,6 +22,7 @@ from draftomen.seventeen import (
     SeventeenCardStats,
     SeventeenLandsData,
     SeventeenLandsFormatData,
+    save_17lands_format_data,
 )
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
@@ -105,6 +112,65 @@ def test_replay_uses_cached_card_database_without_refreshing(
 
     assert exit_code == 0
     assert captured.out == GOLDEN_REPLAY_PATH.read_text(encoding="utf-8")
+    assert captured.err == ""
+
+
+def test_replay_with_schema_four_incomplete_scryfall_card_stays_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    refresh_card_database(app_dir=tmp_path, bulk_file=SCRYFALL_BULK_SAMPLE_PATH)
+    cache_path = card_database_cache_path(app_dir=tmp_path)
+    cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert cache["schema_version"] == 4
+    cache["cards"]["105097"]["mana_cost"] = None
+    cache["cards"]["105097"]["source_provenance"] = ["scryfall"]
+    cache_path.write_text(json.dumps(cache), encoding="utf-8")
+
+    save_17lands_format_data(
+        SeventeenLandsFormatData(
+            set_code="MSH",
+            event_format=QUICK_DRAFT_FORMAT,
+            fetched_at=datetime(2999, 1, 1, tzinfo=UTC),
+            card_ratings={
+                105097: _stats(
+                    grp_id=105097,
+                    name="Fixture Spider",
+                    color="G",
+                    gih=0.60,
+                    games_in_hand=900,
+                    alsa=2.1,
+                )
+            },
+            pair_win_rates=_pair_win_rates(),
+        ),
+        app_dir=tmp_path,
+    )
+
+    def fail_mtgjson(**_kwargs: object) -> None:
+        pytest.fail("replay must not invoke MTGJSON metadata augmentation")
+
+    monkeypatch.setattr("draftomen.carddb.download_mtgjson_set_cards", fail_mtgjson)
+    monkeypatch.setattr("draftomen.seventeen.augment_card_database_from_ratings", fail_mtgjson)
+    monkeypatch.setattr("draftomen.cli.metadata_augmenting_ratings_loader", fail_mtgjson)
+
+    exit_code = main(
+        argv=[
+            "replay",
+            str(FIXTURE_LOG_PATH),
+            "--app-dir",
+            str(tmp_path),
+            "--no-splash",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Data source: QuickDraft" in captured.out
+    assert "Fixture Spider (grpId 105097)" in captured.out
+    assert "60.0%" in captured.out
     assert captured.err == ""
 
 

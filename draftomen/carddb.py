@@ -36,6 +36,12 @@ SCRYFALL_USER_AGENT = (
 ARENA_DATA_CARDS_PREFIX = "data_cards"
 ARENA_DATA_LOC_PREFIX = "data_loc"
 ARENA_DATA_FILE_SUFFIXES = (".mtga", ".json", ".js")
+ARENA_PRODUCED_MANA_FIELDS = (
+    "produced_mana",
+    "producedMana",
+    "producesMana",
+    "manaProduced",
+)
 HTTP_TIMEOUT_SECONDS = 60
 COLOR_ORDER = ("W", "U", "B", "R", "G")
 ARENA_COLOR_ID_MAP = {1: "W", 2: "U", 3: "B", 4: "R", 5: "G"}
@@ -47,7 +53,77 @@ ARENA_RARITY_ID_MAP = {
     4: "rare",
     5: "mythic",
 }
-CACHE_SCHEMA_VERSION = 3
+CACHE_SCHEMA_VERSION = 4
+UNKNOWN_SOURCE_PROVENANCE = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class CardFace:
+    """Normalized metadata for one card face.
+    Missing source values stay explicit instead of being inferred.
+    """
+
+    name: str | None = None
+    oracle_text: str | None = None
+    keywords: tuple[str, ...] = ()
+    type_line: str | None = None
+    subtypes: tuple[str, ...] = ()
+    colors: tuple[str, ...] = ()
+    mana_cost: str | None = None
+    mana_value: float | None = None
+    produced_mana: tuple[str, ...] = ()
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> CardFace:
+        """Load one normalized face from cache JSON."""
+
+        return cls(
+            name=_optional_str(data.get("name"), field_name="face.name"),
+            oracle_text=_optional_str(
+                data.get("oracle_text"),
+                field_name="face.oracle_text",
+            ),
+            keywords=_string_tuple(
+                data.get("keywords", ()),
+                field_name="face.keywords",
+            ),
+            type_line=_optional_str(
+                data.get("type_line"),
+                field_name="face.type_line",
+            ),
+            subtypes=_string_tuple(
+                data.get("subtypes", ()),
+                field_name="face.subtypes",
+            ),
+            colors=_string_tuple(data.get("colors", ()), field_name="face.colors"),
+            mana_cost=_optional_str(
+                data.get("mana_cost"),
+                field_name="face.mana_cost",
+            ),
+            mana_value=_optional_float(
+                data.get("mana_value"),
+                field_name="face.mana_value",
+            ),
+            produced_mana=_string_tuple(
+                data.get("produced_mana", ()),
+                field_name="face.produced_mana",
+            ),
+        )
+
+    def to_json(self) -> dict[str, object]:
+        """Convert one normalized face to deterministic cache JSON."""
+
+        return {
+            "colors": list(self.colors),
+            "keywords": list(self.keywords),
+            "mana_cost": self.mana_cost,
+            "mana_value": self.mana_value,
+            "name": self.name,
+            "oracle_text": self.oracle_text,
+            "produced_mana": list(self.produced_mana),
+            "subtypes": list(self.subtypes),
+            "type_line": self.type_line,
+        }
 
 
 class CardDatabaseError(RuntimeError):
@@ -84,6 +160,16 @@ class CardInfo:
     produced_mana: tuple[str, ...] = ()
     image_uri: str | None = None
     unknown: bool = False
+    oracle_text: str | None = None
+    keywords: tuple[str, ...] = ()
+    type_line: str | None = None
+    subtypes: tuple[str, ...] = ()
+    layout: str | None = None
+    faces: tuple[CardFace, ...] = ()
+    set_code: str | None = None
+    collector_number: str | None = None
+    arena_id: int | None = None
+    source_provenance: tuple[str, ...] = ()
 
     @classmethod
     def unknown_card(cls, *, grp_id: int) -> CardInfo:
@@ -98,9 +184,6 @@ class CardInfo:
             mana_value=None,
             rarity="unknown",
             types=("Unknown",),
-            mana_cost=None,
-            produced_mana=(),
-            image_uri=None,
             unknown=True,
         )
 
@@ -110,6 +193,22 @@ class CardInfo:
         Cache parsing is strict so corrupted files fail loudly.
         """
 
+        faces_value = data.get("faces", ())
+        if not isinstance(faces_value, (list, tuple)):
+            raise CardDatabaseError("Missing or invalid card.faces; expected object list.")
+
+        faces: list[CardFace] = []
+        for value in faces_value:
+            if not isinstance(value, dict):
+                raise CardDatabaseError("Missing or invalid card.faces; expected objects.")
+            faces.append(CardFace.from_json(data=value))
+
+        provenance = _string_tuple(
+            data.get("source_provenance", ()),
+            field_name="card.source_provenance",
+        )
+        set_code_value = data.get("set_code", data.get("set"))
+        arena_id_value = data.get("arena_id", data.get("grp_id"))
         return cls(
             grp_id=_required_int(data.get("grp_id"), field_name="card.grp_id"),
             name=_required_str(data.get("name"), field_name="card.name"),
@@ -127,23 +226,59 @@ class CardInfo:
             ),
             image_uri=_optional_str(data.get("image_uri"), field_name="card.image_uri"),
             unknown=bool(data.get("unknown", False)),
+            oracle_text=_optional_str(
+                data.get("oracle_text"),
+                field_name="card.oracle_text",
+            ),
+            keywords=_string_tuple(
+                data.get("keywords", ()),
+                field_name="card.keywords",
+            ),
+            type_line=_optional_str(data.get("type_line"), field_name="card.type_line"),
+            subtypes=_string_tuple(
+                data.get("subtypes", ()),
+                field_name="card.subtypes",
+            ),
+            layout=_optional_str(data.get("layout"), field_name="card.layout"),
+            faces=tuple(faces),
+            set_code=_optional_str(set_code_value, field_name="card.set"),
+            collector_number=_optional_str(
+                data.get("collector_number"),
+                field_name="card.collector_number",
+            ),
+            arena_id=(
+                None
+                if arena_id_value is None
+                else _required_int(arena_id_value, field_name="card.arena_id")
+            ),
+            source_provenance=provenance,
         )
 
     def to_json(self) -> dict[str, object]:
         """Convert this card entry to Draftomen's cache format.
-        The result intentionally stores only the fields the app needs.
+        The result intentionally stores only normalized fields.
         """
 
         return {
-            "grp_id": self.grp_id,
-            "name": self.name,
+            "arena_id": self.arena_id,
+            "collector_number": self.collector_number,
             "colors": list(self.colors),
-            "mana_value": self.mana_value,
-            "rarity": self.rarity,
-            "types": list(self.types),
-            "mana_cost": self.mana_cost,
-            "produced_mana": list(self.produced_mana),
+            "faces": [face.to_json() for face in self.faces],
+            "grp_id": self.grp_id,
             "image_uri": self.image_uri,
+            "keywords": list(self.keywords),
+            "layout": self.layout,
+            "mana_cost": self.mana_cost,
+            "mana_value": self.mana_value,
+            "name": self.name,
+            "oracle_text": self.oracle_text,
+            "produced_mana": list(self.produced_mana),
+            "rarity": self.rarity,
+            "set": self.set_code,
+            "source_provenance": list(self.source_provenance),
+            "subtypes": list(self.subtypes),
+            "type_line": self.type_line,
+            "types": list(self.types),
             "unknown": self.unknown,
         }
 
@@ -230,7 +365,7 @@ class CardDatabase:
             data.get("schema_version"),
             field_name="schema_version",
         )
-        if schema_version != CACHE_SCHEMA_VERSION:
+        if schema_version not in {CACHE_SCHEMA_VERSION, 3}:
             raise CardDatabaseCacheStaleError(
                 "Unsupported card database cache schema "
                 f"{schema_version}; expected {CACHE_SCHEMA_VERSION}."
@@ -245,8 +380,12 @@ class CardDatabase:
             grp_id = _required_int(key, field_name="cards key")
             if not isinstance(value, dict):
                 raise CardDatabaseError(f"Card cache entry {key!r} is not an object.")
-
             card = CardInfo.from_json(data=value)
+            if schema_version == 3 and not card.source_provenance:
+                card = replace(
+                    card,
+                    source_provenance=(UNKNOWN_SOURCE_PROVENANCE,),
+                )
             if card.grp_id != grp_id:
                 raise CardDatabaseError(
                     f"Card cache key {grp_id} does not match entry grp_id {card.grp_id}."
@@ -322,18 +461,33 @@ def save_card_database(
 
     path = _cache_path(app_dir=app_dir, cache_path=cache_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(database.to_json(), indent=2, sort_keys=True)
-    with tempfile.NamedTemporaryFile(
-        "w",
-        delete=False,
-        dir=path.parent,
-        encoding="utf-8",
-    ) as temporary_file:
-        temporary_file.write(payload)
-        temporary_file.write("\n")
-        temporary_path = Path(temporary_file.name)
+    payload = (
+        json.dumps(
+            database.to_json(),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            delete=False,
+            dir=path.parent,
+            prefix=f".{path.name}.",
+        ) as temporary_file:
+            temporary_name = temporary_file.name
+            temporary_file.write(payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_name, path)
+        temporary_name = None
+    finally:
+        if temporary_name is not None:
+            Path(temporary_name).unlink(missing_ok=True)
 
-    temporary_path.replace(path)
     return path
 
 
@@ -556,30 +710,38 @@ def augment_card_database_with_mtgjson_set(
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
     mtgjson_cards: Iterable[Mapping[str, Any]] | None = None,
 ) -> CardDatabase:
-    """Resolve missing grpIds by matching 17Lands names to MTGJSON set data.
-    This covers new sets whose Scryfall records do not yet expose arena_id.
+    """Augment missing metadata from MTGJSON set data.
+    Existing Scryfall fields remain canonical during augmentation.
     """
-
-    missing_seeds = tuple(
-        seed for seed in seeds if database.lookup(grp_id=seed.grp_id).unknown
+    augmentation_seeds = tuple(
+        seed
+        for seed in seeds
+        if _card_needs_mtgjson_augmentation(
+            database=database,
+            grp_id=seed.grp_id,
+        )
     )
-    if not missing_seeds:
+    if not augmentation_seeds:
         return database
 
-    card_objects = tuple(
-        download_mtgjson_set_cards(
-            set_code=set_code,
-            timeout_seconds=timeout_seconds,
+    if mtgjson_cards is None:
+        card_objects = tuple(
+            download_mtgjson_set_cards(
+                set_code=set_code,
+                timeout_seconds=timeout_seconds,
+            )
         )
-        if mtgjson_cards is None
-        else mtgjson_cards
-    )
+    else:
+        card_objects = tuple(mtgjson_cards)
     cards_by_uuid = _mtgjson_cards_by_uuid(cards=card_objects)
     cards_by_name = _mtgjson_cards_by_name(cards=card_objects)
     card_indices = {id(card): index for index, card in enumerate(card_objects)}
     cards = dict(database.cards)
     inferred_offset = _mtgjson_arena_id_offset(
-        seeds=missing_seeds,
+        seeds=tuple(
+            seed for seed in augmentation_seeds
+            if database.lookup(grp_id=seed.grp_id).unknown
+        ),
         cards_by_name=cards_by_name,
         card_indices=card_indices,
     )
@@ -591,19 +753,48 @@ def augment_card_database_with_mtgjson_set(
             arena_id_offset=inferred_offset,
         )
 
-    for seed in missing_seeds:
+    for seed in augmentation_seeds:
         mtgjson_card = _mtgjson_card_for_seed(seed=seed, cards_by_name=cards_by_name)
         if mtgjson_card is None:
-            cards[seed.grp_id] = _card_info_from_metadata_seed(seed=seed)
+            if seed.grp_id not in cards:
+                cards[seed.grp_id] = _card_info_from_metadata_seed(seed=seed)
             continue
 
-        cards[seed.grp_id] = _card_info_from_mtgjson(
+        augmented = _card_info_from_mtgjson(
             card=mtgjson_card,
             seed=seed,
             cards_by_uuid=cards_by_uuid,
         )
+        existing = cards.get(seed.grp_id)
+        cards[seed.grp_id] = (
+            augmented
+            if existing is None
+            else _merge_card_info(base=existing, overlay=augmented)
+        )
 
     return replace(database, cards=cards)
+
+
+def _card_needs_mtgjson_augmentation(
+    *,
+    database: CardDatabase,
+    grp_id: int,
+) -> bool:
+    card = database.cards.get(grp_id)
+    if card is None:
+        return True
+    if "mtgjson" in card.source_provenance:
+        return False
+    if card.unknown:
+        return True
+    if UNKNOWN_SOURCE_PROVENANCE in card.source_provenance:
+        return False
+
+    return (
+        card.oracle_text is None
+        or card.type_line is None
+        or card.mana_cost is None
+    )
 
 
 def download_mtgjson_set_cards(
@@ -735,13 +926,23 @@ def _add_mtgjson_cards_by_inferred_arena_order(
             continue
 
         grp_id = arena_id_offset + index
-        if grp_id in cards and not cards[grp_id].unknown:
+        existing = cards.get(grp_id)
+        if existing is not None and (
+            not existing.unknown
+            or "mtgjson" in existing.source_provenance
+            or "17lands" in existing.source_provenance
+        ):
             continue
 
-        cards[grp_id] = _card_info_from_mtgjson(
+        inferred = _card_info_from_mtgjson(
             card=card,
             seed=_metadata_seed_from_mtgjson_card(grp_id=grp_id, card=card),
             cards_by_uuid=cards_by_uuid,
+        )
+        cards[grp_id] = (
+            inferred
+            if existing is None
+            else _merge_card_info(base=existing, overlay=inferred)
         )
 
 
@@ -789,6 +990,49 @@ def _card_info_from_metadata_seed(*, seed: CardMetadataSeed) -> CardInfo:
         rarity=seed.rarity,
         types=("Unknown",),
         unknown=True,
+        arena_id=seed.grp_id,
+        source_provenance=("17lands",),
+    )
+
+
+def _card_face_from_mtgjson(
+    *,
+    card: Mapping[str, Any],
+    field_name: str,
+) -> CardFace:
+    type_line = _optional_source_text(card.get("type", card.get("type_line")))
+    colors_value = card.get("colors", card.get("colorIdentity"))
+    colors = (
+        ()
+        if colors_value is None
+        else _color_tuple(colors_value, field_name=f"{field_name}.colors")
+    )
+    produced_value = card.get("producedMana", card.get("produced_mana"))
+    produced_mana = (
+        ()
+        if produced_value is None
+        else _produced_mana_tuple(
+            produced_value,
+            field_name=f"{field_name}.producedMana",
+        )
+    )
+    return CardFace(
+        name=_optional_source_text(card.get("faceName", card.get("name"))),
+        oracle_text=_optional_source_text(
+            card.get("text", card.get("oracle_text", card.get("oracleText")))
+        ),
+        keywords=_source_string_tuple(card.get("keywords")),
+        type_line=type_line,
+        subtypes=_source_subtypes(type_line=type_line),
+        colors=colors,
+        mana_cost=_optional_mtgjson_mana_cost(
+            card.get("manaCost", card.get("mana_cost"))
+        ),
+        mana_value=_optional_float(
+            card.get("manaValue", card.get("mana_value", card.get("cmc"))),
+            field_name=f"{field_name}.manaValue",
+        ),
+        produced_mana=produced_mana,
     )
 
 
@@ -798,30 +1042,71 @@ def _card_info_from_mtgjson(
     seed: CardMetadataSeed,
     cards_by_uuid: Mapping[str, Mapping[str, Any]],
 ) -> CardInfo:
-    faces = _mtgjson_related_faces(card=card, cards_by_uuid=cards_by_uuid)
-    type_lines = tuple(dict.fromkeys(
-        _required_str(
-            face.get("type"),
-            field_name=f"MTGJSON card {seed.name}.type",
+    related_cards = _mtgjson_related_faces(card=card, cards_by_uuid=cards_by_uuid)
+    aggregate_faces = tuple(
+        _card_face_from_mtgjson(
+            card=face,
+            field_name=f"MTGJSON card {seed.name}.face",
         )
-        for face in faces
-    ))
-    mana_cost = _mtgjson_combined_mana_cost(faces=faces)
+        for face in related_cards
+    )
+    face_records = aggregate_faces if len(related_cards) > 1 else ()
+    type_lines = tuple(
+        face.type_line for face in aggregate_faces if face.type_line
+    )
+    type_line = _optional_source_text(card.get("type", card.get("type_line")))
+    if type_line is None and type_lines:
+        type_line = " // ".join(type_lines)
+    oracle_text = _optional_source_text(
+        card.get("text", card.get("oracle_text", card.get("oracleText")))
+    )
+    if oracle_text is None:
+        oracle_text = _combined_face_oracle_text(faces=aggregate_faces)
+    mana_cost = _mtgjson_combined_mana_cost(faces=related_cards)
+    if mana_cost is None and aggregate_faces:
+        mana_cost = _combined_face_mana_cost(faces=aggregate_faces)
+    colors = seed.colors or _mtgjson_colors(card=card, field_name=seed.name)
+    produced_mana = _mtgjson_produced_mana(card=card, field_name=seed.name)
+    if not produced_mana and aggregate_faces:
+        produced_mana = _combined_face_produced_mana(faces=aggregate_faces)
+    raw_types = tuple(dict.fromkeys(type_lines))
     return CardInfo(
         grp_id=seed.grp_id,
-        name=seed.name,
-        colors=seed.colors or _mtgjson_colors(card=card, field_name=seed.name),
-        mana_value=_required_float(
-            card.get("manaValue", card.get("mana_value")),
+        name=_optional_source_text(card.get("name")) or seed.name,
+        colors=colors,
+        mana_value=_optional_float(
+            card.get("manaValue", card.get("mana_value", card.get("cmc"))),
             field_name=f"MTGJSON card {seed.name}.manaValue",
         ),
-        rarity=_required_str(
-            card.get("rarity", seed.rarity),
-            field_name=f"MTGJSON card {seed.name}.rarity",
-        ),
-        types=type_lines,
+        rarity=_optional_source_text(card.get("rarity")) or seed.rarity,
+        types=raw_types or ("Unknown",),
         mana_cost=mana_cost,
-        produced_mana=_mtgjson_produced_mana(card=card, field_name=seed.name),
+        produced_mana=produced_mana,
+        unknown=not bool(raw_types),
+        oracle_text=oracle_text,
+        keywords=(
+            _source_string_tuple(card.get("keywords"))
+            or _combined_face_keywords(faces=aggregate_faces)
+        ),
+        type_line=type_line,
+        subtypes=_combined_subtypes(faces=aggregate_faces, type_line=type_line),
+        layout=_optional_source_text(card.get("layout")),
+        faces=face_records,
+        set_code=_optional_source_text(card.get("setCode", card.get("set"))),
+        collector_number=_optional_source_text(card.get("number")),
+        arena_id=seed.grp_id,
+        source_provenance=("mtgjson",),
+    )
+
+
+def _combined_face_mana_cost(*, faces: tuple[CardFace, ...]) -> str | None:
+    costs = tuple(face.mana_cost for face in faces if face.mana_cost)
+    return " // ".join(costs) if costs else None
+
+
+def _combined_face_produced_mana(*, faces: tuple[CardFace, ...]) -> tuple[str, ...]:
+    return _ordered_unique_colors(
+        colors=(symbol for face in faces for symbol in face.produced_mana)
     )
 
 
@@ -831,14 +1116,16 @@ def _mtgjson_related_faces(
     cards_by_uuid: Mapping[str, Mapping[str, Any]],
 ) -> tuple[Mapping[str, Any], ...]:
     faces = [card]
+    seen_uuids: set[str] = set()
     other_faces_value = card.get("otherFaceIds", ())
-    if isinstance(other_faces_value, list):
+    if isinstance(other_faces_value, (list, tuple)):
         for face_uuid in other_faces_value:
-            if not isinstance(face_uuid, str):
+            if not isinstance(face_uuid, str) or not face_uuid or face_uuid in seen_uuids:
                 continue
 
+            seen_uuids.add(face_uuid)
             face = cards_by_uuid.get(face_uuid)
-            if face is not None:
+            if face is not None and face is not card:
                 faces.append(face)
 
     return tuple(faces)
@@ -904,6 +1191,210 @@ def _cache_path(
     return card_database_cache_path(app_dir=app_dir)
 
 
+def _optional_source_text(value: Any) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _source_string_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
+        raise CardDatabaseError("Invalid source string list.")
+    return tuple(dict.fromkeys(item for item in value if isinstance(item, str) and item))
+
+
+def _source_subtypes(*, type_line: str | None) -> tuple[str, ...]:
+    if not type_line:
+        return ()
+    if "—" in type_line:
+        subtype_text = type_line.split("—", 1)[1]
+    elif "-" in type_line:
+        subtype_text = type_line.split("-", 1)[1]
+    else:
+        return ()
+    return tuple(dict.fromkeys(subtype_text.split()))
+
+
+def _scryfall_faces(
+    *,
+    card: Mapping[str, Any],
+    grp_id: int,
+) -> tuple[CardFace, ...]:
+    if "card_faces" not in card:
+        return ()
+
+    faces_value = card["card_faces"]
+    if not isinstance(faces_value, list):
+        raise CardDatabaseError(
+            f"Missing or invalid card {grp_id}.card_faces; expected object list."
+        )
+
+    faces: list[CardFace] = []
+    for face in faces_value:
+        if not isinstance(face, dict):
+            raise CardDatabaseError(
+                f"Missing or invalid card {grp_id}.card_faces; expected objects."
+            )
+        faces.append(_card_face_from_scryfall(face=face, grp_id=grp_id))
+    return tuple(faces)
+
+
+def _card_face_from_scryfall(
+    *,
+    face: Mapping[str, Any],
+    grp_id: int,
+) -> CardFace:
+    type_line = _optional_source_text(face.get("type_line"))
+    colors_value = face.get("colors")
+    colors = (
+        ()
+        if colors_value is None
+        else _color_tuple(colors_value, field_name=f"card {grp_id}.face.colors")
+    )
+    produced_value = face.get("produced_mana")
+    produced_mana = (
+        ()
+        if produced_value is None
+        else _produced_mana_tuple(
+            produced_value,
+            field_name=f"card {grp_id}.face.produced_mana",
+        )
+    )
+    return CardFace(
+        name=_optional_source_text(face.get("name")),
+        oracle_text=_optional_source_text(face.get("oracle_text")),
+        keywords=_source_string_tuple(face.get("keywords")),
+        type_line=type_line,
+        subtypes=_source_subtypes(type_line=type_line),
+        colors=colors,
+        mana_cost=_optional_source_text(face.get("mana_cost")),
+        mana_value=_optional_float(face.get("cmc"), field_name=f"card {grp_id}.face.cmc"),
+        produced_mana=produced_mana,
+    )
+
+
+def _combined_face_type_line(*, faces: tuple[CardFace, ...]) -> str | None:
+    type_lines = tuple(face.type_line for face in faces if face.type_line)
+    if not type_lines:
+        return None
+    return " // ".join(type_lines)
+
+
+def _combined_face_keywords(*, faces: tuple[CardFace, ...]) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            keyword for face in faces for keyword in face.keywords
+        )
+    )
+
+
+def _combined_face_oracle_text(*, faces: tuple[CardFace, ...]) -> str | None:
+    oracle_texts = tuple(face.oracle_text for face in faces if face.oracle_text)
+    if not oracle_texts:
+        return None
+    return " // ".join(oracle_texts)
+
+
+def _combined_subtypes(
+    *,
+    faces: tuple[CardFace, ...],
+    type_line: str | None,
+) -> tuple[str, ...]:
+    if type_line and " // " not in type_line:
+        return _source_subtypes(type_line=type_line)
+    return tuple(
+        dict.fromkeys(
+            subtype for face in faces for subtype in face.subtypes
+        )
+    )
+
+
+def _arena_direct_type_line(*, card: Mapping[str, Any]) -> str | None:
+    return _optional_source_text(
+        card.get("type_line", card.get("typeLine", card.get("type")))
+    )
+
+
+def _arena_color_values(*, card: Mapping[str, Any]) -> Any:
+    colors = card.get("colors")
+    return colors if colors is not None else card.get("colorIdentity", ())
+
+
+def _arena_card_face(
+    *,
+    card: Mapping[str, Any],
+    localization: Mapping[int, str],
+    grp_id: int,
+) -> CardFace:
+    type_line = _arena_direct_type_line(card=card)
+    if type_line is None:
+        type_line = _arena_type_line(
+            card=card,
+            localization=localization,
+            grp_id=grp_id,
+        )
+    colors_value = _arena_color_values(card=card)
+    colors = _arena_color_tuple(
+        colors_value,
+        field_name=f"Arena card {grp_id}.colors",
+    )
+    produced_value = next(
+        (
+            card.get(field_name)
+            for field_name in ARENA_PRODUCED_MANA_FIELDS
+            if card.get(field_name) is not None
+        ),
+        None,
+    )
+    produced_mana = (
+        ()
+        if produced_value is None
+        else _arena_mana_symbol_tuple(
+            produced_value,
+            field_name=f"Arena card {grp_id}.produced_mana",
+        )
+    )
+    name = _optional_source_text(
+        card.get("name", card.get("title", card.get("cardName")))
+    )
+    if name is None:
+        name = _arena_optional_localized_text(
+            localization=localization,
+            text_id=card.get("titleId"),
+            field_name=f"Arena card {grp_id}.titleId",
+        )
+    oracle_text = _optional_source_text(
+        card.get("oracle_text", card.get("oracleText", card.get("text")))
+    )
+    if oracle_text is None:
+        for field_name in ("oracleTextId", "rulesTextId", "textId"):
+            oracle_text = _arena_optional_localized_text(
+                localization=localization,
+                text_id=card.get(field_name),
+                field_name=f"Arena card {grp_id}.{field_name}",
+            )
+            if oracle_text is not None:
+                break
+    return CardFace(
+        name=name,
+        oracle_text=oracle_text,
+        keywords=_source_string_tuple(card.get("keywords")),
+        type_line=type_line,
+        subtypes=_source_subtypes(type_line=type_line),
+        colors=colors,
+        mana_cost=_arena_mana_cost(
+            card.get("castingcost", card.get("castingCost"))
+        ),
+        mana_value=_optional_float(
+            card.get("cmc", card.get("manaValue")),
+            field_name=f"Arena card {grp_id}.cmc",
+        ),
+        produced_mana=produced_mana,
+    )
+
+
 def _card_info_from_scryfall(*, card: Mapping[str, Any]) -> CardInfo | None:
     arena_id = card.get("arena_id")
     if arena_id is None:
@@ -913,16 +1404,36 @@ def _card_info_from_scryfall(*, card: Mapping[str, Any]) -> CardInfo | None:
     name = _required_str(card.get("name"), field_name=f"card {grp_id}.name")
     mana_value = _required_float(card.get("cmc"), field_name=f"card {grp_id}.cmc")
     rarity = _required_str(card.get("rarity"), field_name=f"card {grp_id}.rarity")
+    faces = _scryfall_faces(card=card, grp_id=grp_id)
+    type_line = _optional_source_text(card.get("type_line"))
+    if type_line is None:
+        type_line = _combined_face_type_line(faces=faces)
+    oracle_text = _optional_source_text(card.get("oracle_text"))
+    if oracle_text is None:
+        oracle_text = _combined_face_oracle_text(faces=faces)
     return CardInfo(
         grp_id=grp_id,
+        rarity=rarity,
         name=name,
         colors=_card_colors(card=card, grp_id=grp_id),
         mana_value=mana_value,
-        rarity=rarity,
+        keywords=(
+            _source_string_tuple(card.get("keywords"))
+            or _combined_face_keywords(faces=faces)
+        ),
         types=_card_types(card=card, grp_id=grp_id),
-        mana_cost=_card_mana_cost(card=card, grp_id=grp_id),
+        mana_cost=_card_mana_cost(card=card),
         produced_mana=_card_produced_mana(card=card, grp_id=grp_id),
         image_uri=_card_image_uri(card=card),
+        oracle_text=oracle_text,
+        type_line=type_line,
+        subtypes=_combined_subtypes(faces=faces, type_line=type_line),
+        layout=_optional_source_text(card.get("layout")),
+        faces=faces,
+        set_code=_optional_source_text(card.get("set")),
+        collector_number=_optional_source_text(card.get("collector_number")),
+        arena_id=grp_id,
+        source_provenance=("scryfall",),
     )
 
 
@@ -941,40 +1452,92 @@ def _card_info_from_arena(
         card=card,
         cards_by_grp_id=cards_by_grp_id,
     )
-    type_line = _arena_combined_type_line(
+    primary_type_line = _arena_type_line(
         card=card,
+        localization=localization,
+        grp_id=grp_id,
+    )
+    type_line = _arena_combined_type_line(
+        primary_type_line=primary_type_line,
         linked_faces=linked_faces,
         localization=localization,
         grp_id=grp_id,
     )
-    return CardInfo(
+    face_records = (
+        tuple(
+            _arena_card_face(
+                card=face,
+                localization=localization,
+                grp_id=grp_id,
+            )
+            for face in (card, *linked_faces)
+        )
+        if linked_faces
+        else ()
+    )
+    oracle_text = _optional_source_text(
+        card.get("oracle_text", card.get("oracleText", card.get("text")))
+    )
+    if face_records:
+        face_oracle_text = _combined_face_oracle_text(faces=face_records)
+        if face_oracle_text is not None:
+            oracle_text = face_oracle_text
+    produced_mana = _arena_card_produced_mana(
+        card=card,
+        primary_type_line=_arena_type_line(
+            card=card,
+            localization=localization,
+            grp_id=grp_id,
+        ),
         grp_id=grp_id,
-        name=_arena_localized_text(
+    )
+    if not produced_mana and face_records:
+        produced_mana = _combined_face_produced_mana(faces=face_records)
+    name = _optional_source_text(
+        card.get("name", card.get("title", card.get("cardName")))
+    )
+    if name is None:
+        name = _arena_optional_localized_text(
             localization=localization,
             text_id=card.get("titleId"),
             field_name=f"Arena card {grp_id}.titleId",
-        ),
+        )
+    if name is None:
+        name = f"Unknown card {grp_id}"
+    return CardInfo(
+        grp_id=grp_id,
+        name=name,
         colors=_arena_card_colors(
             card=card,
             linked_faces=linked_faces,
             grp_id=grp_id,
         ),
-        mana_value=_required_float(
-            card.get("cmc"),
+        mana_value=_optional_float(
+            card.get("cmc", card.get("manaValue")),
             field_name=f"Arena card {grp_id}.cmc",
         ),
         rarity=_arena_card_rarity(card=card, grp_id=grp_id),
         types=(type_line,),
         mana_cost=_arena_card_mana_cost(card=card, linked_faces=linked_faces),
-        produced_mana=_arena_card_produced_mana(
-            card=card,
-            primary_type_line=_arena_type_line(
-                card=card,
-                localization=localization,
-                grp_id=grp_id,
-            ),
-            grp_id=grp_id,
+        produced_mana=produced_mana,
+        unknown=type_line == "Unknown",
+        oracle_text=oracle_text,
+        keywords=(
+            _source_string_tuple(card.get("keywords"))
+            or _combined_face_keywords(faces=face_records)
         ),
+        type_line=type_line,
+        subtypes=_combined_subtypes(faces=face_records, type_line=type_line),
+        layout=_optional_source_text(card.get("layout", card.get("cardLayout"))),
+        faces=face_records,
+        set_code=_optional_source_text(
+            card.get("set_code", card.get("setCode", card.get("set")))
+        ),
+        collector_number=_optional_source_text(
+            card.get("collector_number", card.get("collectorNumber"))
+        ),
+        arena_id=grp_id,
+        source_provenance=("arena",),
     )
 
 
@@ -1019,6 +1582,54 @@ def _load_arena_card_database_if_available(
     return build_card_database_from_arena_data_dir(path=default_data_dir)
 
 
+def _merge_card_info(*, base: CardInfo, overlay: CardInfo) -> CardInfo:
+    """Augment missing canonical fields without replacing valid source data."""
+
+    all_sources = tuple(
+        dict.fromkeys((*base.source_provenance, *overlay.source_provenance))
+    )
+    known_sources = tuple(
+        source
+        for source in ("scryfall", "arena", "mtgjson")
+        if source in all_sources
+    )
+    provenance = known_sources + tuple(sorted(set(all_sources) - set(known_sources)))
+    return replace(
+        base,
+        name=overlay.name if base.unknown else base.name,
+        colors=overlay.colors if base.unknown else base.colors,
+        mana_value=base.mana_value if base.mana_value is not None else overlay.mana_value,
+        rarity=(
+            base.rarity
+            if base.rarity and base.rarity != "unknown"
+            else overlay.rarity
+        ),
+        types=base.types if base.types and not base.unknown else overlay.types,
+        mana_cost=base.mana_cost if base.mana_cost is not None else overlay.mana_cost,
+        produced_mana=base.produced_mana or overlay.produced_mana,
+        image_uri=base.image_uri if base.image_uri is not None else overlay.image_uri,
+        unknown=base.unknown and overlay.unknown,
+        oracle_text=(
+            base.oracle_text
+            if base.oracle_text is not None
+            else overlay.oracle_text
+        ),
+        keywords=base.keywords or overlay.keywords,
+        type_line=base.type_line if base.type_line is not None else overlay.type_line,
+        subtypes=base.subtypes if base.subtypes else overlay.subtypes,
+        layout=base.layout if base.layout is not None else overlay.layout,
+        faces=base.faces if base.faces else overlay.faces,
+        set_code=base.set_code if base.set_code is not None else overlay.set_code,
+        collector_number=(
+            base.collector_number
+            if base.collector_number is not None
+            else overlay.collector_number
+        ),
+        arena_id=base.arena_id if base.arena_id is not None else overlay.arena_id,
+        source_provenance=provenance,
+    )
+
+
 def _merge_card_databases(
     *,
     base: CardDatabase,
@@ -1027,13 +1638,14 @@ def _merge_card_databases(
     cards = dict(base.cards)
     for grp_id, overlay_card in overlay.cards.items():
         base_card = cards.get(grp_id)
-        if overlay_card.image_uri is None and base_card is not None:
-            overlay_card = replace(overlay_card, image_uri=base_card.image_uri)
-
-        cards[grp_id] = overlay_card
+        if base_card is None:
+            cards[grp_id] = overlay_card
+        else:
+            cards[grp_id] = _merge_card_info(base=base_card, overlay=overlay_card)
 
     image_uris_by_name = dict(base.image_uris_by_name)
-    image_uris_by_name.update(overlay.image_uris_by_name)
+    for name, image_uri in overlay.image_uris_by_name.items():
+        image_uris_by_name.setdefault(name, image_uri)
     return replace(
         base,
         cards=cards,
@@ -1159,7 +1771,7 @@ def _card_types(*, card: Mapping[str, Any], grp_id: int) -> tuple[str, ...]:
     raise CardDatabaseError(f"Scryfall card {grp_id} is missing type_line.")
 
 
-def _card_mana_cost(*, card: Mapping[str, Any], grp_id: int) -> str | None:
+def _card_mana_cost(*, card: Mapping[str, Any]) -> str | None:
     mana_cost_value = card.get("mana_cost")
     if isinstance(mana_cost_value, str) and mana_cost_value:
         return mana_cost_value
@@ -1226,11 +1838,28 @@ def _arena_linked_face_cards(
         raise CardDatabaseError("Missing or invalid Arena card.linkedFaces list.")
 
     linked_faces: list[Mapping[str, Any]] = []
+    seen_grp_ids: set[int] = set()
     for linked_face_value in linked_faces_value:
-        linked_grp_id = _required_int(
-            linked_face_value,
-            field_name="Arena card.linkedFaces[]",
-        )
+        if isinstance(linked_face_value, dict):
+            linked_grp_id_value = linked_face_value.get(
+                "grpid",
+                linked_face_value.get("grpId"),
+            )
+            if linked_grp_id_value is None:
+                linked_faces.append(linked_face_value)
+                continue
+            linked_grp_id = _required_int(
+                linked_grp_id_value,
+                field_name="Arena card.linkedFaces[].grpId",
+            )
+        else:
+            linked_grp_id = _required_int(
+                linked_face_value,
+                field_name="Arena card.linkedFaces[]",
+            )
+        if linked_grp_id in seen_grp_ids:
+            continue
+        seen_grp_ids.add(linked_grp_id)
         linked_card = cards_by_grp_id.get(linked_grp_id)
         if linked_card is not None:
             linked_faces.append(linked_card)
@@ -1240,19 +1869,20 @@ def _arena_linked_face_cards(
 
 def _arena_combined_type_line(
     *,
-    card: Mapping[str, Any],
+    primary_type_line: str,
     linked_faces: tuple[Mapping[str, Any], ...],
     localization: Mapping[int, str],
     grp_id: int,
 ) -> str:
-    type_lines = [
+    type_lines = [primary_type_line]
+    type_lines.extend(
         _arena_type_line(
             card=face,
             localization=localization,
             grp_id=grp_id,
         )
-        for face in (card, *linked_faces)
-    ]
+        for face in linked_faces
+    )
     unique_type_lines = tuple(dict.fromkeys(type_lines))
     return " // ".join(unique_type_lines)
 
@@ -1263,6 +1893,10 @@ def _arena_type_line(
     localization: Mapping[int, str],
     grp_id: int,
 ) -> str:
+    direct_type_line = _arena_direct_type_line(card=card)
+    if direct_type_line is not None:
+        return direct_type_line
+
     card_type = _arena_optional_localized_text(
         localization=localization,
         text_id=card.get("cardTypeTextId"),
@@ -1274,8 +1908,7 @@ def _arena_type_line(
         field_name=f"Arena card {grp_id}.subtypeTextId",
     )
     if card_type is None:
-        raise CardDatabaseError(f"Arena card {grp_id} is missing cardTypeTextId.")
-
+        return "Unknown"
     if subtype is None:
         return card_type
 
@@ -1290,9 +1923,10 @@ def _arena_card_colors(
 ) -> tuple[str, ...]:
     colors: list[str] = []
     for face in (card, *linked_faces):
+        colors_value = _arena_color_values(card=face)
         colors.extend(
             _arena_color_tuple(
-                face.get("colors", ()),
+                colors_value,
                 field_name=f"Arena card {grp_id}.colors",
             )
         )
@@ -1302,6 +1936,8 @@ def _arena_card_colors(
 
 def _arena_card_rarity(*, card: Mapping[str, Any], grp_id: int) -> str:
     rarity_value = card.get("rarity")
+    if rarity_value is None:
+        return "unknown"
     if isinstance(rarity_value, str):
         rarity = rarity_value.strip().lower().replace("mythic rare", "mythic")
         return _required_str(rarity, field_name=f"Arena card {grp_id}.rarity")
@@ -1340,12 +1976,7 @@ def _arena_card_produced_mana(
     primary_type_line: str,
     grp_id: int,
 ) -> tuple[str, ...]:
-    for field_name in (
-        "produced_mana",
-        "producedMana",
-        "producesMana",
-        "manaProduced",
-    ):
+    for field_name in ARENA_PRODUCED_MANA_FIELDS:
         produced_value = card.get(field_name)
         if produced_value is not None:
             return _arena_mana_symbol_tuple(
@@ -1418,23 +2049,6 @@ def _select_arena_english_localization(
             return language
 
     return languages[0]
-
-
-def _arena_localized_text(
-    *,
-    localization: Mapping[int, str],
-    text_id: Any,
-    field_name: str,
-) -> str:
-    text = _arena_optional_localized_text(
-        localization=localization,
-        text_id=text_id,
-        field_name=field_name,
-    )
-    if text is None:
-        raise CardDatabaseError(f"Missing localization for {field_name}.")
-
-    return text
 
 
 def _arena_optional_localized_text(

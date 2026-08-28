@@ -5,6 +5,7 @@
 - Add a development-only reproducible card corpus workflow with pinned Scryfall,
   current and legacy Arena mapping inputs, MTGJSON inputs, deterministic
   normalized artifacts, and coverage reports for offline semantic-analysis work.
+- Extend card metadata with normalized face semantics, source-aware augmentation, and schema-4 offline cache migration.
 
 ## [0.3.1] - 2026-08-28
 

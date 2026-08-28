@@ -113,6 +113,22 @@ def test_default_live_session_snapshot_has_neutral_initial_state() -> None:
     assert snapshot.backtest is None
 
 
+def test_card_view_forwards_authoritative_unknown_flag() -> None:
+    card = CardInfo(
+        grp_id=9001,
+        name="Partial Arena Card",
+        colors=("R",),
+        mana_value=3.0,
+        rarity="rare",
+        types=("Unknown",),
+        unknown=True,
+    )
+
+    view = session_module._card_view(card=card)
+
+    assert view.unknown is True
+
+
 def test_live_session_exposes_injected_card_database_update_time(
     tmp_path: Path,
 ) -> None:

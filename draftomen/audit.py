@@ -24,7 +24,7 @@ from draftomen.events import (
 from draftomen.pickengine import ScoredCard, ScoredPack
 from draftomen.pool import DraftState
 from draftomen.ranking import RANKING_MODES, rank_scored_cards, validate_ranking_mode
-from draftomen.seventeen import SeventeenLandsData
+from draftomen.seventeen import SeventeenLandsData, SeventeenLandsFormatData
 
 PathInput: TypeAlias = str | PathLike[str]
 Clock: TypeAlias = Callable[[], datetime]
@@ -450,15 +450,30 @@ def _decision_payload(
 
 def _candidate_payload(*, scored_card: ScoredCard, rank: int) -> AuditRecord:
     rating = scored_card.rating
+    card = scored_card.card
     return {
         "rank": rank,
-        "grp_id": scored_card.card.grp_id,
-        "name": scored_card.card.name,
-        "colors": list(scored_card.card.colors),
-        "mana_value": scored_card.card.mana_value,
-        "rarity": scored_card.card.rarity,
-        "types": list(scored_card.card.types),
-        "unknown": scored_card.card.unknown,
+        "grp_id": card.grp_id,
+        "name": card.name,
+        "colors": list(card.colors),
+        "mana_value": card.mana_value,
+        "rarity": card.rarity,
+        "types": list(card.types),
+        "unknown": card.unknown,
+        "metadata": {
+            "oracle_text": card.oracle_text,
+            "keywords": list(card.keywords),
+            "type_line": card.type_line,
+            "subtypes": list(card.subtypes),
+            "layout": card.layout,
+            "faces": [face.to_json() for face in card.faces],
+            "mana_cost": card.mana_cost,
+            "produced_mana": list(card.produced_mana),
+            "set": card.set_code,
+            "collector_number": card.collector_number,
+            "arena_id": card.arena_id,
+            "source_provenance": list(card.source_provenance),
+        },
         "offered_index": scored_card.original_index,
         "rating": {
             "grp_id": rating.grp_id,
@@ -498,33 +513,33 @@ def _candidate_payload(*, scored_card: ScoredCard, rank: int) -> AuditRecord:
     }
 
 
+def _ratings_format_snapshot(
+    *,
+    dataset: SeventeenLandsFormatData,
+) -> AuditRecord:
+    return {
+        "event_format": dataset.event_format,
+        "fetched_at": dataset.fetched_at.astimezone(UTC).isoformat(),
+    }
+
+
 def _ratings_snapshot(*, ratings_data: SeventeenLandsData | None) -> AuditRecord | None:
     if ratings_data is None:
         return None
 
-    pair_datasets = {
-        pair: {
-            "event_format": dataset.event_format,
-            "fetched_at": dataset.fetched_at.astimezone(UTC).isoformat(),
-        }
-        for pair, dataset in sorted(ratings_data.pair_card_ratings.items())
-    }
     return {
         "set_code": ratings_data.set_code,
         "requested_format": ratings_data.requested_format,
-        "primary": {
-            "event_format": ratings_data.primary.event_format,
-            "fetched_at": ratings_data.primary.fetched_at.astimezone(UTC).isoformat(),
-        },
+        "primary": _ratings_format_snapshot(dataset=ratings_data.primary),
         "fallback": (
             None
             if ratings_data.fallback is None
-            else {
-                "event_format": ratings_data.fallback.event_format,
-                "fetched_at": ratings_data.fallback.fetched_at.astimezone(UTC).isoformat(),
-            }
+            else _ratings_format_snapshot(dataset=ratings_data.fallback)
         ),
-        "pair_card_ratings": pair_datasets,
+        "pair_card_ratings": {
+            pair: _ratings_format_snapshot(dataset=dataset)
+            for pair, dataset in sorted(ratings_data.pair_card_ratings.items())
+        },
         "pair_win_rates": {
             pair: record.to_json()
             for pair, record in sorted(ratings_data.pair_win_rates.items())

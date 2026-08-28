@@ -586,6 +586,7 @@ def _database_with_rating_metadata(
             mana_value=None,
             rarity=rating.rarity or "unknown",
             types=("Unknown",),
+            arena_id=rating.grp_id,
         )
 
     return replace(

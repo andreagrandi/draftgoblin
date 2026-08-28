@@ -20,7 +20,7 @@ from draftomen.backtest import (
     generate_backtest_report,
     load_persisted_backtest_state,
 )
-from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.carddb import CardDatabase, CardFace, CardInfo
 from draftomen.cardimages import CardImageError, CardImageService
 from draftomen.config import POLL_INTERVAL_SECONDS, SPLASH
 from draftomen.deckbuilder import (
@@ -197,6 +197,18 @@ class CardView:
     mana_cost: str | None
     mana_value: float | None
     image_path: str | None
+    unknown: bool = False
+    produced_mana: tuple[str, ...] = ()
+    oracle_text: str | None = None
+    keywords: tuple[str, ...] = ()
+    type_line: str | None = None
+    subtypes: tuple[str, ...] = ()
+    layout: str | None = None
+    faces: tuple[CardFace, ...] = ()
+    set_code: str | None = None
+    collector_number: str | None = None
+    arena_id: int | None = None
+    source_provenance: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -3571,6 +3583,18 @@ def _card_view(*, card: CardInfo, image_path: str | None = None) -> CardView:
         mana_cost=card.mana_cost,
         mana_value=card.mana_value,
         image_path=image_path,
+        unknown=card.unknown,
+        produced_mana=card.produced_mana,
+        oracle_text=card.oracle_text,
+        keywords=card.keywords,
+        type_line=card.type_line,
+        subtypes=card.subtypes,
+        layout=card.layout,
+        faces=card.faces,
+        set_code=card.set_code,
+        collector_number=card.collector_number,
+        arena_id=card.arena_id,
+        source_provenance=card.source_provenance,
     )
 
 

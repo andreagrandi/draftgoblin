@@ -826,6 +826,24 @@ class SeventeenLandsData:
         return pair_data
 
 
+def _augment_loaded_ratings(
+    *,
+    database: CardDatabase,
+    set_code: str,
+    ratings_data: SeventeenLandsData,
+    app_dir: PathInput | None,
+    persist_database: bool,
+) -> SeventeenLandsData:
+    augment_card_database_from_ratings(
+        database=database,
+        set_code=set_code,
+        ratings_data=ratings_data,
+        app_dir=app_dir,
+        persist_database=persist_database,
+    )
+    return ratings_data
+
+
 def metadata_augmenting_ratings_loader(
     *,
     database: CardDatabase,
@@ -838,15 +856,13 @@ def metadata_augmenting_ratings_loader(
     """
 
     def load_and_augment(set_code: str) -> SeventeenLandsData:
-        ratings_data = load_ratings(set_code)
-        augment_card_database_from_ratings(
+        return _augment_loaded_ratings(
             database=database,
             set_code=set_code,
-            ratings_data=ratings_data,
+            ratings_data=load_ratings(set_code),
             app_dir=app_dir,
             persist_database=persist_database,
         )
-        return ratings_data
 
     return load_and_augment
 
@@ -871,19 +887,17 @@ def metadata_augmenting_ratings_progress_loader(
         *,
         refresh: bool,
     ) -> SeventeenLandsData:
-        ratings_data = load_ratings(
-            set_code,
-            progress_callback,
-            refresh=refresh,
-        )
-        augment_card_database_from_ratings(
+        return _augment_loaded_ratings(
             database=database,
             set_code=set_code,
-            ratings_data=ratings_data,
+            ratings_data=load_ratings(
+                set_code,
+                progress_callback,
+                refresh=refresh,
+            ),
             app_dir=app_dir,
             persist_database=persist_database,
         )
-        return ratings_data
 
     return load_and_augment
 
@@ -904,11 +918,6 @@ def augment_card_database_from_ratings(
     if not seeds:
         return
 
-    if not database.unresolved_grp_ids(
-        grp_ids=tuple(seed.grp_id for seed in seeds),
-    ):
-        return
-
     try:
         augmented = augment_card_database_with_mtgjson_set(
             database,
@@ -916,6 +925,8 @@ def augment_card_database_from_ratings(
             seeds=seeds,
         )
     except CardDatabaseError:
+        return
+    if augmented is database:
         return
 
     database.cards.clear()

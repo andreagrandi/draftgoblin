@@ -2836,12 +2836,23 @@ def _card_info_from_view(*, card: CardView) -> CardInfo:
         rarity=card.rarity,
         types=card.types,
         mana_cost=card.mana_cost,
-        unknown=_card_view_is_unknown(card=card),
+        produced_mana=card.produced_mana,
+        unknown=card.unknown,
+        oracle_text=card.oracle_text,
+        keywords=card.keywords,
+        type_line=card.type_line,
+        subtypes=card.subtypes,
+        layout=card.layout,
+        faces=card.faces,
+        set_code=card.set_code,
+        collector_number=card.collector_number,
+        arena_id=card.arena_id,
+        source_provenance=card.source_provenance,
     )
 
 
 def _card_view_is_unknown(*, card: CardView) -> bool:
-    return card.rarity == "unknown" and card.types == ("Unknown",)
+    return card.unknown
 
 
 

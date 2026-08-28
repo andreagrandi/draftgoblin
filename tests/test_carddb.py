@@ -11,10 +11,14 @@ from draftomen.carddb import (
     CardDatabase,
     CardDatabaseCacheMissingError,
     CardDatabaseError,
+    CardFace,
+    CardInfo,
     CardMetadataSeed,
     augment_card_database_with_mtgjson_set,
     build_card_database_from_arena_data_dir,
+    build_card_database_from_arena_cards,
     build_card_database_from_bulk_file,
+    build_card_database_from_scryfall_cards,
     card_database_cache_path,
     load_card_database,
     load_or_refresh_card_database,
@@ -27,6 +31,9 @@ from draftomen.events import DraftCompletedEvent, PackOfferedEvent, PickMadeEven
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
 SCRYFALL_BULK_SAMPLE_PATH = (
     Path(__file__).parent / "fixtures" / "scryfall-default-cards-sample.jsonl"
+)
+SEMANTIC_SAMPLE_PATH = (
+    Path(__file__).parent / "fixtures" / "carddb-semantic-sample.jsonl"
 )
 
 
@@ -51,6 +58,81 @@ def test_scryfall_bulk_sample_builds_fixture_grp_id_lookup() -> None:
     split_card = database.lookup(grp_id=104894)
     assert split_card.colors == ("W", "U")
     assert split_card.types == ("Creature — Front // Creature — Back",)
+
+
+def test_scryfall_semantic_faces_normalize_layout_and_local_fields() -> None:
+    database = build_card_database_from_bulk_file(path=SEMANTIC_SAMPLE_PATH)
+
+    transform = database.lookup(grp_id=9001)
+    assert transform.arena_id == transform.grp_id == 9001
+    assert transform.layout == "transform"
+    assert transform.oracle_text == "Front text // Back text"
+    assert transform.keywords == ("Daybound", "Flying")
+    assert transform.type_line == "Creature — Human // Creature — Zombie"
+    assert transform.subtypes == ("Human", "Zombie")
+    assert transform.set_code == "sem"
+    assert transform.collector_number == "1"
+    assert transform.source_provenance == ("scryfall",)
+    assert transform.faces == (
+        CardFace(
+            name="Front",
+            oracle_text="Front text",
+            keywords=("Daybound",),
+            type_line="Creature — Human",
+            subtypes=("Human",),
+            colors=("W",),
+            mana_cost="{2}{W}",
+            mana_value=3.0,
+        ),
+        CardFace(
+            name="Back",
+            oracle_text="Back text",
+            keywords=("Flying",),
+            type_line="Creature — Zombie",
+            subtypes=("Zombie",),
+            colors=("B",),
+            mana_cost=None,
+            mana_value=3.0,
+        ),
+    )
+
+    split = database.lookup(grp_id=9002)
+    assert split.layout == "split"
+    assert split.faces[0].oracle_text == "Deal 2 damage."
+    assert split.faces[1].type_line == "Instant"
+
+    adventure = database.lookup(grp_id=9003)
+    assert adventure.layout == "adventure"
+    assert adventure.faces[0].subtypes == ("Adventure",)
+    assert adventure.faces[1].subtypes == ("Human",)
+
+    modal_dfc = database.lookup(grp_id=9004)
+    assert modal_dfc.layout == "modal_dfc"
+    assert modal_dfc.oracle_text == "Cast this // Add {R}."
+    assert [face.name for face in modal_dfc.faces] == [
+        "Modal Front",
+        "Modal Back",
+    ]
+    assert [face.type_line for face in modal_dfc.faces] == ["Sorcery", "Land"]
+
+    no_faces = database.lookup(grp_id=9005)
+    assert no_faces.layout == "normal"
+    assert no_faces.faces == ()
+
+
+def test_scryfall_malformed_present_faces_fail() -> None:
+    card = {
+        "arena_id": 9100,
+        "name": "Malformed Faces",
+        "colors": [],
+        "cmc": 1,
+        "rarity": "common",
+        "type_line": "Creature",
+        "card_faces": None,
+    }
+
+    with pytest.raises(CardDatabaseError, match="card_faces"):
+        build_card_database_from_scryfall_cards(cards=(card,))
 
 
 def test_scryfall_bulk_keeps_mana_cost_produced_mana_and_image_uri(
@@ -127,6 +209,270 @@ def test_arena_local_data_builds_current_set_metadata(tmp_path: Path) -> None:
     assert land.produced_mana == ("W", "U")
 
 
+def test_arena_linked_faces_keep_face_local_semantics() -> None:
+    database = build_card_database_from_arena_cards(
+        cards=(
+            {
+                "grpid": 7001,
+                "titleId": 1,
+                "cmc": 2,
+                "rarity": 3,
+                "cardTypeTextId": 10,
+                "subtypeTextId": 11,
+                "colors": [5],
+                "castingcost": "oG",
+                "oracleText": "Front rules",
+                "linkedFaces": [7002],
+            },
+            {
+                "grpid": 7002,
+                "titleId": 2,
+                "cmc": 3,
+                "rarity": 3,
+                "cardTypeTextId": 12,
+                "subtypeTextId": 13,
+                "colors": [1],
+                "castingcost": "o2oW",
+                "oracleText": "Back rules",
+                "linkedFaces": [],
+            },
+        ),
+        localization={
+            1: "Front",
+            2: "Back",
+            10: "Creature",
+            11: "Human",
+            12: "Creature",
+            13: "Spirit",
+        },
+    )
+
+    card = database.lookup(grp_id=7001)
+    assert card.arena_id == card.grp_id == 7001
+    assert card.type_line == "Creature — Human // Creature — Spirit"
+    assert card.subtypes == ("Human", "Spirit")
+    assert card.colors == ("W", "G")
+    assert card.oracle_text == "Front rules // Back rules"
+    assert [face.name for face in card.faces] == ["Front", "Back"]
+    assert [face.oracle_text for face in card.faces] == [
+        "Front rules",
+        "Back rules",
+    ]
+    assert card.source_provenance == ("arena",)
+
+
+def test_mtgjson_other_face_ids_augment_only_missing_canonical_fields() -> None:
+    database = augment_card_database_with_mtgjson_set(
+        CardDatabase(
+            cards={
+                8001: CardInfo(
+                    grp_id=8001,
+                    name="MTG Front",
+                    colors=("G",),
+                    mana_value=2.0,
+                    rarity="rare",
+                    types=("Creature — Front",),
+                    mana_cost=None,
+                    oracle_text=None,
+                    type_line=None,
+                    source_provenance=("scryfall",),
+                )
+            }
+        ),
+        set_code="SEM",
+        seeds=(
+            CardMetadataSeed(
+                grp_id=8001,
+                name="MTG Front",
+                colors=("R",),
+                rarity="common",
+            ),
+        ),
+        mtgjson_cards=(
+            {
+                "uuid": "front",
+                "name": "MTG Front",
+                "type": "Creature — Front",
+                "text": "Front text",
+                "manaValue": 2,
+                "manaCost": "{1}{G}",
+                "colors": ["G"],
+                "rarity": "rare",
+                "setCode": "SEM",
+                "number": "4",
+                "otherFaceIds": ["back"],
+            },
+            {
+                "uuid": "back",
+                "name": "MTG Back",
+                "type": "Creature — Back",
+                "text": "Back text",
+                "manaValue": 3,
+                "manaCost": "{2}{G}",
+                "colors": ["G"],
+                "rarity": "rare",
+            },
+        ),
+    )
+
+    card = database.lookup(grp_id=8001)
+    assert card.name == "MTG Front"
+    assert card.colors == ("G",)
+    assert card.rarity == "rare"
+    assert card.oracle_text == "Front text"
+    assert card.mana_cost == "{1}{G} // {2}{G}"
+    assert card.type_line == "Creature — Front"
+    assert [face.oracle_text for face in card.faces] == ["Front text", "Back text"]
+    assert [face.type_line for face in card.faces] == [
+        "Creature — Front",
+        "Creature — Back",
+    ]
+    assert card.source_provenance == ("scryfall", "mtgjson")
+
+
+def test_unmatched_mtgjson_seed_uses_17lands_provenance_and_can_retry() -> None:
+    seed = CardMetadataSeed(
+        grp_id=8010,
+        name="Rating Seed",
+        colors=("W",),
+        rarity="common",
+    )
+    unmatched = augment_card_database_with_mtgjson_set(
+        CardDatabase(cards={}),
+        set_code="SEM",
+        seeds=(seed,),
+        mtgjson_cards=({"name": "Different Card"},),
+    )
+
+    seeded = unmatched.lookup(grp_id=8010)
+    assert seeded.source_provenance == ("17lands",)
+    assert seeded.unknown is True
+
+    retried = augment_card_database_with_mtgjson_set(
+        unmatched,
+        set_code="SEM",
+        seeds=(seed,),
+        mtgjson_cards=(
+            {
+                "name": "Rating Seed",
+                "manaValue": 2,
+                "manaCost": "{1}{W}",
+                "colors": ["W"],
+                "rarity": "common",
+                "type": "Creature",
+                "availability": ["arena"],
+            },
+        ),
+    )
+    retried_card = retried.lookup(grp_id=8010)
+    assert retried_card.unknown is False
+    assert "17lands" in retried_card.source_provenance
+    assert "mtgjson" in retried_card.source_provenance
+
+
+def test_unmatched_mtgjson_seed_preserves_partial_arena_card() -> None:
+    existing = CardInfo(
+        grp_id=8011,
+        name="Partial Arena Card",
+        colors=("U",),
+        mana_value=3.0,
+        rarity="rare",
+        types=("Unknown",),
+        mana_cost="{2}{U}",
+        unknown=True,
+        oracle_text="Arena rules",
+        type_line=None,
+        set_code="SEM",
+        source_provenance=("arena",),
+    )
+    database = CardDatabase(cards={existing.grp_id: existing})
+    result = augment_card_database_with_mtgjson_set(
+        database,
+        set_code="SEM",
+        seeds=(
+            CardMetadataSeed(
+                grp_id=existing.grp_id,
+                name="Not In MTGJSON",
+                colors=("R",),
+                rarity="common",
+            ),
+        ),
+        mtgjson_cards=({"name": "Different Card"},),
+    )
+
+    retained = result.lookup(grp_id=existing.grp_id)
+    assert retained is existing
+    assert retained.name == "Partial Arena Card"
+    assert retained.colors == ("U",)
+    assert retained.mana_value == 3.0
+    assert retained.set_code == "SEM"
+    assert retained.source_provenance == ("arena",)
+
+
+def test_mtgjson_augmentation_does_not_redownload_after_partial_contribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = CardDatabase(
+        cards={
+            8002: CardInfo(
+                grp_id=8002,
+                name="Partial Card",
+                colors=("G",),
+                mana_value=2.0,
+                rarity="common",
+                types=("Creature",),
+                oracle_text=None,
+                type_line=None,
+                mana_cost=None,
+                source_provenance=("scryfall",),
+            )
+        }
+    )
+    seed = CardMetadataSeed(
+        grp_id=8002,
+        name="Partial Card",
+        colors=("G",),
+        rarity="common",
+    )
+    partial_mtgjson = (
+        {
+            "uuid": "partial",
+            "name": "Partial Card",
+            "colors": ["G"],
+            "rarity": "common",
+        },
+    )
+
+    augmented = augment_card_database_with_mtgjson_set(
+        database,
+        set_code="SEM",
+        seeds=(seed,),
+        mtgjson_cards=partial_mtgjson,
+    )
+    assert augmented.lookup(grp_id=8002).source_provenance == (
+        "scryfall",
+        "mtgjson",
+    )
+    assert augmented.lookup(grp_id=8002).oracle_text is None
+
+    def fail_download(**_kwargs: object) -> tuple[object, ...]:
+        raise AssertionError("MTGJSON should not be downloaded twice")
+
+    monkeypatch.setattr(
+        "draftomen.carddb.download_mtgjson_set_cards",
+        fail_download,
+    )
+
+    assert (
+        augment_card_database_with_mtgjson_set(
+            augmented,
+            set_code="SEM",
+            seeds=(seed,),
+        )
+        is augmented
+    )
+
+
 def test_mtgjson_set_metadata_resolves_grp_ids_from_name_seeds() -> None:
     database = augment_card_database_with_mtgjson_set(
         CardDatabase(
@@ -176,6 +522,7 @@ def test_mtgjson_set_metadata_resolves_grp_ids_from_name_seeds() -> None:
     assert spider.types == ("Creature — Spider",)
     assert spider.mana_cost == "{3}{G}"
     assert spider.unknown is False
+    assert spider.faces == ()
 
     forest = database.lookup(grp_id=105098)
     assert forest.name == "Arena Forest"
@@ -202,8 +549,8 @@ def test_cached_scryfall_data_is_augmented_with_arena_local_data(
         arena_data_dir=arena_data_dir,
     )
 
-    assert database.lookup(grp_id=105097).name == "Arena Spider"
-    assert database.lookup(grp_id=105097).colors == ("G",)
+    assert database.lookup(grp_id=105097).name == "Scryfall Spider"
+    assert database.lookup(grp_id=105097).colors == ("R",)
     assert database.lookup(grp_id=105097).image_uri == "https://cards.example/spider.jpg"
     assert database.lookup(grp_id=105200).name == "Arena Dual"
     assert database.unresolved_grp_ids(grp_ids=(105097, 999999, 105200)) == (999999,)
@@ -221,6 +568,149 @@ def test_unknown_grp_id_returns_explicit_marker() -> None:
     assert unknown.mana_value is None
     assert unknown.rarity == "unknown"
     assert unknown.types == ("Unknown",)
+
+
+def test_schema_three_cache_migrates_with_explicit_metadata_defaults(
+    tmp_path: Path,
+) -> None:
+    cache_path = card_database_cache_path(app_dir=tmp_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "source": "scryfall-default-cards",
+                "generated_at": None,
+                "cards": {
+                    "42": {
+                        "grp_id": 42,
+                        "name": "Legacy Card",
+                        "colors": ["U"],
+                        "mana_value": 2,
+                        "rarity": "common",
+                        "types": ["Creature"],
+                    }
+                },
+                "image_uris_by_name": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    database = load_card_database(app_dir=tmp_path)
+    card = database.lookup(grp_id=42)
+    assert card.arena_id == 42
+    assert card.oracle_text is None
+    assert card.faces == ()
+    assert card.source_provenance == ("unknown",)
+    assert database.to_json()["schema_version"] == 4
+
+
+def test_load_or_refresh_schema_three_cache_is_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = card_database_cache_path(app_dir=tmp_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "source": "scryfall-default-cards",
+                "generated_at": None,
+                "cards": {
+                    "42": {
+                        "grp_id": 42,
+                        "name": "Legacy Card",
+                        "colors": ["U"],
+                        "mana_value": 2,
+                        "rarity": "common",
+                        "types": ["Creature"],
+                    }
+                },
+                "image_uris_by_name": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_refresh(**_kwargs: object) -> CardDatabase:
+        pytest.fail("schema-3 cache must load without refresh")
+
+    monkeypatch.setattr("draftomen.carddb.refresh_card_database", fail_refresh)
+    monkeypatch.setattr(
+        "draftomen.carddb.find_default_arena_data_dir",
+        lambda: None,
+    )
+
+    def fail_mtgjson_download(**_kwargs: object) -> tuple[object, ...]:
+        pytest.fail("resolved schema-3 cards must not download MTGJSON")
+
+    monkeypatch.setattr(
+        "draftomen.carddb.download_mtgjson_set_cards",
+        fail_mtgjson_download,
+    )
+
+    database = load_or_refresh_card_database(app_dir=tmp_path)
+
+    assert database.lookup(grp_id=42).source_provenance == ("unknown",)
+    augmented = augment_card_database_with_mtgjson_set(
+        database,
+        set_code="TST",
+        seeds=(
+            CardMetadataSeed(
+                grp_id=42,
+                name="Legacy Card",
+                colors=("U",),
+                rarity="common",
+            ),
+        ),
+    )
+
+    assert augmented is database
+
+
+def test_card_database_serialization_is_deterministic() -> None:
+    database = CardDatabase(
+        cards={
+            2: CardInfo.unknown_card(grp_id=2),
+            1: CardInfo.unknown_card(grp_id=1),
+        },
+        image_uris_by_name={
+            "zeta": "https://cards.example/zeta.jpg",
+            "alpha": "https://cards.example/alpha.jpg",
+        },
+        generated_at=datetime(2026, 8, 23, 12, 0, tzinfo=UTC),
+    )
+
+    first = json.dumps(database.to_json(), indent=2, sort_keys=True)
+    second = json.dumps(database.to_json(), indent=2, sort_keys=True)
+
+    assert first == second
+    assert tuple(database.to_json()["cards"]) == ("1", "2")
+    assert tuple(database.to_json()["image_uris_by_name"]) == ("alpha", "zeta")
+
+
+def test_atomic_cache_failure_preserves_previous_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = card_database_cache_path(app_dir=tmp_path)
+    save_card_database(CardDatabase(cards={}), cache_path=cache_path)
+    before = cache_path.read_text(encoding="utf-8")
+
+    def fail_replace(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr("draftomen.carddb.os.replace", fail_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        save_card_database(
+            CardDatabase(cards={1: CardInfo.unknown_card(grp_id=1)}),
+            cache_path=cache_path,
+        )
+
+    assert cache_path.read_text(encoding="utf-8") == before
+    assert tuple(tmp_path.glob(".carddb.json.*")) == ()
 
 
 def test_refresh_writes_cache_and_loads_cached_database_offline(
@@ -449,7 +939,7 @@ def _fixture_grp_ids() -> set[int]:
 
 def _write_arena_data_dir(*, directory: Path) -> Path:
     arena_data_dir = directory / "arena-data"
-    arena_data_dir.mkdir()
+    arena_data_dir.mkdir(parents=True, exist_ok=True)
     cards = [
         {
             "grpid": 105097,
