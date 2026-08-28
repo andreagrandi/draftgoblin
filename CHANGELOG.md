@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Fix stable release startup with supported concurrency syntax and reusable-workflow permissions.
+- Fix stable release startup and Linux validation with valid workflow syntax, permissions, and Qt runtime dependencies.
 
 ## [0.3.0] - 2026-08-28
 
