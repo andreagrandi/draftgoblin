@@ -4,9 +4,12 @@ Draft Omen's native desktop bundles are unsigned artifacts built in two
 automated contexts: a manual `workflow_dispatch` run for temporary development
 testing, or as part of the tagged `v*` release workflow. Ordinary pushes,
 merges, and pull requests do not trigger native builds automatically. The macOS
-artifact is ad-hoc signed by Nuitka, but it has no developer or distribution
-signing identity and is not notarized. The Windows artifact is unsigned.
-Neither artifact is a signed installer.
+artifact is a compressed, read-only DMG for Finder-native distribution: its
+`Draft Omen` volume contains `Draftomen-unsigned-macos.app` at the volume root
+and an `Applications` symlink to `/Applications`. Nuitka's app bundle has an
+ad-hoc signature, but it has no developer or distribution signing identity and
+is not notarized. The Windows artifact is unsigned. Neither artifact is a
+signed installer.
 
 ## Tool choice
 
@@ -90,6 +93,23 @@ The deployment output directory must exist before `pyside6-deploy` finalizes
 the bundle. The native workflow creates the matrix platform's directory
 explicitly; the local commands above do the same.
 
+On macOS, package the generated app as a Finder-native compressed DMG:
+
+```bash
+staging="$(mktemp -d)"
+cleanup() { rm -rf "$staging"; }
+trap cleanup EXIT
+ditto \
+  dist-native/macos-unsigned/Draftomen-unsigned-macos.app \
+  "$staging/Draftomen-unsigned-macos.app"
+ln -s /Applications "$staging/Applications"
+hdiutil create -volname "Draft Omen" -srcfolder "$staging" -ov -format UDZO \
+  dist-native/macos-unsigned/Draftomen-unsigned-macos.dmg
+```
+
+The resulting image is read-only and compressed with `UDZO`; mounting it
+exposes the app at the volume root alongside the Applications shortcut.
+
 Standalone Windows builds require Dependency Walker. The Windows workflow
 downloads the official x64 2.2 archive over HTTPS, verifies its pinned SHA-256
 (`35db68a613874a2e8c1422eb0ea7861f825fc71717d46dabf1f249ce9634b4f1`),
@@ -145,10 +165,12 @@ The workflow runs separate `macos-latest` and `windows-latest` jobs. It syncs
 the locked project environment, installs Nuitka 4.1.3, builds with the platform
 spec, and smoke-tests the same payload shape that it uploads:
 
-- macOS: the completed `Draftomen-unsigned-macos.app` is placed in a
-  `Draftomen-unsigned-macos.tar` archive. The workflow extracts that tar into
-  an isolated temporary directory and runs `tests/bundle_smoke.py` against the
-  extracted app before uploading the tar.
+- macOS: the completed `Draftomen-unsigned-macos.app` is staged with an
+  `Applications` symlink and packaged as the compressed
+  `Draftomen-unsigned-macos.dmg` image. The workflow attaches the image
+  read-only and without Finder browsing at a temporary mountpoint, runs
+  `tests/bundle_smoke.py` against the mounted app, and detaches the image even
+  when the smoke test fails before uploading the DMG.
 - Windows: the workflow runs `tests/bundle_smoke.py` directly against
   `Draftomen-unsigned-windows.exe` and uploads that `.exe` directly.
 
@@ -165,35 +187,35 @@ artifacts, not GitHub Release assets; they are retained only for the
 repository's configured Actions artifact-retention period and may expire.
 
 The macOS artifact download is a GitHub Actions artifact archive containing
-exactly one file, `Draftomen-unsigned-macos.tar`; it is not the `.app`
+exactly one file, `Draftomen-unsigned-macos.dmg`; it is not the `.app`
 directory directly. Extract that downloaded artifact archive first, then
-extract the tar into an empty directory. The tar contains exactly one
-top-level directory, `Draftomen-unsigned-macos.app`, including its
-`Contents/` tree and executable mode bits. For example:
+attach the DMG read-only and without Finder browsing at a temporary mountpoint.
+The image contains the app at its volume root and an `Applications` shortcut:
 
 ```bash
 unzip draftomen-macos-unsigned-development.zip -d macos-download
-mkdir macos-extracted
-tar -xpf macos-download/Draftomen-unsigned-macos.tar -C macos-extracted
+macos_mount="$(mktemp -d)"
+cleanup() {
+  hdiutil detach "$macos_mount" >/dev/null 2>&1 || true
+  rmdir "$macos_mount" || true
+}
+trap cleanup EXIT
+hdiutil attach -readonly -nobrowse \
+  -mountpoint "$macos_mount" \
+  macos-download/Draftomen-unsigned-macos.dmg
+test -d "$macos_mount/Draftomen-unsigned-macos.app"
+test -L "$macos_mount/Applications"
 uv run python tests/bundle_smoke.py \
-  macos-extracted/Draftomen-unsigned-macos.app
+  "$macos_mount/Draftomen-unsigned-macos.app"
 ```
 
-The Windows artifact download contains the direct
-`Draftomen-unsigned-windows.exe` file:
-
-```powershell
-Expand-Archive draftomen-windows-unsigned-development.zip windows-download
-uv run python tests/bundle_smoke.py `
-  windows-download/Draftomen-unsigned-windows.exe
-```
-
-The macOS tar is only a mode-preserving transport envelope; it is not signed
-or notarized. The app inside it has Nuitka's required ad-hoc signature, but no
-developer or distribution signing identity and no notarization. The Windows
-executable is unsigned. Anyone distributing either downloaded artifact must
-perform platform-appropriate signing and notarization independently after
-extracting the macOS app from the tar.
+The `EXIT` trap detaches the image after a successful smoke test or a failure.
+Alternatively, open the DMG in Finder and drag `Draftomen-unsigned-macos.app`
+onto the `Applications` shortcut, then eject the image. The DMG is unsigned,
+and the app has only Nuitka's required ad-hoc signature (no developer or
+distribution identity or notarization). Anyone redistributing the app must
+arrange platform-appropriate signing and notarization independently after
+copying it from the mounted image.
 
 ### Tagged release assets
 
@@ -215,19 +237,20 @@ likewise overwritten when their build jobs are rerun.
 
 The persistent public assets attached to the `v1.2.3` GitHub Release are:
 
-- `draftomen-v1.2.3-unsigned-macos.tar`, containing the
-  `Draftomen-unsigned-macos.app` bundle;
+- `draftomen-v1.2.3-unsigned-macos.dmg`, a compressed read-only image containing
+  the `Draftomen-unsigned-macos.app` bundle and an `Applications` symlink;
 - `draftomen-v1.2.3-unsigned-windows.exe`, containing the Windows
   executable; and
 - `draftomen-v1.2.3-unsigned-sha256sums.txt`, containing SHA-256 entries
   for those two assets.
 
 The release filenames deliberately include both the tag and `unsigned`.
-The macOS asset remains a tar transport so executable mode bits survive
-download. It is not developer/distribution signed or notarized; its app has
-only Nuitka's required ad-hoc signature. The Windows executable has no
-distribution signature. These GitHub Release assets therefore require
-platform-appropriate signing and notarization before redistribution.
+Mounting the macOS asset in Finder or with `hdiutil attach -readonly -nobrowse`
+shows the app and Applications shortcut. The DMG and app are not
+developer/distribution signed or notarized; the app has only Nuitka's required
+ad-hoc signature. The Windows executable has no distribution signature. These
+GitHub Release assets therefore require platform-appropriate signing and
+notarization before redistribution.
 
 The existing Python `publish` job and Homebrew job remain separate from native
 packaging: Python wheels and source distributions continue to publish to
