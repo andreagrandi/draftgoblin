@@ -6,6 +6,7 @@
   "pair_profiles": [
     {
       "pair": "WU",
+      "theme": "tempo flyers",
       "removal_targets": [{"kind": "disable", "value": 0.8}],
       "role_targets": [{"role": "draw", "value": 3}],
       "scarcity": [{"card_key": "oracle_id:wu-bomb", "samples": 120, "value": 0.25}],
@@ -20,7 +21,7 @@
     {"pair": "UG"},
     {"pair": "BR"},
     {"pair": "BG"},
-    {"pair": "RG"}
+    {"pair": "RG", "theme": "landfall pressure"}
   ],
   "profile_version": "1.0",
   "role_profile": {

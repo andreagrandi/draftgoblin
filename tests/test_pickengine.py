@@ -1,17 +1,32 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, datetime
+
+import pytest
 
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.events import PackOfferedEvent
 from draftomen.pickengine import (
     PickEngine,
+    PickScoringContext,
     recommendation_confidence_summary,
     recommendation_explanation,
 )
+from draftomen.pool_ledger import (
+    COMPLETED_POOL,
+    PoolRoleLedger,
+    project_pool_role_ledger,
+)
 from draftomen.ranking import RANKING_MODES, rank_scored_cards
 from draftomen.replay import format_pack_offered_event
+from draftomen.set_profile import (
+    PairProfile,
+    ProfileMaturity,
+    SampleSummary,
+    SetProfile,
+    SourceMetadata,
+)
 from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
@@ -31,6 +46,8 @@ def test_pick_engine_scores_and_sorts_with_fallback_sources() -> None:
         offered_grp_ids=(4, 3, 2, 1),
         card_database=_card_database(),
     )
+    assert [card.card.grp_id for card in scored_pack.cards] == [1, 4, 2, 3]
+    assert scored_pack.scoring_context is None
 
     assert [card.score for card in scored_pack.cards] == sorted(
         [card.score for card in scored_pack.cards],
@@ -1056,4 +1073,122 @@ def _card(
         types=types,
         mana_cost=mana_cost,
         produced_mana=produced_mana,
+    )
+
+
+def test_pick_scoring_context_validates_its_pre_pick_contract() -> None:
+    profile = _context_profile()
+    ledger = _context_ledger(profile=profile, database=_card_database())
+    context = PickScoringContext(set_profile=profile, role_ledger=ledger)
+    assert ledger.profile_fingerprint == profile.fingerprint
+
+    assert tuple(field.name for field in fields(PickScoringContext)) == (
+        "set_profile",
+        "role_ledger",
+    )
+    assert context.set_profile is profile
+    assert context.role_ledger is ledger
+    assert context.stage is ledger.stage
+    assert not hasattr(context, "profile")
+    assert not hasattr(context, "ledger")
+    with pytest.raises(FrozenInstanceError):
+        context.set_profile = profile
+    with pytest.raises(TypeError):
+        PickScoringContext(
+            set_profile=profile,
+            role_ledger=ledger,
+            ledger=ledger,
+        )
+    with pytest.raises(TypeError, match="must be a SetProfile"):
+        PickScoringContext(set_profile=object(), role_ledger=ledger)
+    with pytest.raises(TypeError, match="must be a PoolRoleLedger"):
+        PickScoringContext(set_profile=profile, role_ledger=object())
+    with pytest.raises(ValueError, match="pre-pick projection"):
+        PickScoringContext(
+            set_profile=profile,
+            role_ledger=replace(
+                ledger,
+                mode=COMPLETED_POOL,
+                stage=None,
+            ),
+        )
+    with pytest.raises(TypeError, match="stage must be a LedgerStage"):
+        PickScoringContext(
+            set_profile=profile,
+            role_ledger=replace(ledger, stage=object()),
+        )
+    different_profile = replace(profile, confidence=0.75)
+    with pytest.raises(ValueError, match="fingerprint"):
+        PickScoringContext(
+            set_profile=different_profile,
+            role_ledger=ledger,
+        )
+    with pytest.raises(ValueError, match="does not match"):
+        PickScoringContext(
+            set_profile=profile,
+            role_ledger=replace(ledger, profile_source="profile:early"),
+        )
+
+
+def test_scoring_context_propagates_without_changing_scores_or_order() -> None:
+    database = _card_database()
+    ratings_data = _ratings_data()
+    profile = _context_profile()
+    context = PickScoringContext(
+        set_profile=profile,
+        role_ledger=_context_ledger(profile=profile, database=database),
+    )
+    baseline = PickEngine(ratings_data=ratings_data).score_pack(
+        offered_grp_ids=(4, 3, 2, 1),
+        card_database=database,
+    )
+    through_constructor = PickEngine(
+        ratings_data=ratings_data,
+        scoring_context=context,
+    ).score_pack(
+        offered_grp_ids=(4, 3, 2, 1),
+        card_database=database,
+    )
+    through_call = PickEngine(ratings_data=ratings_data).score_pack(
+        offered_grp_ids=(4, 3, 2, 1),
+        card_database=database,
+        scoring_context=context,
+    )
+
+    assert through_constructor.scoring_context is context
+    assert through_call.scoring_context is context
+    assert through_constructor.cards == baseline.cards
+    assert through_call.cards == baseline.cards
+    assert through_constructor.commitment == baseline.commitment
+    assert through_call.commitment == baseline.commitment
+
+
+def _context_profile() -> SetProfile:
+    return SetProfile(
+        set_code="TST",
+        event_format="quickdraft",
+        profile_version="context-test",
+        generated_at="1970-01-01T00:00:00+00:00",
+        source=SourceMetadata(provider="test"),
+        maturity=ProfileMaturity.MATURE,
+        samples=SampleSummary(total=1, by_pair=(("WU", 1),)),
+        confidence=1.0,
+        pairs=(PairProfile(pair="WU"),),
+    )
+
+
+def _context_ledger(
+    *,
+    profile: SetProfile,
+    database: CardDatabase,
+) -> PoolRoleLedger:
+    return project_pool_role_ledger(
+        pool_before_pick=(),
+        pack_number=2,
+        pick_number=6,
+        global_pick_index=35,
+        estimated_remaining_picks=7,
+        card_database=database,
+        set_profile=profile,
+        likely_pair="WU",
     )

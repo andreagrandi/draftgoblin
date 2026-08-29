@@ -10,6 +10,7 @@ import draftomen.set_profile as set_profile_module
 from draftomen.config import COLOR_PAIRS
 from draftomen.semantic_roles import CompiledRoleProfile, ProfileCard, Role, RoleAssignment
 from draftomen.set_profile import (
+    PairProfile,
     ProfileMaturity,
     SetProfile,
     SetProfileError,
@@ -31,17 +32,47 @@ def test_mature_profile_round_trip_covers_all_pairs_and_optional_sections() -> N
 
     assert profile.maturity is ProfileMaturity.MATURE
     assert tuple(item.pair for item in profile.pairs) == COLOR_PAIRS
+    assert sum(item.theme is not None for item in profile.pairs) == 2
     samples = profile.samples
     assert samples is not None
     assert samples.count_for("RG") == 120
     wu = profile.pair("WU")
     assert wu is not None
+    assert wu.theme == "tempo flyers"
+    wb = profile.pair("WB")
+    assert wb is not None
+    assert wb.theme is None
+    rg = profile.pair("RG")
+    assert rg is not None
+    assert rg.theme == "landfall pressure"
     assert wu.structural_targets[0].name == "average_land_count"
     assert wu.role_targets[0].role is Role.DRAW
     assert wu.removal_targets[0].kind == "disable"
     assert wu.synergy[0].first_card == "oracle_id:wu-bomb"
     assert wu.scarcity[0].card_key == "oracle_id:wu-bomb"
     assert SetProfile.from_json(profile.to_json()).to_bytes() == profile.to_bytes()
+
+def test_profile_fingerprint_is_stable_across_round_trip() -> None:
+    profile = load_set_profile(FIXTURE_DIR / "mature.json")
+    equivalent = SetProfile.from_json(profile.to_json())
+
+    assert profile.fingerprint
+    assert equivalent.fingerprint == profile.fingerprint
+
+
+def test_pair_profile_theme_round_trip_trims_and_omits_absent_theme() -> None:
+    themed = PairProfile.from_json({"pair": " wu ", "theme": "  tempo flyers  "})
+
+    assert themed.theme == "tempo flyers"
+    assert themed.to_json() == {"pair": "WU", "theme": "tempo flyers"}
+    assert PairProfile.from_json({"pair": "WB"}).theme is None
+    assert "theme" not in PairProfile(pair="WB").to_json()
+
+
+@pytest.mark.parametrize("theme", ("", "   ", 42, False))
+def test_pair_profile_theme_rejects_blank_and_non_string_values(theme: object) -> None:
+    with pytest.raises(SetProfileSchemaError, match="pair_profile.theme"):
+        PairProfile.from_json({"pair": "WU", "theme": theme})
 
 
 def test_sparse_early_profile_preserves_only_available_empirical_evidence() -> None:
@@ -71,16 +102,12 @@ def test_metadata_and_semantic_only_profiles_omit_empirical_sections() -> None:
 
     assert metadata.maturity is ProfileMaturity.METADATA_ONLY
     assert metadata.samples is None
-    assert metadata.pair_profiles == ()
-    metadata_json = metadata.to_json()
-    assert "samples" not in metadata_json
-    assert "pair_profiles" not in metadata_json
     assert semantic.maturity is ProfileMaturity.SEMANTIC_ONLY
     assert semantic.samples is None
-    assert semantic.pair_profiles == ()
+    assert semantic.pair_profiles == (PairProfile(pair="WU", theme="tempo flyers"),)
     semantic_json = semantic.to_json()
     assert "samples" not in semantic_json
-    assert "pair_profiles" not in semantic_json
+    assert semantic_json["pair_profiles"] == [{"pair": "WU", "theme": "tempo flyers"}]
 
 
 def test_unknown_optional_fields_are_ignored_and_output_is_stable(tmp_path: Path) -> None:

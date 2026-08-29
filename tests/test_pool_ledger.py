@@ -173,10 +173,13 @@ def test_pre_pick_projection_is_deterministic_and_completed_mode_has_no_stage() 
     assert projected.stage is not None
     assert projected.pool_size == 2
     assert projected.unique_card_count == 1
+    assert projected.profile_fingerprint is None
+    assert projected.to_json()["profile_fingerprint"] is None
     assert projected.to_json() == repeated.to_json()
     assert completed.mode is COMPLETED_POOL
     assert completed.stage is None
     assert completed.remaining_picks is None
+    assert completed.profile_fingerprint is None
 
 
 def test_missing_role_urgency_is_monotone_and_preferred_target_removes_late_bonus() -> None:
@@ -348,6 +351,7 @@ def test_unsupported_payoff_is_not_counted_as_supported_package() -> None:
 
 
     serialized = ledger.to_json()
+    assert serialized["profile_fingerprint"] == profile.fingerprint
     assert serialized["fixing_count"] == ledger.fixing_count
     assert serialized["card_advantage_count"] == ledger.card_advantage_count
     for field_name in (

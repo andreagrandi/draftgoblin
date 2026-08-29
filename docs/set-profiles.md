@@ -29,16 +29,26 @@ Empirical sections are sparse and optional:
   for which a context is available. Each pair is listed at most once, in
   canonical `config.COLOR_PAIRS` order. A missing context is exposed by
   `SetProfile.pair()` returning `None`, not by an empty fabricated context.
-  A context can contain optional `structural_targets`, `role_targets`,
+  A context can contain optional empirical `structural_targets`, `role_targets`,
   `removal_targets`, `synergy`, and `scarcity` arrays. Empty arrays mean no
   evidence was supplied and are omitted during canonical serialization.
 
+Pair-profile semantic annotations are separate from empirical evidence:
+
+- `theme`, when present, is a trimmed, non-empty descriptive label for a pair
+  context. It is semantic annotation metadata, not evidence, and may be used
+  in semantic-only profiles. It annotates the canonical pair for explanations
+  and is never a whitelist: a theme does not make other canonical pairs
+  ineligible.
+
 Mature and early profiles must contain empirical evidence. Metadata-only
 profiles must contain neither empirical nor semantic evidence. Semantic-only
-profiles must carry the compiled `role_profile` and must not contain empirical
-evidence. Thus metadata-only artifacts can omit `samples` and `pair_profiles`,
-while semantic-only artifacts omit empirical sections but retain `role_profile`.
-The generic fallback contains neither empirical section.
+profiles must carry the compiled `role_profile`, may carry semantic pair
+annotations such as `theme`, and must not contain empirical evidence. Thus
+metadata-only artifacts can omit `samples` and `pair_profiles`, while
+semantic-only artifacts omit empirical sections but retain `role_profile` and
+may retain theme annotations. The generic fallback contains neither empirical
+section.
 
 The optional `role_profile` object carries compiled per-card semantic roles. It
 uses the existing semantic-role vocabulary and assignment types, and declares
