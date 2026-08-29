@@ -6,6 +6,8 @@
 - Add bounded contextual pick-score terms for projected role need, late
   urgency, semantic package support, redundancy, unsupported payoffs, and
   fixing, with material explanations and audit evidence. (#252)
+- Shrink contextual pair and locked pair-card performance toward neutral/global
+  priors using bounded profile and rating sample evidence. (#253)
 - Add a development-only reproducible card corpus workflow with pinned Scryfall,
   current and legacy Arena mapping inputs, MTGJSON inputs, deterministic
   normalized artifacts, and coverage reports for offline semantic-analysis work.

@@ -77,6 +77,9 @@ _TERM_BOUNDS: Mapping[str, tuple[float, float]] = {
     "unsupported_payoff": (-MAX_UNSUPPORTED_PAYOFF_TERM, 0.0),
     "fixing": (0.0, MAX_FIXING_TERM),
 }
+PAIR_PROFILE_SAMPLE_SCALE = 100.0
+PAIR_GAME_SAMPLE_SCALE = 500.0
+PAIR_CARD_GIH_SAMPLE_SCALE = 500.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,7 +389,7 @@ class ScoredCard:
     @property
     def no_data(self) -> bool:
         """Return whether this row used the neutral-prior fallback.
-        Renderers mark these cards because no strong GIH sample was available.
+        Renderers mark these cards because no resolved GIH rate was available.
         """
 
         return self.rating.neutral_prior and not self.freely_available_basic
@@ -546,21 +549,31 @@ class PickEngine:
                     set_profile=self.set_profile,
                     role_ledger=role_ledger,
                 )
+        active_profile = (
+            self.set_profile
+            if active_context is None
+            else active_context.set_profile
+        )
+        require_material_rate_margin = (
+            active_profile is not None
+            and active_profile.maturity.value != "generic"
+        )
         best_on_color_score = self._best_on_color_score(
             offered_grp_ids=offered_grp_ids,
             card_database=card_database,
             commitment=commitment,
+            profile=active_profile,
         )
         scored_cards = tuple(
             self._score_card(
                 grp_id=grp_id,
                 original_index=index,
                 card_database=card_database,
-                ratings_data=self.ratings_data,
                 commitment=commitment,
                 splash_state=splash_state,
                 best_on_color_score=best_on_color_score,
                 scoring_context=active_context,
+                profile=active_profile,
             )
             for index, grp_id in enumerate(offered_grp_ids)
         )
@@ -570,6 +583,7 @@ class PickEngine:
             ratings_data=self.ratings_data,
             offered_count=len(offered_grp_ids),
             config=self.config,
+            require_material_rate_margin=require_material_rate_margin,
         )
         return ScoredPack(
             cards=sorted_cards,
@@ -587,6 +601,7 @@ class PickEngine:
         offered_grp_ids: tuple[int, ...],
         card_database: CardDatabase,
         commitment: ColorCommitment,
+        profile: SetProfile | None,
     ) -> float | None:
         pair = commitment.inferred_pair
         if pair is None:
@@ -605,10 +620,18 @@ class PickEngine:
                 grp_id=grp_id,
                 config=self.config,
                 commitment=commitment,
+                profile=profile,
             )
             scores.append(
                 _normalized_score(
-                    adjusted_rating=_base_rating(rating=rating, config=self.config),
+                    adjusted_rating=_effective_base_rating_for(
+                        rating=rating,
+                        ratings_data=self.ratings_data,
+                        grp_id=grp_id,
+                        config=self.config,
+                        commitment=commitment,
+                        profile=profile,
+                    ),
                     normalization=self.normalization,
                 )
             )
@@ -621,11 +644,11 @@ class PickEngine:
         grp_id: int,
         original_index: int,
         card_database: CardDatabase,
-        ratings_data: SeventeenLandsData | None,
         commitment: ColorCommitment,
         splash_state: SplashState,
         best_on_color_score: float | None,
         scoring_context: PickScoringContext | None,
+        profile: SetProfile | None,
     ) -> ScoredCard:
         card = card_database.lookup(grp_id=grp_id)
         freely_available_basic = _is_freely_available_basic_land(card=card)
@@ -633,12 +656,20 @@ class PickEngine:
             ratings_data=self.ratings_data,
             grp_id=grp_id,
             config=self.config,
+            profile=profile,
             commitment=commitment,
         )
         base_rating = (
             self.normalization.lower_rating
             if freely_available_basic
-            else _base_rating(rating=rating, config=self.config)
+            else _effective_base_rating_for(
+                rating=rating,
+                ratings_data=self.ratings_data,
+                grp_id=grp_id,
+                config=self.config,
+                commitment=commitment,
+                profile=profile,
+            )
         )
         base_score = _normalized_score(
             adjusted_rating=base_rating,
@@ -686,8 +717,9 @@ class PickEngine:
                 card=card,
                 base_rating=base_rating,
                 commitment=commitment,
-                ratings_data=ratings_data,
+                ratings_data=self.ratings_data,
                 config=self.config,
+                profile=profile,
             )
         return ScoredCard(
             card=card,
@@ -1343,6 +1375,7 @@ def _score_sorted_cards(
     ratings_data: SeventeenLandsData | None,
     offered_count: int,
     config: PickEngineConfig,
+    require_material_rate_margin: bool,
 ) -> tuple[ScoredCard, ...]:
     base_sorted = tuple(sorted(cards, key=_scored_card_base_sort_key))
     if not _early_pair_tiebreaker_enabled(
@@ -1353,7 +1386,11 @@ def _score_sorted_cards(
     ):
         return _with_score_sort_indexes(cards=base_sorted)
 
-    sorted_cards = _apply_early_pair_tiebreaker(cards=base_sorted, config=config)
+    sorted_cards = _apply_early_pair_tiebreaker(
+        cards=base_sorted,
+        config=config,
+        require_material_rate_margin=require_material_rate_margin,
+    )
     return _with_score_sort_indexes(cards=sorted_cards)
 
 
@@ -1383,6 +1420,7 @@ def _apply_early_pair_tiebreaker(
     *,
     cards: tuple[ScoredCard, ...],
     config: PickEngineConfig,
+    require_material_rate_margin: bool,
 ) -> tuple[ScoredCard, ...]:
     sorted_cards: list[ScoredCard] = []
     group: list[ScoredCard] = []
@@ -1399,14 +1437,22 @@ def _apply_early_pair_tiebreaker(
             continue
 
         sorted_cards.extend(
-            _sort_early_pair_tiebreaker_group(group=group, config=config)
+            _sort_early_pair_tiebreaker_group(
+                group=group,
+                config=config,
+                require_material_rate_margin=require_material_rate_margin,
+            )
         )
         group = [card]
         group_top_score = card.raw_score
 
     if group:
         sorted_cards.extend(
-            _sort_early_pair_tiebreaker_group(group=group, config=config)
+            _sort_early_pair_tiebreaker_group(
+                group=group,
+                config=config,
+                require_material_rate_margin=require_material_rate_margin,
+            )
         )
 
     return tuple(sorted_cards)
@@ -1416,6 +1462,7 @@ def _sort_early_pair_tiebreaker_group(
     *,
     group: list[ScoredCard],
     config: PickEngineConfig,
+    require_material_rate_margin: bool,
 ) -> tuple[ScoredCard, ...]:
     return tuple(
         sorted(
@@ -1425,6 +1472,7 @@ def _sort_early_pair_tiebreaker_group(
                     left=left,
                     right=right,
                     config=config,
+                    require_material_rate_margin=require_material_rate_margin,
                 ),
             ),
         )
@@ -1436,6 +1484,7 @@ def _compare_early_pair_tiebreaker(
     left: ScoredCard,
     right: ScoredCard,
     config: PickEngineConfig,
+    require_material_rate_margin: bool,
 ) -> int:
     left_win_rate = left.pair_tiebreaker_win_rate
     right_win_rate = right.pair_tiebreaker_win_rate
@@ -1450,7 +1499,11 @@ def _compare_early_pair_tiebreaker(
         <= config.early_pair_tiebreaker_score_threshold
         and abs(left_weight - right_weight)
         <= config.early_pair_tiebreaker_pair_weight_threshold
-        and left_win_rate != right_win_rate
+        and (
+            abs(left_win_rate - right_win_rate) > CLOSE_WIN_RATE_THRESHOLD
+            if require_material_rate_margin
+            else left_win_rate != right_win_rate
+        )
     ):
         return -1 if left_win_rate > right_win_rate else 1
 
@@ -1483,6 +1536,7 @@ def _pair_tiebreaker_for_card(
     commitment: ColorCommitment,
     ratings_data: SeventeenLandsData | None,
     config: PickEngineConfig,
+    profile: SetProfile | None,
 ) -> tuple[str | None, float | None, float | None]:
     if ratings_data is None or not ratings_data.pair_win_rates:
         return (None, None, None)
@@ -1506,13 +1560,19 @@ def _pair_tiebreaker_for_card(
         weights=weights,
         ratings_data=ratings_data,
         config=config,
+        profile=profile,
     )
     if pair is None:
         return (None, None, None)
 
     return (
         pair,
-        _pair_win_rate(pair=pair, ratings_data=ratings_data),
+        _pair_performance_rate(
+            pair=pair,
+            ratings_data=ratings_data,
+            profile=profile,
+            config=config,
+        ),
         _pair_weight(pair=pair, weights=weights),
     )
 
@@ -1555,6 +1615,7 @@ def _best_tiebreaker_pair(
     weights: dict[str, float],
     ratings_data: SeventeenLandsData,
     config: PickEngineConfig,
+    profile: SetProfile | None,
 ) -> str | None:
     if not pairs:
         return None
@@ -1572,6 +1633,8 @@ def _best_tiebreaker_pair(
             pair=pair,
             weights=weights,
             ratings_data=ratings_data,
+            config=config,
+            profile=profile,
         ),
     )
 
@@ -1581,8 +1644,15 @@ def _tiebreaker_pair_sort_key(
     pair: str,
     weights: dict[str, float],
     ratings_data: SeventeenLandsData,
+    config: PickEngineConfig,
+    profile: SetProfile | None,
 ) -> tuple[bool, float, float, int]:
-    win_rate = _pair_win_rate(pair=pair, ratings_data=ratings_data)
+    win_rate = _pair_performance_rate(
+        pair=pair,
+        ratings_data=ratings_data,
+        profile=profile,
+        config=config,
+    )
     return (
         win_rate is not None,
         0.0 if win_rate is None else win_rate,
@@ -1591,19 +1661,81 @@ def _tiebreaker_pair_sort_key(
     )
 
 
-def _pair_win_rate(
+def _sample_influence(*, samples: int | None, scale: float) -> float:
+    """Return bounded evidence influence using a saturating sample curve."""
+
+    if samples is None or samples <= 0:
+        return 0.0
+    return _clamp(
+        value=samples / (samples + max(1.0, scale)),
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+def _profile_pair_influence(
+    *,
+    profile: SetProfile | None,
+    pair: str,
+) -> float | None:
+    """Return profile evidence weight, or None for legacy raw behavior."""
+
+    if profile is None or profile.maturity.value == "generic":
+        return None
+    samples = profile.samples
+    if samples is None:
+        return 0.0
+    pair_samples = samples.count_for(pair)
+    if pair_samples is None:
+        return 0.0
+    return _clamp(
+        value=(
+            _profile_evidence_weight(profile=profile)
+            * _sample_influence(samples=samples.total, scale=PAIR_PROFILE_SAMPLE_SCALE)
+            * _sample_influence(samples=pair_samples, scale=PAIR_PROFILE_SAMPLE_SCALE)
+        ),
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+def _shrink_rate(*, observed: float, prior: float, influence: float) -> float:
+    """Blend an empirical rate toward a prior with bounded influence."""
+
+    bounded_influence = _clamp(value=influence, lower=0.0, upper=1.0)
+    return float(
+        f"{_clamp(value=prior + (observed - prior) * bounded_influence,
+                  lower=min(prior, observed),
+                  upper=max(prior, observed)):.6f}"
+    )
+
+
+def _pair_performance_rate(
     *,
     pair: str,
     ratings_data: SeventeenLandsData | None,
+    profile: SetProfile | None,
+    config: PickEngineConfig,
 ) -> float | None:
+    """Resolve aggregate pair performance with profile-aware shrinkage."""
+
     if ratings_data is None:
         return None
-
     pair_record = ratings_data.pair_win_rates.get(pair)
-    if pair_record is None:
+    if pair_record is None or pair_record.win_rate is None:
         return None
-
-    return pair_record.win_rate
+    profile_influence = _profile_pair_influence(profile=profile, pair=pair)
+    if profile_influence is None:
+        return pair_record.win_rate
+    influence = profile_influence * _sample_influence(
+        samples=pair_record.games,
+        scale=PAIR_GAME_SAMPLE_SCALE,
+    )
+    return _shrink_rate(
+        observed=pair_record.win_rate,
+        prior=config.neutral_pair_win_rate,
+        influence=influence,
+    )
 
 
 def _normalization_from_data(
@@ -1655,17 +1787,59 @@ def _rating_for(
     grp_id: int,
     config: PickEngineConfig,
     commitment: ColorCommitment | None = None,
+    profile: SetProfile | None = None,
 ) -> ResolvedCardRating:
     if ratings_data is None:
         return _neutral_rating(grp_id=grp_id, config=config)
 
     if commitment is not None and commitment.locked and commitment.inferred_pair is not None:
+        pair = commitment.inferred_pair
+        profile_influence = _profile_pair_influence(profile=profile, pair=pair)
         return ratings_data.pair_rating_for(
             grp_id=grp_id,
-            pair=commitment.inferred_pair,
+            pair=pair,
+            allow_thin=profile_influence is not None,
         )
 
     return ratings_data.rating_for(grp_id=grp_id)
+
+
+def _effective_base_rating_for(
+    *,
+    rating: ResolvedCardRating,
+    ratings_data: SeventeenLandsData | None,
+    grp_id: int,
+    config: PickEngineConfig,
+    commitment: ColorCommitment | None,
+    profile: SetProfile | None,
+) -> float:
+    """Return the score-only base rating, shrinking locked pair evidence."""
+    if (
+        ratings_data is None
+        or commitment is None
+        or not commitment.locked
+        or commitment.inferred_pair is None
+        or rating.gih_win_rate is None
+    ):
+        return _base_rating(rating=rating, config=config)
+
+    profile_influence = _profile_pair_influence(
+        profile=profile,
+        pair=commitment.inferred_pair,
+    )
+    if profile_influence is None:
+        return _base_rating(rating=rating, config=config)
+
+    global_rating = ratings_data.rating_for(grp_id=grp_id)
+    influence = profile_influence * _sample_influence(
+        samples=rating.sample_counts.games_in_hand,
+        scale=PAIR_CARD_GIH_SAMPLE_SCALE,
+    )
+    return _shrink_rate(
+        observed=rating.gih_win_rate,
+        prior=_base_rating(rating=global_rating, config=config),
+        influence=influence,
+    )
 
 
 def _neutral_rating(*, grp_id: int, config: PickEngineConfig) -> ResolvedCardRating:

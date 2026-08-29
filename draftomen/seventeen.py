@@ -783,17 +783,32 @@ class SeventeenLandsData:
 
         return self.structure_targets.get(pair)
 
-    def pair_rating_for(self, *, grp_id: int, pair: str) -> ResolvedCardRating:
-        """Resolve a card through locked-pair data when it is strong enough.
-        Missing or thin pair rows fall back to all-decks resolution.
+    def pair_rating_for(
+        self,
+        *,
+        grp_id: int,
+        pair: str,
+        allow_thin: bool = False,
+    ) -> ResolvedCardRating:
+        """Resolve a card through locked-pair data when GIH evidence exists.
+        Missing pair rows fall back to all-decks resolution. Thin pair rows
+        are available to callers that will apply their own shrinkage.
         """
 
         pair_data = self._pair_card_data(pair=pair)
         pair_stats = None if pair_data is None else pair_data.card_ratings.get(grp_id)
-        if _has_strong_gih_signal(
-            stats=pair_stats,
-            thin_sample_minimum=self.thin_sample_minimum,
-        ):
+        has_pair_signal = (
+            _has_strong_gih_signal(
+                stats=pair_stats,
+                thin_sample_minimum=self.thin_sample_minimum,
+            )
+            or (
+                allow_thin
+                and pair_stats is not None
+                and pair_stats.gih_win_rate is not None
+            )
+        )
+        if has_pair_signal:
             return _resolved_from_stats(
                 stats=pair_stats,
                 format_data=pair_data,

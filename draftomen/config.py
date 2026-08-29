@@ -81,6 +81,8 @@ class PickEngineConfig:
 
     neutral_prior_score: float = 50.0
     neutral_prior_win_rate: float = 0.55
+    # Aggregate color-pair rates use a neutral prior independent of card rates.
+    neutral_pair_win_rate: float = 0.5
     thin_sample_minimum: int = 500
     alsa_adjustment_max: float = 0.03
     alsa_early_pick: float = 1.0
