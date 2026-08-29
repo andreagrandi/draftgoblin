@@ -9,6 +9,18 @@ Before making code or documentation changes in this repo:
 
 Do not start work from an old feature branch unless the user explicitly asks to continue that branch.
 
+## Ticket and Pull Request Scope
+
+Before planning or editing work for an issue or pull request, read and follow
+`.agents/skills/pr-scope-guidance/SKILL.md`. Complete its ticket-size assessment
+before writing the implementation plan. Any decomposition warning requires an
+explicit split-or-combine decision; do not treat a request to implement the
+ticket as approval to waive that decision.
+
+Even when the user approves combined ticket or pull request scope, divide
+delegated implementation into bounded, file-owned execution slices and apply
+the skill's inspection and focused-test gate between dependency waves.
+
 ## Verification Requirement
 
 Before claiming any implementation is done, perform end-to-end verification of the actual user-facing workflow, not just unit tests or isolated helpers. If true end-to-end verification is impossible in the current environment, say so explicitly, document what was verified instead, and do not present the work as complete.

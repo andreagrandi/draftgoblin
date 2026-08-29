@@ -9,11 +9,13 @@ from os import PathLike
 from typing import TypeAlias
 
 from draftomen.carddb import CardDatabase, CardInfo
-from draftomen.events import EXPECTED_PICKS_PER_PACK
+from draftomen.events import EXPECTED_PICKS_PER_PACK, EXPECTED_TOTAL_PICKS
 from draftomen.pickengine import PickEngine, ScoredCard
 from draftomen.pool import DraftPick, DraftState, list_draft_states
+from draftomen.pool_ledger import PoolRoleLedger
 from draftomen.ranking import DEFAULT_RANKING_MODE, rank_scored_cards, ranking_label
 from draftomen.replay import format_card_info
+from draftomen.set_profile import SetProfile
 from draftomen.seventeen import SeventeenLandsData
 
 PathInput: TypeAlias = str | PathLike[str]
@@ -40,7 +42,7 @@ class BacktestPickResult:
     match: bool | None
     skipped_reason: str | None
     data_source: str | None
-
+    role_ledger: PoolRoleLedger | None = None
 
 @dataclass(frozen=True, slots=True)
 class BacktestReport:
@@ -128,6 +130,7 @@ def generate_backtest_report(
     pick_engine: PickEngine | None = None,
     ranking_mode: str = DEFAULT_RANKING_MODE,
     splash_enabled: bool = True,
+    set_profile: SetProfile | None = None,
 ) -> BacktestReport:
     """Score each saved pick from the persisted pre-pick state.
     The function is read-only and never writes draft state.
@@ -139,6 +142,7 @@ def generate_backtest_report(
         else PickEngine(
             ratings_data=ratings_data,
             splash_enabled=splash_enabled,
+            set_profile=set_profile,
         )
     )
     rows = tuple(
@@ -201,11 +205,16 @@ def _score_pick(
             offered_count=len(pick.offered_grp_ids),
         )
 
+    global_pick_index = _draft_pick_index(pick=pick)
     scored_pack = pick_engine.score_pack(
         offered_grp_ids=pick.offered_grp_ids,
         card_database=card_database,
         pool_grp_ids=pick.pool_before_pick,
-        pick_index=_draft_pick_index(pick=pick),
+        pick_index=global_pick_index,
+        pack_number=pick.pack_number,
+        pick_number=pick.pick_number,
+        global_pick_index=global_pick_index,
+        estimated_remaining_picks=max(0, EXPECTED_TOTAL_PICKS - global_pick_index),
     )
     ranked_cards = rank_scored_cards(
         cards=scored_pack.cards,
@@ -232,6 +241,7 @@ def _score_pick(
             match=None,
             skipped_reason="missing actual selected card",
             data_source=scored_pack.source_summary,
+            role_ledger=scored_pack.role_ledger,
         )
 
     return BacktestPickResult(
@@ -244,6 +254,7 @@ def _score_pick(
         match=recommended.card.grp_id == pick.chosen_grp_id,
         skipped_reason=None,
         data_source=scored_pack.source_summary,
+        role_ledger=scored_pack.role_ledger,
     )
 
 

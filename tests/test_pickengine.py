@@ -222,6 +222,23 @@ def test_commitment_ramp_changes_same_card_score_by_pick_index() -> None:
     assert early.cards[0].color_fit == "open"
     assert mid.cards[0].color_fit == "on-color"
     assert early.cards[0].score < mid.cards[0].score < late.cards[0].score
+def test_explicit_global_pick_index_drives_commitment_and_ledger_stage() -> None:
+    scored_pack = PickEngine().score_pack(
+        offered_grp_ids=(7,),
+        card_database=_card_database(),
+        pool_grp_ids=(1, 2),
+        pack_number=2,
+        pick_number=6,
+        global_pick_index=35,
+        estimated_remaining_picks=7,
+    )
+
+    assert scored_pack.commitment.pick_index == 35
+    assert scored_pack.commitment.phase == "locked"
+    assert scored_pack.role_ledger is not None
+    assert scored_pack.role_ledger.global_pick_index == 35
+
+
 
 
 def test_off_color_cards_are_penalized_and_marked_when_committed() -> None:

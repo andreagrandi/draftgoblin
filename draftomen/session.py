@@ -33,6 +33,7 @@ from draftomen.deckbuilder import (
 )
 from draftomen.events import (
     EXPECTED_PICKS_PER_PACK,
+    EXPECTED_TOTAL_PICKS,
     AccountEvent,
     DraftCompletedEvent,
     DraftEvent,
@@ -58,6 +59,7 @@ from draftomen.pickengine import (
     recommendation_confidence_summary,
     recommendation_explanation,
 )
+from draftomen.pool_ledger import PoolRoleLedger
 from draftomen.ranking import (
     DEFAULT_RANKING_MODE,
     RANKING_MODES,
@@ -65,6 +67,7 @@ from draftomen.ranking import (
     rank_scored_cards,
     validate_ranking_mode,
 )
+from draftomen.set_profile import SetProfile
 from draftomen.seventeen import (
     DownloadProgressCallback,
     SeventeenLandsData,
@@ -225,6 +228,8 @@ class Recommendation:
     source_label: str
     color_fit: str
     no_data: bool
+    role_adjustment: float = 0.0
+    role_evidence: tuple[str, ...] = ()
     letter_grade: str | None = None
     explanation: str | None = None
 
@@ -334,6 +339,7 @@ class PoolState:
     average_mana_value: float | None = None
     target_cards: int = 42
     current_colors: tuple[str, ...] = ()
+    role_ledger: PoolRoleLedger | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +430,7 @@ class BuildResult:
     land_count: int | None = None
     creature_count: int | None = None
     instant_count: int | None = None
+    role_ledger: PoolRoleLedger | None = None
     domain_pool: BuildPool | None = None
     domain_selection: PairSelection | None = None
     domain_spell_selection: SpellSelection | None = None
@@ -447,6 +454,7 @@ class BacktestPickResult:
     offered_count: int | None = None
     recommended_score: int | None = None
     recommended_win_rate: float | None = None
+    role_ledger: PoolRoleLedger | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -633,6 +641,7 @@ class LiveSession:
         lazy_pair_card_ratings: bool = False,
         card_image_service: CardImageService | None = None,
         splash_enabled: bool = SPLASH.enabled_by_default,
+        set_profile: SetProfile | None = None,
     ) -> None:
         if card_database is not None and card_database_loader is not None:
             raise ValueError(
@@ -668,6 +677,7 @@ class LiveSession:
         self._splash_enabled = splash_enabled
         self._card_database = card_database
         self._card_database_loader = card_database_loader
+        self._set_profile = set_profile
         self._ratings_loader = ratings_loader
         self._ratings_loader_factory = ratings_loader_factory
         self._ratings_progress_loader = ratings_progress_loader
@@ -1322,6 +1332,7 @@ class LiveSession:
             ratings_data=self._ratings_data_for_scoring(set_code=set_code),
             forced_pair=command.pair_override,
             allow_splash=command.allow_splash,
+            set_profile=self._set_profile,
         )
         spell_selection = build_sheet.spell_selection
         mana_base = build_sheet.mana_base
@@ -1386,6 +1397,7 @@ class LiveSession:
                 )
                 + mana_base.caveats
             ),
+            role_ledger=build_sheet.role_ledger,
             domain_pool=pool,
             domain_selection=selection,
             domain_spell_selection=spell_selection,
@@ -1521,6 +1533,7 @@ class LiveSession:
             ratings_data=self._ratings_data_for_scoring(set_code=state.set_code),
             ranking_mode=self._ranking_mode,
             splash_enabled=self._splash_enabled,
+            set_profile=self._set_profile,
         )
         return _backtest_result(report=report)
 
@@ -2054,12 +2067,18 @@ class LiveSession:
         engine = PickEngine(
             ratings_data=ratings_data,
             splash_enabled=self._splash_enabled,
+            set_profile=self._set_profile,
         )
+        global_pick_index = _draft_pick_index(event=event)
         scored_pack = engine.score_pack(
             offered_grp_ids=event.offered_grp_ids,
             card_database=database,
             pool_grp_ids=event.pool_grp_ids,
-            pick_index=_draft_pick_index(event=event),
+            pick_index=global_pick_index,
+            pack_number=event.pack_number,
+            pick_number=event.pick_number,
+            global_pick_index=global_pick_index,
+            estimated_remaining_picks=max(0, EXPECTED_TOTAL_PICKS - global_pick_index),
         )
         self._current_scored_pack = scored_pack
         recommendations = self._recommendation_state(scored_pack=scored_pack)
@@ -2154,6 +2173,8 @@ class LiveSession:
             source_label=scored_card.source_label,
             color_fit=scored_card.color_fit,
             no_data=scored_card.no_data,
+            role_adjustment=scored_card.role_adjustment,
+            role_evidence=scored_card.role_evidence,
             letter_grade=scored_card.rating.letter_grade,
             explanation=recommendation_explanation(
                 scored_card=scored_card,
@@ -2790,6 +2811,7 @@ class LiveSession:
         retained_current_colors: tuple[str, ...] | None = None,
     ) -> PoolState:
         commitment = None if scored_pack is None else scored_pack.commitment
+        role_ledger = None if scored_pack is None else scored_pack.role_ledger
         inferred_pair = (
             None if commitment is None else commitment.inferred_pair
         )
@@ -2804,6 +2826,7 @@ class LiveSession:
                 total_cards=len(pool_grp_ids),
                 target_cards=42,
                 current_colors=current_colors,
+                role_ledger=role_ledger,
             )
 
         counts = Counter(pool_grp_ids)
@@ -2833,6 +2856,7 @@ class LiveSession:
             color_distribution=color_distribution,
             mana_curve=mana_curve,
             average_mana_value=average_mana_value,
+            role_ledger=role_ledger,
         )
 
     def _select_recovered_state(self, *, state: DraftState) -> None:
@@ -3661,6 +3685,7 @@ def _backtest_result(*, report: DomainBacktestReport) -> BacktestResult:
                     if row.recommended is None
                     else row.recommended.rating.gih_win_rate
                 ),
+                role_ledger=row.role_ledger,
             )
             for row in report.rows
         ),

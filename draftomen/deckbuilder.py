@@ -17,6 +17,11 @@ from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.config import COLOR_PAIRS, DECK_BUILDER, SPLASH, DeckBuilderConfig
 from draftomen.pickengine import PickEngine, ScoredCard
 from draftomen.pool import DraftState, list_draft_states
+from draftomen.pool_ledger import (
+    PoolRoleLedger,
+    evaluate_completed_pool_role_ledger,
+)
+from draftomen.set_profile import SetProfile
 from draftomen.seventeen import (
     SEVENTEEN_LANDS_ATTRIBUTION,
     SeventeenLandsData,
@@ -234,6 +239,7 @@ class BuildSheet:
 
     spell_selection: SpellSelection
     mana_base: ManaBase
+    role_ledger: PoolRoleLedger | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +327,7 @@ def select_color_pair(
     ratings_data: SeventeenLandsData | None = None,
     forced_pair: str | None = None,
     config: DeckBuilderConfig = DECK_BUILDER,
+    set_profile: SetProfile | None = None,
 ) -> PairSelection:
     """Score all two-color pairs and choose the best or forced pair.
     The pool is already drafted; early draft picks remain rating-first elsewhere.
@@ -334,7 +341,10 @@ def select_color_pair(
         config=config,
     )
     resolved_forced_pair = _optional_pair(value=forced_pair)
-    scored_pool = PickEngine(ratings_data=ratings_data).score_pack(
+    scored_pool = PickEngine(
+        ratings_data=ratings_data,
+        set_profile=set_profile,
+    ).score_pack(
         offered_grp_ids=pool_grp_ids,
         card_database=card_database,
         pool_grp_ids=(),
@@ -395,6 +405,7 @@ def select_deck_spells(
     ratings_data: SeventeenLandsData | None = None,
     allow_splash: bool = SPLASH.enabled_by_default,
     config: DeckBuilderConfig = DECK_BUILDER,
+    set_profile: SetProfile | None = None,
 ) -> SpellSelection:
     """Select deck spells for a chosen pair under structural constraints.
     Cached pair targets and explicit splash eligibility are applied here.
@@ -436,7 +447,10 @@ def select_deck_spells(
         state=splash_state,
         config=effective_config,
     )
-    scored_pool = PickEngine(ratings_data=ratings_data).score_pack(
+    scored_pool = PickEngine(
+        ratings_data=ratings_data,
+        set_profile=set_profile,
+    ).score_pack(
         offered_grp_ids=pool_grp_ids,
         card_database=card_database,
         pool_grp_ids=(),
@@ -532,6 +546,7 @@ def select_build_sheet(
     ratings_data: SeventeenLandsData | None = None,
     allow_splash: bool = SPLASH.enabled_by_default,
     config: DeckBuilderConfig = DECK_BUILDER,
+    set_profile: SetProfile | None = None,
 ) -> BuildSheet:
     """Select spells and lands for an exactly sized Limited deck.
     The spell count is reselected when 16- or 18-land curve rules apply.
@@ -558,6 +573,7 @@ def select_build_sheet(
         ratings_data=ratings_data,
         allow_splash=allow_splash,
         config=effective_config,
+        set_profile=set_profile,
     )
     seen_targets = {spell_selection.counts.total}
     for _ in range(effective_config.land_count_iteration_limit):
@@ -580,6 +596,7 @@ def select_build_sheet(
             ratings_data=ratings_data,
             allow_splash=allow_splash,
             config=replace(effective_config, target_spell_count=desired_spell_count),
+            set_profile=set_profile,
         )
 
     mana_base = select_mana_base(
@@ -600,7 +617,17 @@ def select_build_sheet(
             config=effective_config,
         )
 
-    return BuildSheet(spell_selection=spell_selection, mana_base=mana_base)
+    return BuildSheet(
+        spell_selection=spell_selection,
+        mana_base=mana_base,
+        role_ledger=evaluate_completed_pool_role_ledger(
+            final_pool=pool_grp_ids,
+            card_database=card_database,
+            ratings_data=ratings_data,
+            set_profile=set_profile,
+            likely_pair=resolved_pair,
+        ),
+    )
 
 
 def build_deck_from_pool(
@@ -611,6 +638,7 @@ def build_deck_from_pool(
     forced_pair: str | None = None,
     allow_splash: bool = SPLASH.enabled_by_default,
     config: DeckBuilderConfig = DECK_BUILDER,
+    set_profile: SetProfile | None = None,
 ) -> tuple[PairSelection, BuildSheet]:
     """Run pair selection, spell selection, and mana-base selection.
     CLI, replay, and watch share this helper for identical build sheets.
@@ -622,6 +650,7 @@ def build_deck_from_pool(
         ratings_data=ratings_data,
         forced_pair=forced_pair,
         config=config,
+        set_profile=set_profile,
     )
     build_sheet = select_build_sheet(
         pool_grp_ids=pool.pool_grp_ids,
@@ -630,6 +659,7 @@ def build_deck_from_pool(
         ratings_data=ratings_data,
         allow_splash=allow_splash,
         config=config,
+        set_profile=set_profile,
     )
     return selection, build_sheet
 

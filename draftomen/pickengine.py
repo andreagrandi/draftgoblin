@@ -7,9 +7,13 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from functools import cmp_to_key
+from typing import TYPE_CHECKING, Mapping
 
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.config import COLOR_PAIRS, PICK_ENGINE, SPLASH, PickEngineConfig
+from draftomen.events import EXPECTED_PICKS_PER_PACK, EXPECTED_TOTAL_PICKS
+from draftomen.pool_ledger import PoolRoleLedger, project_pool_role_ledger
+from draftomen.semantic_roles import Role, RoleAssignment, resolve_card_roles
 from draftomen.seventeen import (
     FORMAT_RATING_SOURCE,
     NEUTRAL_PRIOR_SOURCE,
@@ -27,6 +31,10 @@ from draftomen.splash import (
     card_is_castable_in_pair,
     infer_splash_state,
 )
+
+if TYPE_CHECKING:
+    from draftomen.set_profile import SetProfile
+
 CLOSE_DO_SCORE_THRESHOLD = 3.0
 CLOSE_WIN_RATE_THRESHOLD = 0.01
 STANDARD_BASIC_LAND_NAMES = frozenset(
@@ -35,6 +43,20 @@ STANDARD_BASIC_LAND_NAMES = frozenset(
 STANDARD_BASIC_LAND_TYPE_LINES = frozenset(
     f"Basic Land — {name}" for name in STANDARD_BASIC_LAND_NAMES
 )
+
+MAX_ROLE_ADJUSTMENT = 3.0
+PAYOFF_PACKAGES: Mapping[Role, str] = {
+    Role.DRAW_SECOND_PAYOFF: "draw",
+    Role.GO_WIDE_PAYOFF: "go_wide",
+    Role.TYPAL_PAYOFF: "typal",
+    Role.DEATH_PAYOFF: "sacrifice",
+    Role.GRAVEYARD_PAYOFF: "graveyard",
+    Role.ARTIFACT_PAYOFF: "artifact",
+    Role.ENCHANTMENT_PAYOFF: "enchantment",
+    Role.EQUIPMENT_PAYOFF: "equipment",
+    Role.POWER_THRESHOLD_PAYOFF: "threshold",
+    Role.POWER_N_PAYOFF: "threshold",
+}
 
 
 def recommendation_confidence_summary(
@@ -95,9 +117,15 @@ def recommendation_explanation(
     else:
         rating_evidence = f"{scored_card.source_label} rating data"
 
+    role_note = (
+        f" {scored_card.role_evidence[0]}."
+        if scored_card.role_evidence
+        else ""
+    )
     return (
         f"{fit.capitalize()} fit supports a {scored_card.score} DO-point "
         f"candidate for {pool_context}; {rating_evidence} informs the score."
+        f"{role_note}"
     )
 
 
@@ -202,6 +230,8 @@ class ScoredCard:
     score_sort_index: int
     splash: SplashAssessment
     freely_available_basic: bool
+    role_adjustment: float = 0.0
+    role_evidence: tuple[str, ...] = ()
 
     @property
     def no_data(self) -> bool:
@@ -231,6 +261,8 @@ class ScoredPack:
     source_summary: str
     commitment: ColorCommitment
     splash_state: SplashState
+    role_ledger: PoolRoleLedger | None = None
+
 
 
 class PickEngine:
@@ -244,10 +276,12 @@ class PickEngine:
         ratings_data: SeventeenLandsData | None = None,
         config: PickEngineConfig = PICK_ENGINE,
         splash_enabled: bool = SPLASH.enabled_by_default,
+        set_profile: SetProfile | None = None,
     ) -> None:
         self.ratings_data = ratings_data
         self.config = config
         self.splash_enabled = splash_enabled
+        self.set_profile = set_profile
         self.normalization = _normalization_from_data(
             ratings_data=ratings_data,
             config=config,
@@ -260,14 +294,24 @@ class PickEngine:
         card_database: CardDatabase,
         pool_grp_ids: tuple[int, ...] = (),
         pick_index: int | None = None,
+        pack_number: int | None = None,
+        pick_number: int | None = None,
+        global_pick_index: int | None = None,
+        estimated_remaining_picks: int | None = None,
     ) -> ScoredPack:
         """Return offered cards in recommendation order.
         Open close-pick groups can use pair win rates as a final tiebreaker.
         """
 
+        resolved_pick_index = _pick_index(
+            pool_grp_ids=pool_grp_ids,
+            pick_index=(
+                pick_index if pick_index is not None else global_pick_index
+            ),
+        )
         commitment = _color_commitment(
             pool_grp_ids=pool_grp_ids,
-            pick_index=_pick_index(pool_grp_ids=pool_grp_ids, pick_index=pick_index),
+            pick_index=resolved_pick_index,
             card_database=card_database,
             ratings_data=self.ratings_data,
             config=self.config,
@@ -283,6 +327,18 @@ class PickEngine:
             ),
             enabled=self.splash_enabled,
         )
+        role_ledger = _pre_pick_ledger(
+            pool_grp_ids=pool_grp_ids,
+            card_database=card_database,
+            ratings_data=self.ratings_data,
+            set_profile=self.set_profile,
+            pick_index=pick_index,
+            pack_number=pack_number,
+            pick_number=pick_number,
+            global_pick_index=global_pick_index,
+            estimated_remaining_picks=estimated_remaining_picks,
+            likely_pair=commitment.inferred_pair,
+        )
         best_on_color_score = self._best_on_color_score(
             offered_grp_ids=offered_grp_ids,
             card_database=card_database,
@@ -297,6 +353,7 @@ class PickEngine:
                 commitment=commitment,
                 splash_state=splash_state,
                 best_on_color_score=best_on_color_score,
+                role_ledger=role_ledger,
             )
             for index, grp_id in enumerate(offered_grp_ids)
         )
@@ -313,6 +370,7 @@ class PickEngine:
             source_summary=_source_summary(cards=sorted_cards),
             commitment=commitment,
             splash_state=splash_state,
+            role_ledger=role_ledger,
         )
 
     def _best_on_color_score(
@@ -359,6 +417,7 @@ class PickEngine:
         commitment: ColorCommitment,
         splash_state: SplashState,
         best_on_color_score: float | None,
+        role_ledger: PoolRoleLedger | None,
     ) -> ScoredCard:
         card = card_database.lookup(grp_id=grp_id)
         freely_available_basic = _is_freely_available_basic_land(card=card)
@@ -396,8 +455,13 @@ class PickEngine:
             commitment=commitment,
             config=self.config,
         )
+        role_adjustment, role_evidence = _role_adjustment_for_card(
+            card=card,
+            role_ledger=role_ledger,
+            set_profile=self.set_profile,
+        )
         raw_score = _clamp(
-            value=base_score * color_factor,
+            value=(base_score * color_factor) + role_adjustment,
             lower=0.0,
             upper=100.0,
         )
@@ -439,7 +503,95 @@ class PickEngine:
             score_sort_index=original_index,
             splash=splash,
             freely_available_basic=freely_available_basic,
+            role_adjustment=role_adjustment,
+            role_evidence=role_evidence,
         )
+
+
+def _target_names(assignment: RoleAssignment) -> tuple[str, ...]:
+    role_name = assignment.role.value
+    if assignment.removal is None:
+        return (role_name,)
+    return (role_name, f"removal:{assignment.removal.kind}")
+
+
+def _role_adjustment_for_card(
+    *,
+    card: CardInfo,
+    role_ledger: PoolRoleLedger | None,
+    set_profile: SetProfile | None,
+) -> tuple[float, tuple[str, ...]]:
+    """Return a small profile-backed role-need contribution for one card.
+
+    The ledger owns the projected deficit and stage urgency.  The pick engine
+    only resolves the offered card's roles and applies the bounded marginal
+    contribution, keeping ordinary no-profile scoring unchanged.
+    """
+
+    if (
+        role_ledger is None
+        or set_profile is None
+        or role_ledger.profile_source == "generic"
+        or card.unknown
+    ):
+        return 0.0, ()
+    if role_ledger.likely_pair is None:
+        return 0.0, ()
+    pair_profile = set_profile.pair(role_ledger.likely_pair)
+    if pair_profile is None or not (
+        pair_profile.role_targets or pair_profile.removal_targets
+    ):
+        return 0.0, ()
+
+    resolution = resolve_card_roles(
+        card,
+        profile=set_profile.role_profile,
+    )
+    assignments = resolution.assignments
+    if not assignments:
+        return 0.0, ()
+
+    unsupported_packages = {
+        package
+        for package, count in role_ledger.unsupported_payoff_counts
+        if count > 0
+    }
+    target_map = role_ledger.target_coverage_map
+    candidates: list[tuple[float, str]] = []
+    for assignment in assignments:
+        package = PAYOFF_PACKAGES.get(assignment.role)
+        if package in unsupported_packages:
+            continue
+        for target_name in _target_names(assignment):
+            target = target_map.get(target_name)
+            if target is None or target.deficit <= 0 or target.preferred_minimum <= 0:
+                continue
+            pressure = min(1.0, target.deficit / target.preferred_minimum)
+            contribution = min(
+                MAX_ROLE_ADJUSTMENT,
+                MAX_ROLE_ADJUSTMENT
+                * role_ledger.urgency
+                * pressure
+                * target.confidence
+                * assignment.confidence,
+            )
+            if contribution <= 0:
+                continue
+            candidates.append(
+                (
+                    contribution,
+                    (
+                        f"fills {target.name} deficit "
+                        f"({target.count:g}/{target.preferred_minimum:g}); "
+                        f"stage urgency {role_ledger.urgency:.2f}"
+                    ),
+                )
+            )
+    if not candidates:
+        return 0.0, ()
+    adjustment = max(value for value, _ in candidates)
+    evidence = tuple(sorted({reason for _, reason in candidates}))
+    return float(f"{adjustment:.6f}"), evidence
 
 
 def score_pack(
@@ -451,6 +603,11 @@ def score_pack(
     pool_grp_ids: tuple[int, ...] = (),
     pick_index: int | None = None,
     splash_enabled: bool = SPLASH.enabled_by_default,
+    set_profile: SetProfile | None = None,
+    pack_number: int | None = None,
+    pick_number: int | None = None,
+    global_pick_index: int | None = None,
+    estimated_remaining_picks: int | None = None,
 ) -> ScoredPack:
     """Convenience wrapper for callers that do not keep an engine instance.
     The reusable PickEngine class avoids rebuilding normalization per pack.
@@ -460,11 +617,16 @@ def score_pack(
         ratings_data=ratings_data,
         config=config,
         splash_enabled=splash_enabled,
+        set_profile=set_profile,
     ).score_pack(
         offered_grp_ids=offered_grp_ids,
         card_database=card_database,
         pool_grp_ids=pool_grp_ids,
         pick_index=pick_index,
+        pack_number=pack_number,
+        pick_number=pick_number,
+        global_pick_index=global_pick_index,
+        estimated_remaining_picks=estimated_remaining_picks,
     )
 
 
@@ -477,6 +639,46 @@ def _pick_index(
         return max(1, pick_index)
 
     return len(pool_grp_ids) + 1
+
+
+def _pre_pick_ledger(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    ratings_data: SeventeenLandsData | None,
+    set_profile: SetProfile | None,
+    pick_index: int | None,
+    pack_number: int | None,
+    pick_number: int | None,
+    global_pick_index: int | None,
+    estimated_remaining_picks: int | None,
+    likely_pair: str | None,
+) -> PoolRoleLedger | None:
+    explicit = (pack_number, pick_number, global_pick_index, estimated_remaining_picks)
+    if all(value is None for value in explicit):
+        if pick_index is None:
+            return None
+        pack_number = (pick_index - 1) // EXPECTED_PICKS_PER_PACK
+        pick_number = (pick_index - 1) % EXPECTED_PICKS_PER_PACK
+        global_pick_index = pick_index
+        estimated_remaining_picks = max(0, EXPECTED_TOTAL_PICKS - pick_index)
+    elif any(value is None for value in explicit):
+        raise ValueError(
+            "Ledger scoring requires pack, pick, global index, and remaining picks together."
+        )
+    if pick_index is not None and global_pick_index != pick_index:
+        raise ValueError("Ledger pick_index and global_pick_index must agree.")
+    return project_pool_role_ledger(
+        pool_before_pick=pool_grp_ids,
+        pack_number=pack_number,
+        pick_number=pick_number,
+        global_pick_index=global_pick_index,
+        estimated_remaining_picks=estimated_remaining_picks,
+        card_database=card_database,
+        ratings_data=ratings_data,
+        set_profile=set_profile,
+        likely_pair=likely_pair,
+    )
 
 
 def _color_commitment(

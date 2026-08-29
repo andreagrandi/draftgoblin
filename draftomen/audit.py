@@ -439,6 +439,11 @@ def _decision_payload(
             "locked": scored_pack.commitment.locked,
         },
         "splash_state": asdict(scored_pack.splash_state),
+        "role_ledger": (
+            None
+            if scored_pack.role_ledger is None
+            else scored_pack.role_ledger.to_json()
+        ),
         "rankings": rankings,
         "recommended_grp_id": rankings["score"][0] if rankings["score"] else None,
         "candidates": [
@@ -501,6 +506,8 @@ def _candidate_payload(*, scored_card: ScoredCard, rank: int) -> AuditRecord:
             "color_fit": scored_card.color_fit,
             "color_factor": scored_card.color_factor,
             "adjusted_rating": scored_card.adjusted_rating,
+            "role_adjustment": scored_card.role_adjustment,
+            "role_evidence": list(scored_card.role_evidence),
             "raw_score": scored_card.raw_score,
             "score": scored_card.score,
             "source_label": scored_card.source_label,
