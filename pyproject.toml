@@ -82,6 +82,7 @@ files = [
     "draftomen/paths.py",
     "draftomen/pickengine.py",
     "draftomen/pool.py",
+    "draftomen/pool_ledger.py",
     "draftomen/preferences.py",
     "draftomen/qt_adapter.py",
     "draftomen/qt_gui.py",

@@ -14,6 +14,8 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QCoreApplication, QObject, QTimer, QUrl, Slot
+from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.pool_ledger import evaluate_completed_pool_role_ledger
 
 from draftomen.mock_session import MockLiveSession
 from draftomen.preferences import GuiDisplayPreferences
@@ -397,6 +399,21 @@ def qcore_application() -> QCoreApplication:
 def test_session_adapter_converts_local_image_path_to_file_url(
     tmp_path: Path,
 ) -> None:
+    role_ledger = evaluate_completed_pool_role_ledger(
+        final_pool=(1,),
+        card_database=CardDatabase(
+            cards={
+                1: CardInfo(
+                    grp_id=1,
+                    name="Fixture Ledger Card",
+                    colors=(),
+                    mana_value=1.0,
+                    rarity="common",
+                    types=("Creature",),
+                )
+            }
+        ),
+    )
     image_path = tmp_path / "card images" / "Fixture Card.jpg"
     snapshot = LiveSessionSnapshot(
         card_image=CardImageState(
@@ -429,7 +446,7 @@ def test_session_adapter_converts_local_image_path_to_file_url(
             ),
             selected_grp_id=1,
         ),
-        pool=PoolState(current_colors=("W", "U")),
+        pool=PoolState(current_colors=("W", "U"), role_ledger=role_ledger),
     )
 
     adapter = SessionAdapter(snapshot=snapshot)
@@ -441,6 +458,8 @@ def test_session_adapter_converts_local_image_path_to_file_url(
         QUrl.fromLocalFile(str(image_path)).toString()
     )
     assert adapter.state["pool"]["current_colors"] == ["W", "U"]
+    assert adapter.state["pool"]["role_ledger"]["mode"] == "completed_pool"
+    assert adapter.state["pool"]["role_ledger"]["stage"] is None
 
 
 def test_session_adapter_exposes_card_data_update_time_in_qvariant_map() -> None:

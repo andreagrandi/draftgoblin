@@ -49,6 +49,10 @@ def test_backtest_uses_saved_pool_before_pick_for_recommendation() -> None:
     assert report.rows[1].recommended is not None
     assert report.rows[1].recommended.card.grp_id == 3
     assert report.rows[1].pool_size == 2
+    assert report.rows[1].role_ledger is not None
+    assert report.rows[1].role_ledger.pool_size == 2
+    assert report.rows[1].role_ledger.stage is not None
+    assert report.rows[1].role_ledger.stage.global_pick_index == 6
     assert report.rows[1].offered_count == 2
     assert report.rows[1].match is True
     assert "Ranking: DO Score" in output

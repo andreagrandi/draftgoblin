@@ -15,6 +15,9 @@
 - Add a versioned, deeply immutable local set-profile boundary with strict
   sparse empirical sections, semantic-role compatibility, and non-raising
   maturity-aware fallback loading. (#221)
+- Add a deterministic immutable pool role ledger with explicit pre-pick
+  projection and completed-pool modes, stage urgency, profile targets, and
+  normalized interaction/package evidence. (#222)
 
 ## [0.3.1] - 2026-08-28
 

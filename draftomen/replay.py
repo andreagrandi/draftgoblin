@@ -15,6 +15,7 @@ from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.deckbuilder import BuildPool, build_deck_from_pool, format_build_result
 from draftomen.events import (
     EXPECTED_PICKS_PER_PACK,
+    EXPECTED_TOTAL_PICKS,
     AccountEvent,
     DraftCompletedEvent,
     DraftEvent,
@@ -25,6 +26,7 @@ from draftomen.events import (
 )
 from draftomen.pickengine import PickEngine, ScoredCard, ScoredPack
 from draftomen.pool import DraftPoolStore
+from draftomen.set_profile import SetProfile
 from draftomen.seventeen import SEVENTEEN_LANDS_ATTRIBUTION, SeventeenLandsData
 
 PathInput: TypeAlias = str | PathLike[str]
@@ -57,6 +59,7 @@ def replay_log_file(
     ratings_data: SeventeenLandsData | None = None,
     ratings_loader: RatingsLoader | None = None,
     splash_enabled: bool = True,
+    set_profile: SetProfile | None = None,
 ) -> str:
     """Replay one captured Player.log file into deterministic text.
     Ratings are caller-supplied or loaded once from the parsed set code.
@@ -75,6 +78,7 @@ def replay_log_file(
         ratings_data=ratings_data,
         ratings_loader=ratings_loader,
         splash_enabled=splash_enabled,
+        set_profile=set_profile,
     )
 
 
@@ -85,6 +89,7 @@ def render_replay_events(
     ratings_data: SeventeenLandsData | None = None,
     ratings_loader: RatingsLoader | None = None,
     splash_enabled: bool = True,
+    set_profile: SetProfile | None = None,
 ) -> str:
     """Render parsed events to stable plain-text replay output.
     Pool validation is run first so conflicting streams fail before printing.
@@ -105,6 +110,7 @@ def render_replay_events(
     pick_engine = PickEngine(
         ratings_data=loaded_ratings,
         splash_enabled=splash_enabled,
+        set_profile=set_profile,
     )
     lines = _format_header(header=header)
     lines.append("")
@@ -136,6 +142,7 @@ def render_replay_events(
                     card_database=card_database,
                     ratings_data=loaded_ratings,
                     splash_enabled=splash_enabled,
+                    set_profile=set_profile,
                 )
             )
 
@@ -170,6 +177,7 @@ def _format_completed_build_sheet(
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData | None,
     splash_enabled: bool,
+    set_profile: SetProfile | None,
 ) -> list[str]:
     pool = BuildPool(
         set_code=event.set_code,
@@ -183,6 +191,7 @@ def _format_completed_build_sheet(
         card_database=card_database,
         ratings_data=ratings_data,
         allow_splash=splash_enabled,
+        set_profile=set_profile,
     )
     return format_build_result(
         pool=pool,
@@ -316,11 +325,16 @@ def _format_pack(
 ) -> list[str]:
     if scored_pack is None:
         engine = pick_engine if pick_engine is not None else PickEngine()
+        pick_index = _draft_pick_index(event=event)
         scored_pack = engine.score_pack(
             offered_grp_ids=event.offered_grp_ids,
             card_database=card_database,
             pool_grp_ids=event.pool_grp_ids,
-            pick_index=_draft_pick_index(event=event),
+            pick_index=pick_index,
+            pack_number=event.pack_number,
+            pick_number=event.pick_number,
+            global_pick_index=pick_index,
+            estimated_remaining_picks=max(0, EXPECTED_TOTAL_PICKS - pick_index),
         )
     lines = [
         f"Pack {event.pack_number + 1} Pick {event.pick_number + 1}",
