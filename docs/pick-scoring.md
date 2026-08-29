@@ -35,10 +35,34 @@ uses `PRE_PICK_PROJECTION`, its stage is present, and its
 validated ledger stage is exposed through the context's read-only `stage`
 property.
 
+When a validated profile-backed pre-pick context is available, the engine scores
+with six small additive contextual terms from that validated pre-pick state:
+role need (0–2.5), late urgency (0–3.0), semantic package support (0–1.5),
+redundancy (−2.0–0), unsupported payoff (−2.0–0), and fixing need (0–1.5).
+Each term is finite and clamped to its documented range. The contextual
+contribution is the sum of those six terms clamped to −6.0–+6.0 DO points,
+and the raw score is:
+
+`clamp(base score × color factor + contextual contribution, 0, 100)`.
+
+Terms scale with draft stage, profile maturity/confidence, target confidence,
+assignment confidence, and existing package evidence, so early picks remain
+quality-first. Missing targets are saturated at their preferred minimum; in
+particular, late role urgency disappears once that target is met. Empirical
+card-pair synergy is not used.
+
+Scored rows and session recommendations retain the immutable term breakdown,
+aggregate, and material evidence strings. Recommendation explanations name
+the inferred pair and optional theme, profile maturity/confidence, and
+material contextual terms without claiming that weak semantic evidence
+guarantees an outcome.
+
 `PairProfile.theme` is optional annotation-only metadata. When present, it is
-trimmed while preserving the supplied case; it labels a pair theme but does
-not affect scoring. The context is carried through `PickEngine` to
-`ScoredPack` without changing scores or ordering.
+trimmed while preserving the supplied case; it labels a pair theme and does
+not independently affect scoring. Contextual scoring uses only the supplied
+pre-pick ledger and never projects against offered or future cards. Without a
+validated profile-backed context, scores and ordering remain the generic
+rating/color results.
 
 
 ## Splash recommendations

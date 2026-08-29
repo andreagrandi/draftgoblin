@@ -506,8 +506,14 @@ def _candidate_payload(*, scored_card: ScoredCard, rank: int) -> AuditRecord:
             "color_fit": scored_card.color_fit,
             "color_factor": scored_card.color_factor,
             "adjusted_rating": scored_card.adjusted_rating,
-            "role_adjustment": scored_card.role_adjustment,
-            "role_evidence": list(scored_card.role_evidence),
+            "contextual_breakdown": scored_card.contextual_breakdown.to_json(),
+            "contextual_evidence": list(scored_card.contextual_evidence),
+            "contextual_pair": scored_card.contextual_pair,
+            "contextual_theme": scored_card.contextual_theme,
+            "contextual_profile_maturity": scored_card.contextual_profile_maturity,
+            "contextual_profile_confidence": (
+                scored_card.contextual_profile_confidence
+            ),
             "raw_score": scored_card.raw_score,
             "score": scored_card.score,
             "source_label": scored_card.source_label,
