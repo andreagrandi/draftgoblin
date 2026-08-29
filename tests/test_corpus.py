@@ -20,6 +20,7 @@ from draftomen.corpus import (
     build_default_source_specs,
     iter_normalized_rows,
     load_normalized_rows,
+    load_source_config,
     normalize_cards,
     select_cards,
     write_normalized_rows,
@@ -63,6 +64,23 @@ def _source_specs() -> tuple[SourceSpec, ...]:
             path=str(FIXTURE_DIR / "corpus-mtgjson.json"),
         ),
     )
+
+
+def test_source_config_rejects_previous_schema_version(tmp_path: Path) -> None:
+    path = tmp_path / "sources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "sources": [],
+                "selection": {"mode": "broad", "sets": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CorpusError, match="Invalid corpus source config"):
+        load_source_config(path)
 
 
 def test_acquisition_locks_checksums_and_supports_offline_rebuild(tmp_path: Path) -> None:
@@ -335,10 +353,74 @@ def test_normalization_preserves_faces_arena_identity_and_disagreement() -> None
     hoblin = next(row for row in rows if row["set"] == "hbl")
 
     assert [face["name"] for face in double_faced["faces"]] == ["Daybound", "Nightbound"]
+    assert [face["power"] for face in double_faced["faces"]] == ["2", "3"]
+    assert [face["toughness"] for face in double_faced["faces"]] == ["2", "3"]
+    assert double_faced["power"] is None
+    assert double_faced["toughness"] is None
     assert double_faced["faces"][0]["oracle_text"].startswith("When this creature")
     assert hoblin["grp_id"] == hoblin["arena_id"] == 42
+    assert hoblin["power"] == "2"
+    assert hoblin["toughness"] == "2"
     assert any(item["field"] == "oracle_text" for item in hoblin["source_disagreements"])
     assert hoblin["source_provenance"]["arena"]["grp_id"] == 42
+
+def test_arena_land_color_identity_produces_mana() -> None:
+    card = {
+        "id": "sf-land",
+        "arena_id": 314,
+        "name": "Identity Land",
+        "set": "x",
+        "collector_number": "1",
+        "layout": "normal",
+    }
+    row = normalize_cards(
+        (card,),
+        arena_records=(
+            {
+                "grpid": 314,
+                "name": "Identity Land",
+                "type_line": "Land — Forest",
+                "colorIdentity": [5, 1, 4, 2, 3],
+            },
+        ),
+    )[0]
+
+    assert row["type_line"] == "Land — Forest"
+    assert row["produced_mana"] == ["W", "U", "B", "R", "G"]
+
+
+def test_normalization_preserves_textual_power_and_source_precedence() -> None:
+    card = {
+        "id": "sf-power",
+        "arena_id": 9006,
+        "name": "Variable Stats",
+        "set": "x",
+        "collector_number": "1",
+        "layout": "normal",
+        "type_line": "Creature",
+        "power": "1+*",
+        "toughness": "X",
+    }
+    mtgjson = {
+        "name": "Variable Stats",
+        "setCode": "x",
+        "number": "1",
+        "power": "2",
+        "toughness": "3",
+        "identifiers": {"scryfallId": "sf-power"},
+    }
+
+    row = normalize_cards(
+        (card,),
+        arena_records=({"grpid": 9006, "power": "*", "toughness": "4"},),
+        mtgjson_records=(mtgjson,),
+    )[0]
+
+    assert row["power"] == "1+*"
+    assert row["toughness"] == "X"
+    assert {
+        item["field"] for item in row["source_disagreements"]
+    } >= {"power", "toughness"}
 
 
 def test_normalization_builds_auxiliary_indexes_once(
@@ -490,6 +572,7 @@ def test_selection_and_coverage_are_inspectable() -> None:
     broad = select_cards(rows, SelectionSpec())
     explicit = select_cards(rows, SelectionSpec(mode="explicit", sets=("old",)))
     report = build_coverage_report(rows, selection=broad.metadata)
+    assert report["schema_version"] == 2
 
     assert {row["set"] for row in broad} == {"dsk", "hbl"}
     assert [row["set"] for row in explicit] == ["old"]

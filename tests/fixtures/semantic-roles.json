@@ -1,0 +1,536 @@
+[
+  {
+    "oracle_id": "role-draw-enabler",
+    "name": "Curious Archivist",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Draw an additional card each turn.",
+    "type_line": "Creature — Human Wizard",
+    "subtypes": ["Human", "Wizard"],
+    "types": ["Creature"],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-draw-payoff",
+    "name": "Second-Card Sage",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Whenever you draw your second card each turn, create a 1/1 token.",
+    "type_line": "Creature — Human Wizard",
+    "subtypes": ["Human", "Wizard"],
+    "types": ["Creature"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-destroy",
+    "name": "Clean Answer",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Destroy target creature if it has power 4 or greater.",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-damage",
+    "name": "Arc Spark",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Arc Spark deals 3 damage to target creature.",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-disable",
+    "name": "Arresting Light",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Enchanted creature can't attack or block and its activated abilities can't be activated.",
+    "type_line": "Enchantment — Aura",
+    "types": ["Enchantment"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-temporary-tap",
+    "name": "Momentary Freeze",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Tap target creature. It doesn't untap during its controller's next untap step.",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-bounce",
+    "name": "Return to Tide",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Return target permanent to its owner's hand.",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-counter",
+    "name": "Deny",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Counter target spell.",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-trick",
+    "name": "Sudden Growth",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Target creature gets +3/+3 until end of turn.",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-creature",
+    "name": "Skyline Raider",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Flying",
+    "type_line": "Creature — Human Soldier",
+    "subtypes": ["Human", "Soldier"],
+    "types": ["Creature"],
+    "mana_value": 2,
+    "power": "4"
+  },
+  {
+    "oracle_id": "role-token-wide",
+    "name": "Brood Call",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Create two 1/1 creature tokens.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-sacrifice",
+    "name": "Altar Bargain",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Sacrifice another creature: Draw a card.",
+    "type_line": "Enchantment",
+    "types": ["Enchantment"],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-dies",
+    "name": "Grave Feast",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Whenever a creature dies, each opponent loses 1 life.",
+    "type_line": "Enchantment",
+    "types": ["Enchantment"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-graveyard",
+    "name": "Memory Delve",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Mill three cards. Return a card from your graveyard to your hand.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-artifact",
+    "name": "Relic Engineer",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Whenever an artifact enters the battlefield under your control, draw a card.",
+    "type_line": "Creature — Human Artificer",
+    "subtypes": ["Human", "Artificer"],
+    "types": ["Creature"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-equipment",
+    "name": "War Harness",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Equipped creature gets +2/+0. Equip {2}.",
+    "type_line": "Artifact — Equipment",
+    "types": ["Artifact"],
+    "subtypes": ["Equipment"],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-land",
+    "name": "Confluence",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "{T}: Add {W} or {U}.",
+    "type_line": "Land",
+    "types": ["Land"],
+    "produced_mana": ["W", "U"]
+  },
+  {
+    "oracle_id": "role-ramp",
+    "name": "Cultivate Path",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Search your library for a basic land card and put it onto the battlefield tapped.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-landfall",
+    "name": "Growing Wilds",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Landfall — Whenever a land enters the battlefield under your control, put a +1/+1 counter on this creature.",
+    "type_line": "Creature — Beast",
+    "subtypes": ["Beast"],
+    "types": ["Creature"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-power-threshold",
+    "name": "Ferocious Hunter",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "If you control a creature with power 4 or greater, draw a card.",
+    "type_line": "Creature — Human Warrior",
+    "subtypes": ["Human", "Warrior"],
+    "types": ["Creature"],
+    "mana_value": 3,
+    "power": "3"
+  },
+  {
+    "oracle_id": "role-permanent-threshold",
+    "name": "Artifact Census",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "If you control three or more artifacts, creatures you control get +1/+1.",
+    "type_line": "Enchantment",
+    "types": ["Enchantment"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-mdfc",
+    "name": "Scholar // Sanctuary",
+    "set": "tst",
+    "layout": "modal_dfc",
+    "oracle_text": "When Scholar enters the battlefield, draw a card.",
+    "type_line": "Creature — Human",
+    "types": ["Creature"],
+    "mana_value": 3,
+    "faces": [
+      {
+        "name": "Scholar",
+        "oracle_text": "When Scholar enters the battlefield, draw a card.",
+        "type_line": "Creature — Human",
+        "subtypes": ["Human"]
+      },
+      {
+        "name": "Sanctuary",
+        "oracle_text": "{T}: Add {G}.",
+        "type_line": "Land",
+        "produced_mana": ["G"]
+      }
+    ]
+  },
+  {
+    "oracle_id": "reviewed-example-220",
+    "name": "Exceptional Relic",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "",
+    "type_line": "Artifact",
+    "types": ["Artifact"],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-unknown-mechanic",
+    "name": "Novel Device",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Whenever this enters the battlefield, draw a card.",
+    "type_line": "Artifact",
+    "types": ["Artifact"],
+    "mana_value": 2,
+    "mechanics": ["novel mechanic xyz"]
+  },
+  {
+    "oracle_id": "role-unsafe",
+    "name": "Conflicting Card",
+    "set": "tst",
+    "layout": "future_layout",
+    "oracle_text": "Destroy target creature.",
+    "type_line": "Instant",
+    "types": [],
+    "unsafe_to_classify": true,
+    "unsafe_reasons": ["source_disagreement:oracle_text"]
+  },
+  {
+    "oracle_id": "role-hard-graveyard",
+    "name": "Graveyard Exile",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Exile target card from a graveyard.",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 1
+  },
+  {
+    "oracle_id": "role-hard-own",
+    "name": "Own Permanent Exile",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Exile target creature you control.",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 1
+  },
+  {
+    "oracle_id": "role-burn-player",
+    "name": "Player Burn",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Player Burn deals 3 damage to target player.",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 1
+  },
+  {
+    "oracle_id": "role-token-treasure",
+    "name": "Treasure Maker",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Create a Treasure token.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-loot",
+    "name": "Careful Study",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Draw two cards, then discard a card.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-rummage",
+    "name": "Wild Study",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Discard a card, then draw two cards.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-rock-fixing",
+    "name": "Prismatic Rock",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "{T}: Add {W} or {U}.",
+    "type_line": "Artifact",
+    "types": ["Artifact"],
+    "produced_mana": ["W", "U"],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-spell-second",
+    "name": "Second Spell",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Whenever you cast your second spell each turn, draw a card.",
+    "type_line": "Enchantment",
+    "types": ["Enchantment"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-spell-three",
+    "name": "Third Spell",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Whenever you cast three or more spells in a turn, draw a card.",
+    "type_line": "Enchantment",
+    "types": ["Enchantment"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-keyword-flying",
+    "name": "Keyword Flyer",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "",
+    "keywords": ["Flying"],
+    "type_line": "Creature — Bird",
+    "subtypes": ["Bird"],
+    "types": ["Creature"],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-keyword-unknown",
+    "name": "Unknown Keyword",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Whenever this enters the battlefield, draw a card.",
+    "keywords": ["Futurecraft"],
+    "type_line": "Artifact",
+    "types": ["Artifact"],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-disable-self",
+    "name": "Self Drawback",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "This creature can't attack or block.",
+    "type_line": "Creature — Wall",
+    "subtypes": ["Wall"],
+    "types": ["Creature"],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-disable-own",
+    "name": "Own Drawback",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Creatures you control can't attack.",
+    "type_line": "Enchantment",
+    "types": ["Enchantment"],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-go-wide-dies",
+    "name": "Death Trigger",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Whenever a creature dies, each opponent loses 1 life.",
+    "type_line": "Enchantment",
+    "types": ["Enchantment"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-go-wide-anthem",
+    "name": "Generic Anthem",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Other creatures you control get +1/+1.",
+    "type_line": "Enchantment",
+    "types": ["Enchantment"],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-ordinary-land",
+    "name": "Basic Meadow",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "{T}: Add {W}.",
+    "type_line": "Basic Land — Plains",
+    "types": ["Land"],
+    "produced_mana": ["W"]
+  },
+  {
+    "oracle_id": "role-sacrifice-cost",
+    "name": "Costly Bargain",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "As an additional cost to cast this spell, sacrifice a creature. Draw two cards.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 3
+  },
+  {
+    "oracle_id": "role-recursion-only",
+    "name": "Raise Dead",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Return target creature card from your graveyard to your hand.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 2
+  },
+  {
+    "oracle_id": "role-typal-generic",
+    "name": "Generic Anthem",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Other creatures you control get +1/+1.",
+    "type_line": "Creature — Human",
+    "subtypes": ["Human"],
+    "types": ["Creature"],
+    "mana_value": 3,
+    "power": "3"
+  },
+  {
+    "oracle_id": "role-draw-four",
+    "name": "Deep Draw",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Draw four cards.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 5
+  },
+  {
+    "oracle_id": "role-draw-x",
+    "name": "Variable Draw",
+    "set": "tst",
+    "layout": "normal",
+    "oracle_text": "Draw X cards.",
+    "type_line": "Sorcery",
+    "types": [],
+    "mana_value": 5
+  },
+  {
+    "oracle_id": "role-face-leak",
+    "name": "Independent Faces",
+    "set": "tst",
+    "layout": "modal_dfc",
+    "oracle_text": "",
+    "type_line": "Instant",
+    "types": [],
+    "mana_value": 3,
+    "faces": [
+      {
+        "name": "Removal Face",
+        "oracle_text": "Destroy target creature.",
+        "type_line": "Instant",
+        "types": []
+      },
+      {
+        "name": "Condition Face",
+        "oracle_text": "Draw a card if you control an artifact.",
+        "type_line": "Sorcery",
+        "types": []
+      }
+    ]
+  },
+  {
+    "oracle_id": "role-malformed-face",
+    "name": "Broken Faces",
+    "set": "tst",
+    "layout": "modal_dfc",
+    "oracle_text": "Draw a card.",
+    "type_line": "Instant",
+    "types": [],
+    "faces": [
+      {
+        "name": "Good Face",
+        "oracle_text": "Draw a card.",
+        "type_line": "Instant",
+        "types": []
+      },
+      1
+    ]
+  }
+]

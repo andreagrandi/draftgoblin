@@ -6,6 +6,12 @@
   current and legacy Arena mapping inputs, MTGJSON inputs, deterministic
   normalized artifacts, and coverage reports for offline semantic-analysis work.
 - Extend card metadata with normalized face semantics, source-aware augmentation, and schema-4 offline cache migration.
+- Add a typed, deterministic Limited semantic-role classifier with multi-valued
+  assignments, effective-removal/threshold/mana parameters, canonical keywords
+  and textual power support, reviewed overrides, and actionable unknown reports.
+- Compile exact-set profiles with shared stable identities, atomic publication,
+  deterministic duplicate handling, conservative unknown omission, and
+  version-checked resolution; document the workflow. (#220)
 
 ## [0.3.1] - 2026-08-28
 

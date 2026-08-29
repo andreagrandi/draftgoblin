@@ -53,7 +53,7 @@ ARENA_RARITY_ID_MAP = {
     4: "rare",
     5: "mythic",
 }
-CACHE_SCHEMA_VERSION = 4
+CACHE_SCHEMA_VERSION = 5
 UNKNOWN_SOURCE_PROVENANCE = "unknown"
 
 
@@ -72,6 +72,8 @@ class CardFace:
     mana_cost: str | None = None
     mana_value: float | None = None
     produced_mana: tuple[str, ...] = ()
+    power: str | None = None
+    toughness: str | None = None
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> CardFace:
@@ -108,6 +110,11 @@ class CardFace:
                 data.get("produced_mana", ()),
                 field_name="face.produced_mana",
             ),
+            power=_optional_str(data.get("power"), field_name="face.power"),
+            toughness=_optional_str(
+                data.get("toughness"),
+                field_name="face.toughness",
+            ),
         )
 
     def to_json(self) -> dict[str, object]:
@@ -120,8 +127,10 @@ class CardFace:
             "mana_value": self.mana_value,
             "name": self.name,
             "oracle_text": self.oracle_text,
+            "power": self.power,
             "produced_mana": list(self.produced_mana),
             "subtypes": list(self.subtypes),
+            "toughness": self.toughness,
             "type_line": self.type_line,
         }
 
@@ -170,6 +179,8 @@ class CardInfo:
     collector_number: str | None = None
     arena_id: int | None = None
     source_provenance: tuple[str, ...] = ()
+    power: str | None = None
+    toughness: str | None = None
 
     @classmethod
     def unknown_card(cls, *, grp_id: int) -> CardInfo:
@@ -252,6 +263,11 @@ class CardInfo:
                 else _required_int(arena_id_value, field_name="card.arena_id")
             ),
             source_provenance=provenance,
+            power=_optional_str(data.get("power"), field_name="card.power"),
+            toughness=_optional_str(
+                data.get("toughness"),
+                field_name="card.toughness",
+            ),
         )
 
     def to_json(self) -> dict[str, object]:
@@ -272,11 +288,13 @@ class CardInfo:
             "mana_value": self.mana_value,
             "name": self.name,
             "oracle_text": self.oracle_text,
+            "power": self.power,
             "produced_mana": list(self.produced_mana),
             "rarity": self.rarity,
             "set": self.set_code,
             "source_provenance": list(self.source_provenance),
             "subtypes": list(self.subtypes),
+            "toughness": self.toughness,
             "type_line": self.type_line,
             "types": list(self.types),
             "unknown": self.unknown,
@@ -365,7 +383,7 @@ class CardDatabase:
             data.get("schema_version"),
             field_name="schema_version",
         )
-        if schema_version not in {CACHE_SCHEMA_VERSION, 3}:
+        if schema_version not in {CACHE_SCHEMA_VERSION, 4, 3}:
             raise CardDatabaseCacheStaleError(
                 "Unsupported card database cache schema "
                 f"{schema_version}; expected {CACHE_SCHEMA_VERSION}."
@@ -1033,6 +1051,8 @@ def _card_face_from_mtgjson(
             field_name=f"{field_name}.manaValue",
         ),
         produced_mana=produced_mana,
+        power=_optional_source_text(card.get("power")),
+        toughness=_optional_source_text(card.get("toughness")),
     )
 
 
@@ -1070,6 +1090,12 @@ def _card_info_from_mtgjson(
     if not produced_mana and aggregate_faces:
         produced_mana = _combined_face_produced_mana(faces=aggregate_faces)
     raw_types = tuple(dict.fromkeys(type_lines))
+    power = _optional_source_text(card.get("power"))
+    if power is None and len(aggregate_faces) > 1:
+        power = _shared_face_text(faces=aggregate_faces, field_name="power")
+    toughness = _optional_source_text(card.get("toughness"))
+    if toughness is None and len(aggregate_faces) > 1:
+        toughness = _shared_face_text(faces=aggregate_faces, field_name="toughness")
     return CardInfo(
         grp_id=seed.grp_id,
         name=_optional_source_text(card.get("name")) or seed.name,
@@ -1096,6 +1122,8 @@ def _card_info_from_mtgjson(
         collector_number=_optional_source_text(card.get("number")),
         arena_id=seed.grp_id,
         source_provenance=("mtgjson",),
+        power=power,
+        toughness=toughness,
     )
 
 
@@ -1108,6 +1136,17 @@ def _combined_face_produced_mana(*, faces: tuple[CardFace, ...]) -> tuple[str, .
     return _ordered_unique_colors(
         colors=(symbol for face in faces for symbol in face.produced_mana)
     )
+
+
+def _shared_face_text(
+    *, faces: tuple[CardFace, ...], field_name: str
+) -> str | None:
+    values = tuple(getattr(face, field_name) for face in faces)
+    if not values or any(value is None for value in values):
+        return None
+    if len(set(values)) != 1:
+        return None
+    return values[0]
 
 
 def _mtgjson_related_faces(
@@ -1270,8 +1309,13 @@ def _card_face_from_scryfall(
         subtypes=_source_subtypes(type_line=type_line),
         colors=colors,
         mana_cost=_optional_source_text(face.get("mana_cost")),
-        mana_value=_optional_float(face.get("cmc"), field_name=f"card {grp_id}.face.cmc"),
+        mana_value=_optional_float(
+            face.get("cmc"),
+            field_name=f"card {grp_id}.face.cmc",
+        ),
         produced_mana=produced_mana,
+        power=_optional_source_text(face.get("power")),
+        toughness=_optional_source_text(face.get("toughness")),
     )
 
 
@@ -1392,6 +1436,8 @@ def _arena_card_face(
             field_name=f"Arena card {grp_id}.cmc",
         ),
         produced_mana=produced_mana,
+        power=_optional_source_text(card.get("power")),
+        toughness=_optional_source_text(card.get("toughness")),
     )
 
 
@@ -1411,6 +1457,12 @@ def _card_info_from_scryfall(*, card: Mapping[str, Any]) -> CardInfo | None:
     oracle_text = _optional_source_text(card.get("oracle_text"))
     if oracle_text is None:
         oracle_text = _combined_face_oracle_text(faces=faces)
+    power = _optional_source_text(card.get("power"))
+    if power is None and len(faces) > 1:
+        power = _shared_face_text(faces=faces, field_name="power")
+    toughness = _optional_source_text(card.get("toughness"))
+    if toughness is None and len(faces) > 1:
+        toughness = _shared_face_text(faces=faces, field_name="toughness")
     return CardInfo(
         grp_id=grp_id,
         rarity=rarity,
@@ -1434,6 +1486,8 @@ def _card_info_from_scryfall(*, card: Mapping[str, Any]) -> CardInfo | None:
         collector_number=_optional_source_text(card.get("collector_number")),
         arena_id=grp_id,
         source_provenance=("scryfall",),
+        power=power,
+        toughness=toughness,
     )
 
 
@@ -1493,6 +1547,12 @@ def _card_info_from_arena(
     )
     if not produced_mana and face_records:
         produced_mana = _combined_face_produced_mana(faces=face_records)
+    power = _optional_source_text(card.get("power"))
+    if power is None and len(face_records) > 1:
+        power = _shared_face_text(faces=face_records, field_name="power")
+    toughness = _optional_source_text(card.get("toughness"))
+    if toughness is None and len(face_records) > 1:
+        toughness = _shared_face_text(faces=face_records, field_name="toughness")
     name = _optional_source_text(
         card.get("name", card.get("title", card.get("cardName")))
     )
@@ -1538,6 +1598,8 @@ def _card_info_from_arena(
         ),
         arena_id=grp_id,
         source_provenance=("arena",),
+        power=power,
+        toughness=toughness,
     )
 
 
@@ -1582,6 +1644,27 @@ def _load_arena_card_database_if_available(
     return build_card_database_from_arena_data_dir(path=default_data_dir)
 
 
+def _merge_card_faces_power(
+    *, base: tuple[CardFace, ...], overlay: tuple[CardFace, ...]
+) -> tuple[CardFace, ...]:
+    if not base:
+        return overlay
+    if not overlay or len(base) != len(overlay):
+        return base
+    return tuple(
+        replace(
+            face,
+            power=face.power if face.power is not None else overlay[index].power,
+            toughness=(
+                face.toughness
+                if face.toughness is not None
+                else overlay[index].toughness
+            ),
+        )
+        for index, face in enumerate(base)
+    )
+
+
 def _merge_card_info(*, base: CardInfo, overlay: CardInfo) -> CardInfo:
     """Augment missing canonical fields without replacing valid source data."""
 
@@ -1618,7 +1701,7 @@ def _merge_card_info(*, base: CardInfo, overlay: CardInfo) -> CardInfo:
         type_line=base.type_line if base.type_line is not None else overlay.type_line,
         subtypes=base.subtypes if base.subtypes else overlay.subtypes,
         layout=base.layout if base.layout is not None else overlay.layout,
-        faces=base.faces if base.faces else overlay.faces,
+        faces=_merge_card_faces_power(base=base.faces, overlay=overlay.faces),
         set_code=base.set_code if base.set_code is not None else overlay.set_code,
         collector_number=(
             base.collector_number
@@ -1627,6 +1710,8 @@ def _merge_card_info(*, base: CardInfo, overlay: CardInfo) -> CardInfo:
         ),
         arena_id=base.arena_id if base.arena_id is not None else overlay.arena_id,
         source_provenance=provenance,
+        power=base.power if base.power is not None else overlay.power,
+        toughness=base.toughness if base.toughness is not None else overlay.toughness,
     )
 
 

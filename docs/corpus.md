@@ -60,14 +60,18 @@ case-insensitive set-code allow-list. Selection metadata is embedded in the
 coverage report, including candidate count and selected sets.
 
 `normalized.jsonl` is deterministic compact JSONL sorted by set, collector number,
-Arena/group ID, and name. Every row contains explicit keys for `arena_id`, `grp_id`,
-`set`, `collector_number`, `oracle_id`, `name`, `oracle_text`, `keywords`,
-`type_line`, `subtypes`, `layout`, ordered `faces`, `colors`, `mana_cost`,
-`mana_value`, `produced_mana`, `rarity`, `source_provenance`,
-`source_disagreements`, `unsafe_to_classify`, and `unsafe_reasons`. Unknown values
-are `null` (or an empty list where an empty value is meaningful); no values are
-invented. Face records retain their own name, Oracle text, keywords, type line,
-subtypes, colors, mana, and produced-mana fields in source order.
+Arena/group ID, and name. The corpus schema version is `2`; source configurations
+and coverage reports must use this version. Every row contains explicit keys for
+`arena_id`, `grp_id`, `set`, `collector_number`, `oracle_id`, `name`, `oracle_text`,
+`keywords`, `type_line`, `subtypes`, `layout`, ordered `faces`, `colors`,
+`mana_cost`, `mana_value`, `power`, `toughness`, `produced_mana`, `rarity`,
+`source_provenance`, `source_disagreements`, `unsafe_to_classify`, and
+`unsafe_reasons`. Unknown values are `null` (or an empty list where an empty value
+is meaningful); no values are invented. Face records retain their own name, Oracle
+text, keywords, type line, subtypes, colors, mana, produced-mana, power, and
+toughness fields in source order. Power and toughness are textual `str | None`
+values; values such as `*`, `X`, and `1+*` are preserved verbatim for classifiers
+to interpret.
 
 Coverage treats face-level `oracle_text` and `type_line` as satisfying those
 fields only when every face has the value. A missing or `unknown` layout is

@@ -115,7 +115,7 @@ def test_replay_uses_cached_card_database_without_refreshing(
     assert captured.err == ""
 
 
-def test_replay_with_schema_four_incomplete_scryfall_card_stays_offline(
+def test_replay_with_schema_five_incomplete_scryfall_card_stays_offline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -123,7 +123,7 @@ def test_replay_with_schema_four_incomplete_scryfall_card_stays_offline(
     refresh_card_database(app_dir=tmp_path, bulk_file=SCRYFALL_BULK_SAMPLE_PATH)
     cache_path = card_database_cache_path(app_dir=tmp_path)
     cache = json.loads(cache_path.read_text(encoding="utf-8"))
-    assert cache["schema_version"] == 4
+    assert cache["schema_version"] == 5
     cache["cards"]["105097"]["mana_cost"] = None
     cache["cards"]["105097"]["source_provenance"] = ["scryfall"]
     cache_path.write_text(json.dumps(cache), encoding="utf-8")

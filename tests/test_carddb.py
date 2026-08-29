@@ -72,6 +72,8 @@ def test_scryfall_semantic_faces_normalize_layout_and_local_fields() -> None:
     assert transform.subtypes == ("Human", "Zombie")
     assert transform.set_code == "sem"
     assert transform.collector_number == "1"
+    assert transform.power is None
+    assert transform.toughness is None
     assert transform.source_provenance == ("scryfall",)
     assert transform.faces == (
         CardFace(
@@ -83,6 +85,8 @@ def test_scryfall_semantic_faces_normalize_layout_and_local_fields() -> None:
             colors=("W",),
             mana_cost="{2}{W}",
             mana_value=3.0,
+            power="2",
+            toughness="2",
         ),
         CardFace(
             name="Back",
@@ -93,8 +97,11 @@ def test_scryfall_semantic_faces_normalize_layout_and_local_fields() -> None:
             colors=("B",),
             mana_cost=None,
             mana_value=3.0,
+            power="3",
+            toughness="3",
         ),
     )
+
 
     split = database.lookup(grp_id=9002)
     assert split.layout == "split"
@@ -118,6 +125,26 @@ def test_scryfall_semantic_faces_normalize_layout_and_local_fields() -> None:
     no_faces = database.lookup(grp_id=9005)
     assert no_faces.layout == "normal"
     assert no_faces.faces == ()
+
+
+def test_card_info_power_toughness_round_trip_preserves_text() -> None:
+    card = CardInfo(
+        grp_id=9010,
+        name="Textual Stats",
+        colors=("G",),
+        mana_value=3.0,
+        rarity="rare",
+        types=("Creature",),
+        power="*",
+        toughness="1+*",
+        faces=(CardFace(name="Face", power="X", toughness="*"),),
+    )
+
+    loaded = CardInfo.from_json(data=card.to_json())
+
+    assert loaded == card
+    with pytest.raises(CardDatabaseError, match="card.power"):
+        CardInfo.from_json(data={**card.to_json(), "power": 2})
 
 
 def test_scryfall_malformed_present_faces_fail() -> None:
@@ -273,6 +300,8 @@ def test_mtgjson_other_face_ids_augment_only_missing_canonical_fields() -> None:
                     rarity="rare",
                     types=("Creature — Front",),
                     mana_cost=None,
+                    power="2",
+                    toughness=None,
                     oracle_text=None,
                     type_line=None,
                     source_provenance=("scryfall",),
@@ -296,6 +325,8 @@ def test_mtgjson_other_face_ids_augment_only_missing_canonical_fields() -> None:
                 "text": "Front text",
                 "manaValue": 2,
                 "manaCost": "{1}{G}",
+                "power": "*",
+                "toughness": "1+*",
                 "colors": ["G"],
                 "rarity": "rare",
                 "setCode": "SEM",
@@ -319,6 +350,8 @@ def test_mtgjson_other_face_ids_augment_only_missing_canonical_fields() -> None:
     assert card.name == "MTG Front"
     assert card.colors == ("G",)
     assert card.rarity == "rare"
+    assert card.power == "2"
+    assert card.toughness == "1+*"
     assert card.oracle_text == "Front text"
     assert card.mana_cost == "{1}{G} // {2}{G}"
     assert card.type_line == "Creature — Front"
@@ -603,7 +636,7 @@ def test_schema_three_cache_migrates_with_explicit_metadata_defaults(
     assert card.oracle_text is None
     assert card.faces == ()
     assert card.source_provenance == ("unknown",)
-    assert database.to_json()["schema_version"] == 4
+    assert database.to_json()["schema_version"] == 5
 
 
 def test_load_or_refresh_schema_three_cache_is_offline(
