@@ -90,6 +90,7 @@ files = [
     "draftomen/replay.py",
     "draftomen/semantic_roles.py",
     "draftomen/session.py",
+    "draftomen/set_profile.py",
     "draftomen/setinfo.py",
     "draftomen/seventeen.py",
     "draftomen/splash.py",

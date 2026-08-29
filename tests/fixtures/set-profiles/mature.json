@@ -1,0 +1,54 @@
+{
+  "confidence": 0.91,
+  "format": "quickdraft",
+  "generated_at": "2026-08-29T00:00:00+00:00",
+  "maturity": "mature",
+  "pair_profiles": [
+    {
+      "pair": "WU",
+      "removal_targets": [{"kind": "disable", "value": 0.8}],
+      "role_targets": [{"role": "draw", "value": 3}],
+      "scarcity": [{"card_key": "oracle_id:wu-bomb", "samples": 120, "value": 0.25}],
+      "structural_targets": [{"name": "average_land_count", "value": 17}],
+      "synergy": [{"first_card": "oracle_id:wu-bomb", "second_card": "oracle_id:wu-payoff", "samples": 45, "value": 0.18}]
+    },
+    {"pair": "WB"},
+    {"pair": "WR"},
+    {"pair": "WG"},
+    {"pair": "UB"},
+    {"pair": "UR"},
+    {"pair": "UG"},
+    {"pair": "BR"},
+    {"pair": "BG"},
+    {"pair": "RG"}
+  ],
+  "profile_version": "1.0",
+  "role_profile": {
+    "cards": [
+      {
+        "card_name": "WU Bomb",
+        "key": "oracle_id:wu-bomb",
+        "roles": [
+          {
+            "confidence": 0.95,
+            "evidence": ["oracle_text"],
+            "provenance": ["compiled_profile"],
+            "role": "draw"
+          }
+        ]
+      }
+    ],
+    "classifier_version": "1.1",
+    "profile_schema_version": 2,
+    "role_schema_version": 2,
+    "schema_version": 2,
+    "set_code": "tst"
+  },
+  "samples": {
+    "by_pair": {"WU": 120, "WB": 120, "WR": 120, "WG": 120, "UB": 120, "UR": 120, "UG": 120, "BR": 120, "BG": 120, "RG": 120},
+    "total": 1200
+  },
+  "schema_version": 1,
+  "set_code": "tst",
+  "source": {"artifact": "fixture-mature", "provider": "fixture", "revision": "1"}
+}

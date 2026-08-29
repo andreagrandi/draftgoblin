@@ -12,6 +12,9 @@
 - Compile exact-set profiles with shared stable identities, atomic publication,
   deterministic duplicate handling, conservative unknown omission, and
   version-checked resolution; document the workflow. (#220)
+- Add a versioned, deeply immutable local set-profile boundary with strict
+  sparse empirical sections, semantic-role compatibility, and non-raising
+  maturity-aware fallback loading. (#221)
 
 ## [0.3.1] - 2026-08-28
 

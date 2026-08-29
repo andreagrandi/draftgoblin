@@ -1,0 +1,20 @@
+{
+  "confidence": 0.42,
+  "format": "quickdraft",
+  "generated_at": "2026-08-29T01:00:00+00:00",
+  "maturity": "early",
+  "pair_profiles": [
+    {
+      "pair": "WU",
+      "structural_targets": [{"name": "average_land_count", "value": 17}]
+    }
+  ],
+  "profile_version": "1.0-early",
+  "samples": {
+    "by_pair": {"WU": 17},
+    "total": 17
+  },
+  "schema_version": 1,
+  "set_code": "tst",
+  "source": {"artifact": "fixture-early", "provider": "fixture", "revision": "1"}
+}
