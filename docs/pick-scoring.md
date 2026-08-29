@@ -1,6 +1,6 @@
 # Pick scoring
 
-Draft Omen keeps the raw 17Lands GIH win rate visible for every card with a strong games-in-hand sample. The Textual watch table ranks by DO Score by default after TMT PremierDraft, TMT TradDraft, and SOS PremierDraft trophy benchmarks showed better top-1/top-3/top-5 match rates and average actual-pick rank than raw 17L WR. It also keeps raw 17L WR visible and switchable for comparison.
+Draft Omen keeps the raw 17Lands GIH win rate visible for every resolved card rating. The Textual watch table ranks by DO Score by default after TMT PremierDraft, TMT TradDraft, and SOS PremierDraft trophy benchmarks showed better top-1/top-3/top-5 match rates and average actual-pick rank than raw 17L WR. It also keeps raw 17L WR visible and switchable for comparison.
 
 The base rating for `DO` is 17Lands GIH WR when the card has enough games-in-hand samples. If QuickDraft data is missing or thin, the resolver falls back to PremierDraft. If neither format has a strong GIH sample, the card uses a neutral prior, adjusted by ALSA when ALSA is available: earlier ALSA raises the prior, later ALSA lowers it.
 
@@ -8,7 +8,22 @@ Scores are normalized against the set rating distribution and centered so the ne
 
 Pool color weights come from picked cards. Each colored picked card contributes a quality-weighted amount to each of its colors, so a strong card pulls harder than filler. The highest-weighted two-color pair is the inferred pair once at least two colors have material weight.
 
-During open picks, set/format-specific 17Lands deck color win rates are used as a close-pick tiebreaker. If cards are within `3.0` DO points and the hypothetical color-pair weights after taking each card are also close, the recommendation prefers the card leading toward the higher-win-rate pair. This is deliberately disabled once the color ramp starts, so pair win rate does not override later commitment signals.
+During open picks, set/format-specific 17Lands deck color win rates are used as
+a close-pick tiebreaker. If cards are within `3.0` DO points and the
+hypothetical color-pair weights after taking each card are also close, a
+non-generic profile's shrinkage-controlled pair rates must differ by more than
+`1pp` before the recommendation prefers the card leading toward the
+higher-evidence pair performance. Otherwise, the base comparator retains the
+ordering. For a profile-backed pair with observed rate `p`, the tiebreaker
+uses `p_prior + w × (p − p_prior)`, where `p_prior` is the neutral pair rate
+and `0 ≤ w ≤ 1`. The influence is the product of maturity/confidence, profile
+total and per-pair sample support, and aggregate pair-game support. Each
+sample factor is `n / (n + k)` and missing evidence contributes zero, so thin
+evidence cannot create a material pair-rate margin or overturn base ordering.
+This is deliberately disabled once the color ramp starts, so pair win rate
+does not override later commitment signals. With no profile or a generic
+profile, rates remain raw and the legacy any-nonzero-rate comparison is
+preserved, so even a sub-`1pp` difference can resolve a close pick.
 
 Commitment is controlled by documented defaults in `config.py`:
 
@@ -19,8 +34,9 @@ Commitment is controlled by documented defaults in `config.py`:
 - locked off-color score multiplier: `0.75`
 - pool weight baseline/rating scale/min/max: `1.0`, `10.0`, `0.25`, `2.0`
 - open-pick pair-win-rate tiebreaker: within `3.0` DO points and `0.25` pair-weight points
+- neutral aggregate pair prior: `neutral_pair_win_rate = 0.5` (independent of the `0.55` card prior)
 
-Rows show a `Fit` marker: `On` for cards inside the inferred pair, `Off!` for off-color cards, `Any` for colorless cards, and `Open` before the ramp starts or before a pair is available. Once locked, pair-filtered 17Lands ratings are used when present with adequate samples; otherwise all-decks ratings remain the fallback.
+Rows show a `Fit` marker: `On` for cards inside the inferred pair, `Off!` for off-color cards, `Any` for colorless cards, and `Open` before the ramp starts or before a pair is available. Once locked, pair-filtered 17Lands ratings are used when present with adequate or thin samples. The raw pair rating remains available for `17L WR`, grade, samples, and source metadata; only the score-only base rating is shrunk toward the resolved all-decks card rating. Pair-card influence is bounded by profile maturity/confidence, profile total/per-pair samples, and the pair row's GIH sample count; missing evidence falls back safely toward global evidence rather than inventing certainty.
 
 ## Pre-pick scoring context
 
@@ -81,7 +97,7 @@ The splash policy is deliberately narrower than general three-color drafting:
 
 The `Fit` column uses `Splash X` for a supported splash, `Splash? X` for a speculative one, and `Fix X` when a fixing land directly supports the active splash color. Focused card details show the source count and the exact acceptance or rejection reason. Once a splash color has been established, cards of any other third color remain ordinary off-color cards.
 
-The TUI pack table shows `17L WR` and `17L Grade` as primary columns. `17L WR` is the raw Games-in-Hand win rate from the resolved 17Lands source. `17L Grade` follows the methodology published on the 17Lands Card Data page for the Grades view: grades are centered at `C` on the selected win-rate metric distribution, and each grade step is a deterministic `0.33` standard-deviation band. Draft Omen computes those grades from the cached 17Lands GIH distribution for the same source and format/filter context the row uses (QuickDraft for Quick Drafts, PremierDraft when the row is a Premier fallback, or pair-filtered data when used); cards without a strong GIH sample show `—`.
+The TUI pack table shows `17L WR` and `17L Grade` as primary columns. `17L WR` is the raw Games-in-Hand win rate from the resolved 17Lands source. `17L Grade` follows the methodology published on the 17Lands Card Data page for the Grades view: grades are centered at `C` on the selected win-rate metric distribution, and each grade step is a deterministic `0.33` standard-deviation band. Draft Omen computes those grades from the cached 17Lands GIH distribution for the same source and format/filter context the row uses (QuickDraft for Quick Drafts, PremierDraft when the row is a Premier fallback, or pair-filtered data when used); cards without a resolved GIH win rate show `—`.
 
 Displayed `DO` scores are whole-number integers. We do not show one decimal for ties because the plain draft table should stay easy to scan; after the open-pick pair-win-rate tiebreaker, remaining DO ties are resolved deterministically by raw score, base rating, and original pack order.
 

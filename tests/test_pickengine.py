@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.config import COLOR_PAIRS
 from draftomen.events import PackOfferedEvent
 from draftomen.pickengine import (
     ContextualScoreBreakdown,
@@ -422,6 +423,60 @@ def test_open_pick_pair_win_rate_tiebreaker_prefers_higher_rate_pair() -> None:
     assert scored_pack.cards[0].card.grp_id == 31
     assert ranked_cards[0].card.grp_id == 31
 
+def test_open_pair_rate_tiebreaker_preserves_legacy_subpp_ordering_without_profile() -> None:
+    engine = PickEngine(
+        ratings_data=_msh_pair_tiebreaker_data(wu_rate=0.506, br_rate=0.500)
+    )
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(31, 32),
+        card_database=_msh_pair_tiebreaker_database(),
+        pool_grp_ids=(20, 21),
+        pick_index=3,
+    )
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+
+    higher_rate = by_id[31].pair_tiebreaker_win_rate
+    lower_rate = by_id[32].pair_tiebreaker_win_rate
+    assert higher_rate is not None
+    assert lower_rate is not None
+    assert 0 < higher_rate - lower_rate < 0.01
+    assert by_id[31].raw_score < by_id[32].raw_score
+    assert scored_pack.cards[0].card.grp_id == 31
+
+
+def test_thin_shrunken_pair_margin_cannot_override_base_order() -> None:
+    profile = _pair_shrinkage_profile(total_samples=1, pair_samples=1)
+
+    scored_pack = _score_msh_pair_pack(profile=profile)
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+    first_rate = by_id[31].pair_tiebreaker_win_rate
+    second_rate = by_id[32].pair_tiebreaker_win_rate
+
+    assert first_rate is not None
+    assert second_rate is not None
+    assert scored_pack.cards[0].card.grp_id == 32
+    assert by_id[32].raw_score > by_id[31].raw_score
+    assert abs(first_rate - second_rate) <= 0.01
+
+
+def test_supported_material_shrunken_pair_margin_breaks_close_pick() -> None:
+    profile = _pair_shrinkage_profile(
+        total_samples=10_000,
+        pair_samples=10_000,
+    )
+
+    scored_pack = _score_msh_pair_pack(profile=profile)
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+    higher_rate = by_id[31].pair_tiebreaker_win_rate
+    lower_rate = by_id[32].pair_tiebreaker_win_rate
+
+    assert higher_rate is not None
+    assert lower_rate is not None
+    assert scored_pack.cards[0].card.grp_id == 31
+    assert by_id[31].raw_score < by_id[32].raw_score
+    assert higher_rate - lower_rate > 0.01
+
 
 def test_pair_win_rate_tiebreaker_does_not_override_colorless_card_score() -> None:
     engine = PickEngine(ratings_data=_msh_pair_tiebreaker_data())
@@ -497,6 +552,173 @@ def test_locked_pair_uses_pair_filtered_rating_when_samples_are_adequate() -> No
 
     assert scored_pack.commitment.inferred_pair == "WU"
     assert scored_pack.cards[0].base_rating == 0.64
+
+
+def test_open_pair_rate_shrinks_toward_neutral_with_thin_profile_evidence() -> None:
+    low_profile = _pair_shrinkage_profile(total_samples=1, pair_samples=1)
+    high_profile = _pair_shrinkage_profile(
+        total_samples=10_000,
+        pair_samples=10_000,
+    )
+
+    low = _score_msh_pair_pack(profile=low_profile).cards[0]
+    high = _score_msh_pair_pack(profile=high_profile).cards[0]
+
+    assert low.pair_tiebreaker_win_rate is not None
+    assert high.pair_tiebreaker_win_rate is not None
+    assert abs(low.pair_tiebreaker_win_rate - 0.5) < abs(
+        high.pair_tiebreaker_win_rate - 0.5
+    )
+    assert high.pair_tiebreaker_win_rate < 0.606
+
+
+def test_open_pair_rate_shrinks_low_aggregate_games_toward_neutral() -> None:
+    profile = _pair_shrinkage_profile(
+        total_samples=10_000,
+        pair_samples=10_000,
+    )
+    low = _score_msh_pair_pack(profile=profile, pair_games=1).cards[0]
+    high = _score_msh_pair_pack(profile=profile, pair_games=10_000).cards[0]
+
+    assert low.pair_tiebreaker_win_rate is not None
+    assert high.pair_tiebreaker_win_rate is not None
+    assert abs(low.pair_tiebreaker_win_rate - 0.5) < abs(
+        high.pair_tiebreaker_win_rate - 0.5
+    )
+
+
+def test_open_pair_rate_influence_is_monotonic_and_bounded() -> None:
+    rates = []
+    for samples in (1, 100, 10_000):
+        profile = _pair_shrinkage_profile(
+            total_samples=samples,
+            pair_samples=samples,
+        )
+        card = _score_msh_pair_pack(profile=profile).cards[0]
+        assert card.pair_tiebreaker_win_rate is not None
+        rates.append(card.pair_tiebreaker_win_rate)
+
+    assert rates == sorted(rates)
+    assert all(0.5 <= rate <= 0.606 for rate in rates)
+
+
+def test_locked_pair_card_rate_shrinks_low_gih_samples_toward_global_card_rate() -> None:
+    profile = _pair_shrinkage_profile(total_samples=10_000, pair_samples=10_000)
+    low = _score_locked_pair_pack(profile=profile, pair_games_in_hand=10).cards[0]
+    high = _score_locked_pair_pack(
+        profile=profile,
+        pair_games_in_hand=10_000,
+    ).cards[0]
+
+    assert 0.50 < low.base_rating < high.base_rating < 0.64
+
+
+def test_locked_pair_keeps_raw_rating_metadata_when_base_is_shrunk() -> None:
+    card = _score_locked_pair_pack(
+        profile=_pair_shrinkage_profile(total_samples=10_000, pair_samples=10_000),
+        pair_gih=0.90,
+        pair_games_in_hand=10,
+    ).cards[0]
+
+    assert card.rating.gih_win_rate == 0.90
+    assert card.rating.sample_counts.games_in_hand == 10
+    assert card.rating.letter_grade == "C"
+    assert card.rating.metadata.source_format == QUICK_DRAFT_FORMAT
+    assert card.rating.metadata.fallback_reason is None
+    assert 0.50 < card.base_rating < 0.90
+
+
+def test_lower_profile_maturity_and_confidence_reduce_pair_card_influence() -> None:
+    weak_profile = _pair_shrinkage_profile(
+        total_samples=10_000,
+        pair_samples=10_000,
+        confidence=0.25,
+        maturity=ProfileMaturity.EARLY,
+    )
+    strong_profile = _pair_shrinkage_profile(
+        total_samples=10_000,
+        pair_samples=10_000,
+    )
+    weak = _score_locked_pair_pack(
+        profile=weak_profile,
+        pair_games_in_hand=10_000,
+    ).cards[0]
+    strong = _score_locked_pair_pack(
+        profile=strong_profile,
+        pair_games_in_hand=10_000,
+    ).cards[0]
+
+    assert abs(weak.base_rating - 0.50) < abs(strong.base_rating - 0.50)
+
+
+def test_thin_pair_card_evidence_cannot_dominate_clear_global_quality() -> None:
+    profile = _pair_shrinkage_profile(total_samples=10_000, pair_samples=10_000)
+    scored_pack = _score_locked_pair_pack(
+        profile=profile,
+        pair_gih=0.99,
+        pair_games_in_hand=10,
+        offered_grp_ids=(12, 9),
+    )
+
+    assert scored_pack.cards[0].card.grp_id == 9
+    pair_card = next(
+        card for card in scored_pack.cards if card.card.grp_id == 12
+    )
+    assert pair_card.base_rating < 0.62
+
+
+def test_profile_pair_omissions_do_not_remove_canonical_pair_candidates() -> None:
+    ratings_data = _msh_pair_tiebreaker_data()
+    ratings_data = replace(
+        ratings_data,
+        primary=replace(
+            ratings_data.primary,
+            pair_win_rates={
+                pair: ColorPairWinRate(
+                    pair=pair,
+                    wins=60,
+                    games=100,
+                    win_rate=0.6,
+                )
+                for pair in COLOR_PAIRS
+            },
+        ),
+    )
+    pair_grp_ids = tuple(range(100, 100 + len(COLOR_PAIRS)))
+    base_database = _msh_pair_tiebreaker_database()
+    database = CardDatabase(
+        cards={
+            **base_database.cards,
+            **{
+                grp_id: _card(
+                    grp_id=grp_id,
+                    name=f"{pair} pair card",
+                    colors=tuple(pair),
+                )
+                for grp_id, pair in zip(pair_grp_ids, COLOR_PAIRS)
+            },
+        }
+    )
+    profile = _pair_shrinkage_profile(total_samples=1, pair_samples=1)
+    assert profile.pair("BR") is None
+
+    scored_pack = PickEngine(
+        ratings_data=ratings_data,
+        set_profile=profile,
+    ).score_pack(
+        offered_grp_ids=pair_grp_ids,
+        card_database=database,
+        pool_grp_ids=(20, 21),
+        pick_index=3,
+    )
+
+    scored_by_id = {card.card.grp_id: card for card in scored_pack.cards}
+    for grp_id, pair in zip(pair_grp_ids, COLOR_PAIRS):
+        card = scored_by_id[grp_id]
+        assert card.pair_tiebreaker_pair == pair
+        assert card.pair_tiebreaker_win_rate is not None
+        if pair != "WU":
+            assert card.pair_tiebreaker_win_rate == 0.5
 
 
 def test_supported_single_pip_bomb_is_marked_as_a_splash_and_can_win_pick() -> None:
@@ -817,7 +1039,11 @@ def _rated_basic_and_zero_data() -> SeventeenLandsData:
     return replace(data, primary=primary)
 
 
-def _ratings_data_with_pair_filter() -> SeventeenLandsData:
+def _ratings_data_with_pair_filter(
+    *,
+    pair_gih: float = 0.64,
+    pair_games_in_hand: int = 900,
+) -> SeventeenLandsData:
     data = _ratings_data()
     pair_data = SeventeenLandsFormatData(
         set_code="TST",
@@ -828,8 +1054,8 @@ def _ratings_data_with_pair_filter() -> SeventeenLandsData:
                 grp_id=12,
                 name="Pair Filtered Card",
                 color="W",
-                gih=0.64,
-                games_in_hand=900,
+                gih=pair_gih,
+                games_in_hand=pair_games_in_hand,
             ),
         },
         pair_win_rates=_pair_win_rates(),
@@ -844,7 +1070,13 @@ def _ratings_data_with_pair_filter() -> SeventeenLandsData:
     )
 
 
-def _msh_pair_tiebreaker_data(*, red_gih: float = 0.552) -> SeventeenLandsData:
+def _msh_pair_tiebreaker_data(
+    *,
+    red_gih: float = 0.552,
+    pair_games: int = 1000,
+    wu_rate: float = 0.606,
+    br_rate: float = 0.539,
+) -> SeventeenLandsData:
     return SeventeenLandsData(
         set_code="MSH",
         requested_format=QUICK_DRAFT_FORMAT,
@@ -896,7 +1128,11 @@ def _msh_pair_tiebreaker_data(*, red_gih: float = 0.552) -> SeventeenLandsData:
                     games_in_hand=900,
                 ),
             },
-            pair_win_rates=_msh_pair_win_rates(),
+            pair_win_rates=_msh_pair_win_rates(
+                games=pair_games,
+                wu_rate=wu_rate,
+                br_rate=br_rate,
+            ),
         ),
         fallback=None,
         thin_sample_minimum=500,
@@ -1023,10 +1259,25 @@ def _pair_win_rates() -> dict[str, ColorPairWinRate]:
     }
 
 
-def _msh_pair_win_rates() -> dict[str, ColorPairWinRate]:
+def _msh_pair_win_rates(
+    *,
+    games: int = 1000,
+    wu_rate: float = 0.606,
+    br_rate: float = 0.539,
+) -> dict[str, ColorPairWinRate]:
     return {
-        "WU": ColorPairWinRate(pair="WU", wins=606, games=1000, win_rate=0.606),
-        "BR": ColorPairWinRate(pair="BR", wins=539, games=1000, win_rate=0.539),
+        "WU": ColorPairWinRate(
+            pair="WU",
+            wins=round(wu_rate * games),
+            games=games,
+            win_rate=wu_rate,
+        ),
+        "BR": ColorPairWinRate(
+            pair="BR",
+            wins=round(br_rate * games),
+            games=games,
+            win_rate=br_rate,
+        ),
     }
 
 
@@ -1087,6 +1338,43 @@ def _msh_pair_tiebreaker_database() -> CardDatabase:
             32: _card(grp_id=32, name="Red BR Lane Card", colors=("R",)),
             33: _card(grp_id=33, name="Colorless Close Card", colors=()),
         }
+    )
+
+
+def _score_msh_pair_pack(
+    *,
+    profile: SetProfile,
+    pair_games: int = 1000,
+) -> ScoredPack:
+    return PickEngine(
+        ratings_data=_msh_pair_tiebreaker_data(pair_games=pair_games),
+        set_profile=profile,
+    ).score_pack(
+        offered_grp_ids=(31, 32),
+        card_database=_msh_pair_tiebreaker_database(),
+        pool_grp_ids=(20, 21),
+        pick_index=3,
+    )
+
+
+def _score_locked_pair_pack(
+    *,
+    profile: SetProfile,
+    pair_gih: float = 0.64,
+    pair_games_in_hand: int = 900,
+    offered_grp_ids: tuple[int, ...] = (12,),
+) -> ScoredPack:
+    return PickEngine(
+        ratings_data=_ratings_data_with_pair_filter(
+            pair_gih=pair_gih,
+            pair_games_in_hand=pair_games_in_hand,
+        ),
+        set_profile=profile,
+    ).score_pack(
+        offered_grp_ids=offered_grp_ids,
+        card_database=_card_database(),
+        pool_grp_ids=(1, 2),
+        pick_index=16,
     )
 
 
@@ -1871,6 +2159,24 @@ def _context_profile() -> SetProfile:
         samples=SampleSummary(total=1, by_pair=(("WU", 1),)),
         confidence=1.0,
         pairs=(PairProfile(pair="WU"),),
+    )
+
+
+def _pair_shrinkage_profile(
+    *,
+    total_samples: int,
+    pair_samples: int,
+    confidence: float = 1.0,
+    maturity: ProfileMaturity = ProfileMaturity.MATURE,
+) -> SetProfile:
+    return replace(
+        _context_profile(),
+        maturity=maturity,
+        samples=SampleSummary(
+            total=total_samples,
+            by_pair=(("WU", pair_samples),),
+        ),
+        confidence=confidence,
     )
 
 
