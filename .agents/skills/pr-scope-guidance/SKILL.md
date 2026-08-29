@@ -39,6 +39,19 @@ independently mergeable tickets with each outcome, dependency, expected files,
 and verification. Wait for approval to split or explicitly combine; a request
 to implement the issue does not waive the warning.
 
+## Preserve Native Parent-Child Relationships
+
+Every issue created by splitting an existing ticket must be attached as a
+native GitHub sub-issue of the ticket being split. Body text such as
+`Parent issue: #123`, project-board grouping, and blocked-by relationships do
+not replace the native parent-child relationship.
+
+Use `POST /repos/{owner}/{repo}/issues/{parent}/sub_issues` with the created
+issue's database `id`, then verify it through the parent's `sub_issues`
+endpoint before implementation begins. When a child ticket is split again,
+attach its new tickets to that immediate child, not only to the root epic.
+
+
 ## Plan the Selected Slice
 
 After the ticket passes assessment or the user approves combined scope, state:

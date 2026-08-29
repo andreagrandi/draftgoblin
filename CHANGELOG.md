@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Define immutable pre-pick scoring context with deterministic profile provenance and pair-theme annotations. (#251)
 - Add a development-only reproducible card corpus workflow with pinned Scryfall,
   current and legacy Arena mapping inputs, MTGJSON inputs, deterministic
   normalized artifacts, and coverage reports for offline semantic-analysis work.

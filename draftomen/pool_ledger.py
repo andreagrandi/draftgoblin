@@ -263,6 +263,7 @@ class PoolRoleLedger:
     urgency: float
     stage: LedgerStage | None = None
     profile_source: str = "generic"
+    profile_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -362,6 +363,7 @@ class PoolRoleLedger:
             "payoff_counts": [[name, value] for name, value in self.payoff_counts],
             "playable_count": self.playable_count,
             "pool_size": self.pool_size,
+            "profile_fingerprint": self.profile_fingerprint,
             "profile_source": self.profile_source,
             "removal_contributions": [
                 {"count": item.count, "kind": item.kind, "value": item.value}
@@ -845,6 +847,7 @@ def _evaluate(
         urgency=_round(urgency),
         stage=stage,
         profile_source=profile_source,
+        profile_fingerprint=None if set_profile is None else set_profile.fingerprint,
     )
 
 

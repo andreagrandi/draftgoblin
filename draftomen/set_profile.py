@@ -7,6 +7,7 @@ keeping semantic roles usable when empirical sections are absent.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -295,9 +296,16 @@ class PairProfile:
     removal_targets: tuple[RemovalTarget, ...] = ()
     synergy: tuple[CardPairSynergy, ...] = ()
     scarcity: tuple[ScarcityTarget, ...] = ()
+    theme: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pair", _pair(self.pair))
+        if self.theme is not None:
+            object.__setattr__(
+                self,
+                "theme",
+                _non_empty_string(self.theme, "pair_profile.theme"),
+            )
         for field_name, values, expected_type in (
             ("structural_targets", self.structural_targets, NumericTarget),
             ("role_targets", self.role_targets, RoleTarget),
@@ -360,6 +368,8 @@ class PairProfile:
         ):
             if values:
                 result[name] = [item.to_json() for item in values]
+        if self.theme is not None:
+            result["theme"] = self.theme
         return result
 
     @classmethod
@@ -382,6 +392,7 @@ class PairProfile:
             ),
             synergy=_array_of(value, "synergy", CardPairSynergy.from_json, "pair_profile.synergy"),
             scarcity=_array_of(value, "scarcity", ScarcityTarget.from_json, "pair_profile.scarcity"),
+            theme=_optional_string(value, "theme", "pair_profile.theme"),
         )
 
 
@@ -515,6 +526,14 @@ class SetProfile:
 
     def to_bytes(self) -> bytes:
         return _json_bytes(self.to_json())
+
+    @property
+    def fingerprint(self) -> str | None:
+        """Return the deterministic identity of profile-backed content."""
+
+        if self.maturity is ProfileMaturity.GENERIC:
+            return None
+        return hashlib.sha256(self.to_bytes()).hexdigest()
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> SetProfile:

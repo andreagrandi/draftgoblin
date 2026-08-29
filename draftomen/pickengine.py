@@ -7,13 +7,19 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from functools import cmp_to_key
-from typing import TYPE_CHECKING, Mapping
+from typing import Mapping
 
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.config import COLOR_PAIRS, PICK_ENGINE, SPLASH, PickEngineConfig
 from draftomen.events import EXPECTED_PICKS_PER_PACK, EXPECTED_TOTAL_PICKS
-from draftomen.pool_ledger import PoolRoleLedger, project_pool_role_ledger
+from draftomen.pool_ledger import (
+    LedgerStage,
+    PoolRoleLedger,
+    PRE_PICK_PROJECTION,
+    project_pool_role_ledger,
+)
 from draftomen.semantic_roles import Role, RoleAssignment, resolve_card_roles
+from draftomen.set_profile import SetProfile
 from draftomen.seventeen import (
     FORMAT_RATING_SOURCE,
     NEUTRAL_PRIOR_SOURCE,
@@ -31,9 +37,6 @@ from draftomen.splash import (
     card_is_castable_in_pair,
     infer_splash_state,
 )
-
-if TYPE_CHECKING:
-    from draftomen.set_profile import SetProfile
 
 CLOSE_DO_SCORE_THRESHOLD = 3.0
 CLOSE_WIN_RATE_THRESHOLD = 0.01
@@ -57,6 +60,51 @@ PAYOFF_PACKAGES: Mapping[Role, str] = {
     Role.POWER_THRESHOLD_PAYOFF: "threshold",
     Role.POWER_N_PAYOFF: "threshold",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class PickScoringContext:
+    """Validated immutable context for one pre-pick scoring decision."""
+
+    set_profile: SetProfile
+    role_ledger: PoolRoleLedger
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.set_profile, SetProfile):
+            raise TypeError("PickScoringContext.set_profile must be a SetProfile.")
+        if not isinstance(self.role_ledger, PoolRoleLedger):
+            raise TypeError(
+                "PickScoringContext.role_ledger must be a PoolRoleLedger."
+            )
+        if self.role_ledger.mode is not PRE_PICK_PROJECTION:
+            raise ValueError(
+                "PickScoringContext requires a pre-pick projection."
+            )
+        stage = self.role_ledger.stage
+        if stage is None:
+            raise ValueError(
+                "PickScoringContext requires a pre-pick stage."
+            )
+        if not isinstance(stage, LedgerStage):
+            raise TypeError(
+                "PickScoringContext.role_ledger.stage must be a LedgerStage."
+            )
+        expected_source = f"profile:{self.set_profile.maturity.value}"
+        if self.role_ledger.profile_fingerprint != self.set_profile.fingerprint:
+            raise ValueError(
+                "PickScoringContext ledger/profile fingerprint does not match."
+            )
+        if self.role_ledger.profile_source != expected_source:
+            raise ValueError(
+                "PickScoringContext ledger/profile evidence does not match."
+            )
+
+    @property
+    def stage(self) -> LedgerStage:
+        """Return the validated pre-pick stage."""
+
+        assert self.role_ledger.stage is not None
+        return self.role_ledger.stage
 
 
 def recommendation_confidence_summary(
@@ -262,6 +310,7 @@ class ScoredPack:
     commitment: ColorCommitment
     splash_state: SplashState
     role_ledger: PoolRoleLedger | None = None
+    scoring_context: PickScoringContext | None = None
 
 
 
@@ -277,11 +326,17 @@ class PickEngine:
         config: PickEngineConfig = PICK_ENGINE,
         splash_enabled: bool = SPLASH.enabled_by_default,
         set_profile: SetProfile | None = None,
+        scoring_context: PickScoringContext | None = None,
     ) -> None:
+        if scoring_context is not None and not isinstance(
+            scoring_context, PickScoringContext
+        ):
+            raise TypeError("scoring_context must be a PickScoringContext.")
         self.ratings_data = ratings_data
         self.config = config
         self.splash_enabled = splash_enabled
         self.set_profile = set_profile
+        self.scoring_context = scoring_context
         self.normalization = _normalization_from_data(
             ratings_data=ratings_data,
             config=config,
@@ -298,10 +353,20 @@ class PickEngine:
         pick_number: int | None = None,
         global_pick_index: int | None = None,
         estimated_remaining_picks: int | None = None,
+        scoring_context: PickScoringContext | None = None,
     ) -> ScoredPack:
         """Return offered cards in recommendation order.
-        Open close-pick groups can use pair win rates as a final tiebreaker.
+
+        A validated context is carried through for downstream consumers but
+        does not participate in scoring until a child issue defines its terms.
         """
+        active_context = (
+            self.scoring_context if scoring_context is None else scoring_context
+        )
+        if active_context is not None and not isinstance(
+            active_context, PickScoringContext
+        ):
+            raise TypeError("scoring_context must be a PickScoringContext.")
 
         resolved_pick_index = _pick_index(
             pool_grp_ids=pool_grp_ids,
@@ -371,6 +436,7 @@ class PickEngine:
             commitment=commitment,
             splash_state=splash_state,
             role_ledger=role_ledger,
+            scoring_context=active_context,
         )
 
     def _best_on_color_score(
@@ -604,6 +670,7 @@ def score_pack(
     pick_index: int | None = None,
     splash_enabled: bool = SPLASH.enabled_by_default,
     set_profile: SetProfile | None = None,
+    scoring_context: PickScoringContext | None = None,
     pack_number: int | None = None,
     pick_number: int | None = None,
     global_pick_index: int | None = None,
@@ -618,6 +685,7 @@ def score_pack(
         config=config,
         splash_enabled=splash_enabled,
         set_profile=set_profile,
+        scoring_context=scoring_context,
     ).score_pack(
         offered_grp_ids=offered_grp_ids,
         card_database=card_database,

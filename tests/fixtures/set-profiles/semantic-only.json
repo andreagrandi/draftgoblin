@@ -3,6 +3,9 @@
   "format": "quickdraft",
   "generated_at": "2026-08-29T02:00:00+00:00",
   "maturity": "semantic-only",
+  "pair_profiles": [
+    {"pair": "WU", "theme": "tempo flyers"}
+  ],
   "profile_version": "1.0-semantic",
   "role_profile": {
     "cards": [

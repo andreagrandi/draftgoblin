@@ -22,6 +22,25 @@ Commitment is controlled by documented defaults in `config.py`:
 
 Rows show a `Fit` marker: `On` for cards inside the inferred pair, `Off!` for off-color cards, `Any` for colorless cards, and `Open` before the ramp starts or before a pair is available. Once locked, pair-filtered 17Lands ratings are used when present with adequate samples; otherwise all-decks ratings remain the fallback.
 
+## Pre-pick scoring context
+
+`PickScoringContext` is an immutable value with exactly two fields:
+
+- `set_profile: SetProfile`
+- `role_ledger: PoolRoleLedger`
+
+Construction validates that both fields have their declared types, the ledger
+uses `PRE_PICK_PROJECTION`, its stage is present, and its
+`profile_source` is exactly `profile:{set_profile.maturity.value}`. The
+validated ledger stage is exposed through the context's read-only `stage`
+property.
+
+`PairProfile.theme` is optional annotation-only metadata. When present, it is
+trimmed while preserving the supplied case; it labels a pair theme but does
+not affect scoring. The context is carried through `PickEngine` to
+`ScoredPack` without changing scores or ordering.
+
+
 ## Splash recommendations
 
 Splash recommendations are enabled by default. Open the TUI configuration with `c` to disable them persistently, or start a session with `draftomen-tui watch --no-splash`. `draftomen-tui replay` and `draftomen-tui backtest` also accept `--no-splash`.
