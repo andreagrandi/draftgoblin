@@ -35,7 +35,7 @@ from draftomen.carddb import (
 PathInput: TypeAlias = str | os.PathLike[str]
 ARENA_CARD_FILE_PREFIXES = ("data_cards", "Raw_CardDatabase")
 ARENA_LOCALIZATION_FILE_PREFIXES = ("data_loc", "Raw_ClientLocalization")
-CORPUS_SCHEMA_VERSION = 1
+CORPUS_SCHEMA_VERSION = 2
 MANIFEST_SCHEMA_VERSION = 1
 DEFAULT_CACHE_DIR = Path(".draftomen") / "corpus-cache"
 DEFAULT_ARTIFACT_DIR = Path(".draftomen") / "corpus-artifacts"
@@ -964,7 +964,27 @@ def _text(value: Any) -> str | None:
 def _ordered_strings(value: Any) -> list[str]:
     if not isinstance(value, (list, tuple)):
         return []
-    return list(dict.fromkeys(item.strip() for item in value if isinstance(item, str) and item.strip()))
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        item = item.strip()
+        if item and item not in seen:
+            seen.add(item)
+            values.append(item)
+    return values
+
+
+def _shared_face_text(
+    faces: Sequence[Mapping[str, Any]], field_name: str
+) -> str | None:
+    values = tuple(_text(face.get(field_name)) for face in faces)
+    if not values or any(value is None for value in values):
+        return None
+    if len(set(values)) != 1:
+        return None
+    return values[0]
 
 
 def _colors(value: Any) -> list[str]:
@@ -1003,6 +1023,8 @@ def _type_line_parts(type_line: str | None) -> tuple[str | None, list[str]]:
         return type_line, []
     _, subtype = type_line.split(separator, 1)
     return type_line, [item for item in re.split(r"[ —-]+", subtype.strip()) if item]
+
+
 def _normal_identity(value: Any) -> str:
     if value is None:
         return ""
@@ -1097,7 +1119,7 @@ def _arena_records(records: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, A
         grp_id = _int(card.get("grpid", card.get("grpId", card.get("grp_id"))))
         if grp_id is None:
             continue
-        faces = []
+        faces: list[Mapping[str, Any]] = []
         links = card.get("linkedFaces", ())
         if isinstance(links, list):
             for link in links:
@@ -1105,6 +1127,24 @@ def _arena_records(records: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, A
                 if linked is not None:
                     faces.append(linked)
         type_line = _arena_type_line(card, localization)
+        face_records = tuple(
+            {
+                "name": _arena_name(face, localization),
+                "type_line": _arena_type_line(face, localization),
+                "oracle_text": _text(face.get("oracle_text", face.get("oracleText", face.get("text")))),
+                "mana_cost": _mana_cost(face.get("castingcost", face.get("castingCost", face.get("manaCost")))),
+                "colors": _colors(face.get("colors", face.get("colorIdentity", []))),
+                "power": _text(face.get("power")),
+                "toughness": _text(face.get("toughness")),
+            }
+            for face in faces
+        )
+        power = _text(card.get("power"))
+        if power is None and len(face_records) > 1:
+            power = _shared_face_text(face_records, "power")
+        toughness = _text(card.get("toughness"))
+        if toughness is None and len(face_records) > 1:
+            toughness = _shared_face_text(face_records, "toughness")
         normalized.append(
             {
                 "grp_id": grp_id,
@@ -1118,16 +1158,9 @@ def _arena_records(records: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, A
                 "produced_mana": _arena_produced_mana(
                     card, type_line=type_line
                 ),
-                "faces": tuple(
-                    {
-                        "name": _arena_name(face, localization),
-                        "type_line": _arena_type_line(face, localization),
-                        "oracle_text": _text(face.get("oracle_text", face.get("oracleText", face.get("text")))),
-                        "mana_cost": _mana_cost(face.get("castingcost", face.get("castingCost", face.get("manaCost")))),
-                        "colors": _colors(face.get("colors", face.get("colorIdentity", []))),
-                    }
-                    for face in faces
-                ),
+                "power": power,
+                "toughness": toughness,
+                "faces": face_records,
             }
         )
     return tuple(normalized)
@@ -1237,6 +1270,7 @@ def _mtgjson_match_details(
         return narrowed[0][1], None
     return None, "ambiguous_mtgjson_oracle_identity"
 
+
 def _match_mtgjson(card: Mapping[str, Any], indexes: _SourceIndexes) -> Mapping[str, Any] | None:
     return _mtgjson_match_details(card, indexes)[0]
 
@@ -1269,6 +1303,8 @@ _DISAGREEMENT_FIELDS = (
     ("colors", ("colors",)),
     ("mana_cost", ("mana_cost", "manaCost")),
     ("mana_value", ("mana_value", "manaValue", "cmc")),
+    ("power", ("power",)),
+    ("toughness", ("toughness",)),
     ("rarity", ("rarity",)),
     ("produced_mana", ("produced_mana", "producedMana")),
 )
@@ -1327,7 +1363,9 @@ def _source_disagreements(
     return disagreements
 
 
-def _face_record(face: Mapping[str, Any], mtg_face: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _face_record(
+    face: Mapping[str, Any], mtg_face: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     type_line, subtypes = _type_line_parts(_text(_field(face, mtg_face, "type_line")))
     color_value = _field(face, mtg_face, "colors")
     return {
@@ -1340,6 +1378,8 @@ def _face_record(face: Mapping[str, Any], mtg_face: Mapping[str, Any] | None = N
         "mana_cost": _mana_cost(_field(face, mtg_face, "mana_cost")),
         "mana_value": _float(_field(face, mtg_face, "mana_value", "cmc")),
         "produced_mana": _colors(_field(face, mtg_face, "produced_mana")),
+        "power": _text(_field(face, mtg_face, "power")),
+        "toughness": _text(_field(face, mtg_face, "toughness")),
     }
 
 
@@ -1390,6 +1430,7 @@ def normalize_card(
     )
     type_line, subtypes = _type_line_parts(_text(_field(card, mtgjson, "type_line")))
     color_value = _field(card, mtgjson, "colors")
+    canonical_produced_mana = _field(card, mtgjson, "produced_mana")
     fields: dict[str, Any] = {
         "name": _text(card.get("name")),
         "arena_id": arena_identity,
@@ -1407,17 +1448,35 @@ def normalize_card(
         "colors": _color_field(color_value),
         "mana_cost": _mana_cost(_field(card, mtgjson, "mana_cost")),
         "mana_value": _float(_field(card, mtgjson, "mana_value", "cmc")),
-        "produced_mana": _colors(_field(card, mtgjson, "produced_mana")),
+        "power": _text(_field(card, mtgjson, "power")),
+        "produced_mana": (
+            _colors(canonical_produced_mana)
+            if canonical_produced_mana is not None
+            else None
+        ),
         "rarity": _text(_field(card, mtgjson, "rarity")),
+        "toughness": _text(_field(card, mtgjson, "toughness")),
     }
     if arena_card:
-        for field_name in ("oracle_text", "type_line", "mana_cost", "mana_value", "rarity"):
+        for field_name in (
+            "oracle_text",
+            "type_line",
+            "mana_cost",
+            "mana_value",
+            "power",
+            "rarity",
+            "toughness",
+        ):
             if fields[field_name] is None:
                 fields[field_name] = arena_card.get(field_name)
         if fields["colors"] is None:
             fields["colors"] = arena_card.get("colors")
         if fields["produced_mana"] is None:
             fields["produced_mana"] = arena_card.get("produced_mana")
+    if fields["power"] is None and len(normalized_faces) > 1:
+        fields["power"] = _shared_face_text(normalized_faces, "power")
+    if fields["toughness"] is None and len(normalized_faces) > 1:
+        fields["toughness"] = _shared_face_text(normalized_faces, "toughness")
     if not fields["colors"] and normalized_faces:
         fields["colors"] = _colors(
             [color for face in normalized_faces for color in (face["colors"] or [])]
@@ -1426,10 +1485,12 @@ def normalize_card(
         fields["mana_cost"] = (
             " // ".join(face["mana_cost"] for face in normalized_faces if face["mana_cost"]) or None
         )
-    if not fields["produced_mana"] and normalized_faces:
+    if fields["produced_mana"] is None and normalized_faces:
         fields["produced_mana"] = _colors(
             [color for face in normalized_faces for color in (face["produced_mana"] or [])]
         )
+    if fields["produced_mana"] is None:
+        fields["produced_mana"] = []
     if fields["type_line"] is None and normalized_faces:
         fields["type_line"] = (
             " // ".join(face["type_line"] for face in normalized_faces if face["type_line"]) or None
@@ -1487,6 +1548,7 @@ def normalize_card(
     fields["unsafe_to_classify"] = bool(unsafe_reasons)
     fields["unsafe_reasons"] = unsafe_reasons
     return fields
+
 
 def normalize_cards(
     cards: Iterable[Mapping[str, Any]],

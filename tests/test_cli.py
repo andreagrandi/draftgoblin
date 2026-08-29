@@ -101,7 +101,7 @@ def test_corpus_build_cli_local_then_offline_is_byte_stable(
     source_spec.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "sources": [
                     {
                         "name": "scryfall",
