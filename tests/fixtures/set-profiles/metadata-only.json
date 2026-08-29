@@ -1,0 +1,10 @@
+{
+  "confidence": 0.18,
+  "format": "quickdraft",
+  "generated_at": "2026-08-29T02:30:00+00:00",
+  "maturity": "metadata-only",
+  "profile_version": "1.0-metadata",
+  "schema_version": 1,
+  "set_code": "tst",
+  "source": {"artifact": "fixture-metadata-only", "provider": "fixture", "revision": "1"}
+}
