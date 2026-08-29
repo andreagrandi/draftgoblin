@@ -53,6 +53,7 @@ from draftomen.pool import (
     list_draft_states,
 )
 from draftomen.pickengine import (
+    ContextualScoreBreakdown,
     PickEngine,
     ScoredCard,
     ScoredPack,
@@ -228,8 +229,14 @@ class Recommendation:
     source_label: str
     color_fit: str
     no_data: bool
-    role_adjustment: float = 0.0
-    role_evidence: tuple[str, ...] = ()
+    contextual_breakdown: ContextualScoreBreakdown = field(
+        default_factory=ContextualScoreBreakdown
+    )
+    contextual_evidence: tuple[str, ...] = ()
+    contextual_pair: str | None = None
+    contextual_theme: str | None = None
+    contextual_profile_maturity: str | None = None
+    contextual_profile_confidence: float | None = None
     letter_grade: str | None = None
     explanation: str | None = None
 
@@ -2173,8 +2180,12 @@ class LiveSession:
             source_label=scored_card.source_label,
             color_fit=scored_card.color_fit,
             no_data=scored_card.no_data,
-            role_adjustment=scored_card.role_adjustment,
-            role_evidence=scored_card.role_evidence,
+            contextual_breakdown=scored_card.contextual_breakdown,
+            contextual_evidence=scored_card.contextual_evidence,
+            contextual_pair=scored_card.contextual_pair,
+            contextual_theme=scored_card.contextual_theme,
+            contextual_profile_maturity=scored_card.contextual_profile_maturity,
+            contextual_profile_confidence=scored_card.contextual_profile_confidence,
             letter_grade=scored_card.rating.letter_grade,
             explanation=recommendation_explanation(
                 scored_card=scored_card,

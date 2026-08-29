@@ -369,7 +369,7 @@ def test_unsupported_payoff_is_not_counted_as_supported_package() -> None:
         ]
 
 
-def test_pick_role_adjustment_is_stage_aware_and_saturates_at_target() -> None:
+def test_pick_contextual_terms_are_stage_aware_and_saturate_at_target() -> None:
     profile = _profile(
         cards=(
             ProfileCard(
@@ -413,10 +413,18 @@ def test_pick_role_adjustment_is_stage_aware_and_saturates_at_target() -> None:
         estimated_remaining_picks=7,
     ).cards[0]
 
-    assert 0 < early.role_adjustment < late.role_adjustment <= 3
-    assert early.role_evidence
-    assert met.role_adjustment == 0
-    assert met.role_evidence == ()
+    assert (
+        0
+        < early.contextual_breakdown.role
+        < late.contextual_breakdown.role
+        <= 2.5
+    )
+    assert 0 < early.contextual_breakdown.urgency < late.contextual_breakdown.urgency
+    assert early.contextual_evidence
+    assert met.contextual_breakdown.role == 0
+    assert met.contextual_breakdown.urgency == 0
+    assert met.contextual_breakdown.redundancy < 0
+    assert any("redundancy pressure" in item for item in met.contextual_evidence)
 
 
 

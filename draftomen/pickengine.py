@@ -13,9 +13,12 @@ from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.config import COLOR_PAIRS, PICK_ENGINE, SPLASH, PickEngineConfig
 from draftomen.events import EXPECTED_PICKS_PER_PACK, EXPECTED_TOTAL_PICKS
 from draftomen.pool_ledger import (
+    FIXING_ROLES,
     LedgerStage,
+    PACKAGE_ROLES,
     PoolRoleLedger,
     PRE_PICK_PROJECTION,
+    TargetCoverage,
     project_pool_role_ledger,
 )
 from draftomen.semantic_roles import Role, RoleAssignment, resolve_card_roles
@@ -47,7 +50,13 @@ STANDARD_BASIC_LAND_TYPE_LINES = frozenset(
     f"Basic Land — {name}" for name in STANDARD_BASIC_LAND_NAMES
 )
 
-MAX_ROLE_ADJUSTMENT = 3.0
+MAX_ROLE_TERM = 2.5
+MAX_URGENCY_TERM = 3.0
+MAX_SYNERGY_TERM = 1.5
+MAX_REDUNDANCY_TERM = 2.0
+MAX_UNSUPPORTED_PAYOFF_TERM = 2.0
+MAX_FIXING_TERM = 1.5
+MAX_CONTEXTUAL_ADJUSTMENT = 6.0
 PAYOFF_PACKAGES: Mapping[Role, str] = {
     Role.DRAW_SECOND_PAYOFF: "draw",
     Role.GO_WIDE_PAYOFF: "go_wide",
@@ -60,6 +69,59 @@ PAYOFF_PACKAGES: Mapping[Role, str] = {
     Role.POWER_THRESHOLD_PAYOFF: "threshold",
     Role.POWER_N_PAYOFF: "threshold",
 }
+_TERM_BOUNDS: Mapping[str, tuple[float, float]] = {
+    "role": (0.0, MAX_ROLE_TERM),
+    "urgency": (0.0, MAX_URGENCY_TERM),
+    "synergy": (0.0, MAX_SYNERGY_TERM),
+    "redundancy": (-MAX_REDUNDANCY_TERM, 0.0),
+    "unsupported_payoff": (-MAX_UNSUPPORTED_PAYOFF_TERM, 0.0),
+    "fixing": (0.0, MAX_FIXING_TERM),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ContextualScoreBreakdown:
+    """Bounded structural and semantic additions to a base card score."""
+
+    role: float = 0.0
+    urgency: float = 0.0
+    synergy: float = 0.0
+    redundancy: float = 0.0
+    unsupported_payoff: float = 0.0
+    fixing: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name, (lower, upper) in _TERM_BOUNDS.items():
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError(f"Contextual {name} term must be finite.")
+            if not lower <= float(value) <= upper:
+                raise ValueError(
+                    f"Contextual {name} term must be between {lower:g} and {upper:g}."
+                )
+            object.__setattr__(self, name, float(f"{float(value):.6f}"))
+
+    @property
+    def aggregate(self) -> float:
+        """Return the collectively capped contextual score contribution."""
+
+        return float(
+            f"{_clamp(value=sum(getattr(self, name) for name in _TERM_BOUNDS),
+                       lower=-MAX_CONTEXTUAL_ADJUSTMENT,
+                       upper=MAX_CONTEXTUAL_ADJUSTMENT):.6f}"
+        )
+
+    def to_json(self) -> dict[str, float]:
+        """Serialize each term and its collectively capped aggregate."""
+
+        return {
+            **{name: getattr(self, name) for name in _TERM_BOUNDS},
+            "aggregate": self.aggregate,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +194,7 @@ def recommendation_explanation(
     scored_card: ScoredCard,
     inferred_pair: str | None,
 ) -> str:
-    """Describe one recommendation using only scoring and pool evidence.
+    """Describe one recommendation using scoring and pool evidence.
     Wording describes supporting evidence rather than promising an outcome.
     """
 
@@ -143,9 +205,10 @@ def recommendation_explanation(
         )
 
     fit = scored_card.color_fit.replace("-", " ")
+    pair = inferred_pair or scored_card.contextual_pair
     pool_context = (
-        f"the inferred {inferred_pair} pool"
-        if inferred_pair is not None
+        f"the inferred {pair} pool"
+        if pair is not None
         else "an open-color pool"
     )
     gih_win_rate = scored_card.rating.gih_win_rate
@@ -165,15 +228,50 @@ def recommendation_explanation(
     else:
         rating_evidence = f"{scored_card.source_label} rating data"
 
-    role_note = (
-        f" {scored_card.role_evidence[0]}."
-        if scored_card.role_evidence
+    context_notes: list[str] = []
+    if scored_card.contextual_pair is not None:
+        theme = (
+            f", theme {scored_card.contextual_theme}"
+            if scored_card.contextual_theme is not None
+            else ""
+        )
+        maturity = scored_card.contextual_profile_maturity or "unknown"
+        confidence = scored_card.contextual_profile_confidence
+        confidence_note = (
+            f"{confidence:.0%} confidence"
+            if confidence is not None
+            else "unknown confidence"
+        )
+        context_notes.append(
+            f"context {scored_card.contextual_pair}{theme}; "
+            f"{maturity} profile ({confidence_note})"
+        )
+    material_terms = tuple(
+        (name, getattr(scored_card.contextual_breakdown, name))
+        for name in _TERM_BOUNDS
+        if abs(getattr(scored_card.contextual_breakdown, name)) > 0.01
+    )
+    if material_terms:
+        term_text = ", ".join(
+            f"{name} {value:+.2f}" for name, value in material_terms
+        )
+        term_text += f", aggregate {scored_card.contextual_breakdown.aggregate:+.2f}"
+        if scored_card.contextual_evidence:
+            term_text += ": " + "; ".join(scored_card.contextual_evidence)
+        context_notes.append("material terms: " + term_text)
+    elif scored_card.contextual_evidence:
+        context_notes.append(
+            "material terms: " + "; ".join(scored_card.contextual_evidence)
+        )
+    context_note = (
+        " " + " ".join(context_notes) + "."
+        if context_notes
         else ""
     )
     return (
         f"{fit.capitalize()} fit supports a {scored_card.score} DO-point "
         f"candidate for {pool_context}; {rating_evidence} informs the score."
-        f"{role_note}"
+        f"{context_note}"
     )
 
 
@@ -278,8 +376,12 @@ class ScoredCard:
     score_sort_index: int
     splash: SplashAssessment
     freely_available_basic: bool
-    role_adjustment: float = 0.0
-    role_evidence: tuple[str, ...] = ()
+    contextual_breakdown: ContextualScoreBreakdown = ContextualScoreBreakdown()
+    contextual_evidence: tuple[str, ...] = ()
+    contextual_pair: str | None = None
+    contextual_theme: str | None = None
+    contextual_profile_maturity: str | None = None
+    contextual_profile_confidence: float | None = None
 
     @property
     def no_data(self) -> bool:
@@ -357,8 +459,9 @@ class PickEngine:
     ) -> ScoredPack:
         """Return offered cards in recommendation order.
 
-        A validated context is carried through for downstream consumers but
-        does not participate in scoring until a child issue defines its terms.
+        Contextual terms use only the validated pre-pick ledger supplied by
+        ``PickScoringContext``. A profile-backed ledger built for this exact
+        pool and stage becomes that context when no explicit one is supplied.
         """
         active_context = (
             self.scoring_context if scoring_context is None else scoring_context
@@ -368,12 +471,43 @@ class PickEngine:
         ):
             raise TypeError("scoring_context must be a PickScoringContext.")
 
-        resolved_pick_index = _pick_index(
-            pool_grp_ids=pool_grp_ids,
-            pick_index=(
-                pick_index if pick_index is not None else global_pick_index
-            ),
+        explicit_indices = tuple(
+            index
+            for index in (pick_index, global_pick_index)
+            if index is not None
         )
+        if len(explicit_indices) == 2 and explicit_indices[0] != explicit_indices[1]:
+            raise ValueError("pick_index and global_pick_index conflict.")
+        if active_context is not None:
+            context_stage = active_context.stage
+            if (
+                explicit_indices
+                and explicit_indices[0] != context_stage.global_pick_index
+            ):
+                raise ValueError(
+                    "Explicit pick_index/global_pick_index conflicts with "
+                    "PickScoringContext.stage.global_pick_index."
+                )
+            for coordinate_name, explicit_value, context_value in (
+                ("pack_number", pack_number, context_stage.pack_number),
+                ("pick_number", pick_number, context_stage.pick_number),
+                (
+                    "estimated_remaining_picks",
+                    estimated_remaining_picks,
+                    context_stage.estimated_remaining_picks,
+                ),
+            ):
+                if explicit_value is not None and explicit_value != context_value:
+                    raise ValueError(
+                        f"Explicit {coordinate_name} conflicts with "
+                        f"PickScoringContext.stage.{coordinate_name}."
+                    )
+            resolved_pick_index = context_stage.global_pick_index
+        else:
+            resolved_pick_index = _pick_index(
+                pool_grp_ids=pool_grp_ids,
+                pick_index=explicit_indices[0] if explicit_indices else None,
+            )
         commitment = _color_commitment(
             pool_grp_ids=pool_grp_ids,
             pick_index=resolved_pick_index,
@@ -392,18 +526,26 @@ class PickEngine:
             ),
             enabled=self.splash_enabled,
         )
-        role_ledger = _pre_pick_ledger(
-            pool_grp_ids=pool_grp_ids,
-            card_database=card_database,
-            ratings_data=self.ratings_data,
-            set_profile=self.set_profile,
-            pick_index=pick_index,
-            pack_number=pack_number,
-            pick_number=pick_number,
-            global_pick_index=global_pick_index,
-            estimated_remaining_picks=estimated_remaining_picks,
-            likely_pair=commitment.inferred_pair,
-        )
+        if active_context is not None:
+            role_ledger = active_context.role_ledger
+        else:
+            role_ledger = _pre_pick_ledger(
+                pool_grp_ids=pool_grp_ids,
+                card_database=card_database,
+                ratings_data=self.ratings_data,
+                set_profile=self.set_profile,
+                pick_index=pick_index,
+                pack_number=pack_number,
+                pick_number=pick_number,
+                global_pick_index=global_pick_index,
+                estimated_remaining_picks=estimated_remaining_picks,
+                likely_pair=commitment.inferred_pair,
+            )
+            if role_ledger is not None and self.set_profile is not None:
+                active_context = PickScoringContext(
+                    set_profile=self.set_profile,
+                    role_ledger=role_ledger,
+                )
         best_on_color_score = self._best_on_color_score(
             offered_grp_ids=offered_grp_ids,
             card_database=card_database,
@@ -418,7 +560,7 @@ class PickEngine:
                 commitment=commitment,
                 splash_state=splash_state,
                 best_on_color_score=best_on_color_score,
-                role_ledger=role_ledger,
+                scoring_context=active_context,
             )
             for index, grp_id in enumerate(offered_grp_ids)
         )
@@ -483,7 +625,7 @@ class PickEngine:
         commitment: ColorCommitment,
         splash_state: SplashState,
         best_on_color_score: float | None,
-        role_ledger: PoolRoleLedger | None,
+        scoring_context: PickScoringContext | None,
     ) -> ScoredCard:
         card = card_database.lookup(grp_id=grp_id)
         freely_available_basic = _is_freely_available_basic_land(card=card)
@@ -521,13 +663,13 @@ class PickEngine:
             commitment=commitment,
             config=self.config,
         )
-        role_adjustment, role_evidence = _role_adjustment_for_card(
+        contextual_breakdown, contextual_evidence = _contextual_score_for_card(
             card=card,
-            role_ledger=role_ledger,
-            set_profile=self.set_profile,
+            scoring_context=scoring_context,
         )
+        contextual_adjustment = contextual_breakdown.aggregate
         raw_score = _clamp(
-            value=(base_score * color_factor) + role_adjustment,
+            value=(base_score * color_factor) + contextual_adjustment,
             lower=0.0,
             upper=100.0,
         )
@@ -569,8 +711,20 @@ class PickEngine:
             score_sort_index=original_index,
             splash=splash,
             freely_available_basic=freely_available_basic,
-            role_adjustment=role_adjustment,
-            role_evidence=role_evidence,
+            contextual_breakdown=contextual_breakdown,
+            contextual_evidence=contextual_evidence,
+            contextual_pair=(
+                None
+                if scoring_context is None
+                else scoring_context.role_ledger.likely_pair
+            ),
+            contextual_theme=_contextual_theme(scoring_context=scoring_context),
+            contextual_profile_maturity=_contextual_profile_maturity(
+                scoring_context=scoring_context,
+            ),
+            contextual_profile_confidence=_contextual_profile_confidence(
+                scoring_context=scoring_context,
+            ),
         )
 
 
@@ -581,83 +735,368 @@ def _target_names(assignment: RoleAssignment) -> tuple[str, ...]:
     return (role_name, f"removal:{assignment.removal.kind}")
 
 
-def _role_adjustment_for_card(
+def _contextual_score_for_card(
     *,
     card: CardInfo,
-    role_ledger: PoolRoleLedger | None,
-    set_profile: SetProfile | None,
-) -> tuple[float, tuple[str, ...]]:
-    """Return a small profile-backed role-need contribution for one card.
-
-    The ledger owns the projected deficit and stage urgency.  The pick engine
-    only resolves the offered card's roles and applies the bounded marginal
-    contribution, keeping ordinary no-profile scoring unchanged.
-    """
+    scoring_context: PickScoringContext | None,
+) -> tuple[ContextualScoreBreakdown, tuple[str, ...]]:
+    """Compute bounded contextual terms from one validated pre-pick context."""
 
     if (
-        role_ledger is None
-        or set_profile is None
-        or role_ledger.profile_source == "generic"
+        scoring_context is None
         or card.unknown
+        or _is_freely_available_basic_land(card=card)
     ):
-        return 0.0, ()
-    if role_ledger.likely_pair is None:
-        return 0.0, ()
-    pair_profile = set_profile.pair(role_ledger.likely_pair)
-    if pair_profile is None or not (
-        pair_profile.role_targets or pair_profile.removal_targets
-    ):
-        return 0.0, ()
+        return ContextualScoreBreakdown(), ()
 
+    profile = scoring_context.set_profile
+    ledger = scoring_context.role_ledger
+    if ledger.likely_pair is None or ledger.profile_source == "generic":
+        return ContextualScoreBreakdown(), ()
+
+    evidence_weight = _profile_evidence_weight(profile=profile)
+    stage_scale = _stage_scale(stage=scoring_context.stage)
     resolution = resolve_card_roles(
         card,
-        profile=set_profile.role_profile,
+        profile=profile.role_profile,
     )
+    if resolution.source != "compiled_profile":
+        return ContextualScoreBreakdown(), ()
     assignments = resolution.assignments
     if not assignments:
-        return 0.0, ()
+        return ContextualScoreBreakdown(), ()
 
-    unsupported_packages = {
-        package
-        for package, count in role_ledger.unsupported_payoff_counts
-        if count > 0
-    }
-    target_map = role_ledger.target_coverage_map
-    candidates: list[tuple[float, str]] = []
+    target_map = ledger.target_coverage_map
+    role_candidates: list[tuple[float, str, RoleAssignment]] = []
+    redundancy_candidates: list[tuple[float, str, RoleAssignment]] = []
     for assignment in assignments:
-        package = PAYOFF_PACKAGES.get(assignment.role)
-        if package in unsupported_packages:
-            continue
         for target_name in _target_names(assignment):
             target = target_map.get(target_name)
-            if target is None or target.deficit <= 0 or target.preferred_minimum <= 0:
+            if target is None or target.preferred_minimum <= 0:
                 continue
-            pressure = min(1.0, target.deficit / target.preferred_minimum)
-            contribution = min(
-                MAX_ROLE_ADJUSTMENT,
-                MAX_ROLE_ADJUSTMENT
-                * role_ledger.urgency
-                * pressure
-                * target.confidence
-                * assignment.confidence,
+            pressure = _target_pressure(target=target)
+            if target.deficit > 0:
+                role_candidates.append(
+                    (
+                        pressure * target.confidence * assignment.confidence,
+                        target.name,
+                        assignment,
+                    )
+                )
+            if target.count > 0:
+                redundancy_candidates.append(
+                    (
+                        max(0.0, 1.0 - target.diminishing_returns)
+                        * target.confidence
+                        * assignment.confidence,
+                        target.name,
+                        assignment,
+                    )
+                )
+
+    role_pressure = max((item[0] for item in role_candidates), default=0.0)
+    role_term = _bounded_term(
+        value=MAX_ROLE_TERM * role_pressure * stage_scale * evidence_weight,
+        lower=0.0,
+        upper=MAX_ROLE_TERM,
+    )
+
+    urgency_term = _bounded_term(
+        value=(
+            MAX_URGENCY_TERM
+            * ledger.urgency
+            * role_pressure
+            * stage_scale
+            * evidence_weight
+        ),
+        lower=0.0,
+        upper=MAX_URGENCY_TERM,
+    )
+
+    synergy_term, synergy_evidence = _semantic_synergy_term(
+        assignments=assignments,
+        ledger=ledger,
+        stage_scale=stage_scale,
+        evidence_weight=evidence_weight,
+    )
+    redundancy_term, redundancy_evidence = _redundancy_term(
+        candidates=redundancy_candidates,
+        stage_scale=stage_scale,
+        evidence_weight=evidence_weight,
+    )
+    unsupported_term, unsupported_evidence = _unsupported_payoff_term(
+        assignments=assignments,
+        ledger=ledger,
+        stage_scale=stage_scale,
+        evidence_weight=evidence_weight,
+    )
+    fixing_term, fixing_evidence = _fixing_term(
+        assignments=assignments,
+        target_map=target_map,
+        ledger=ledger,
+        stage_scale=stage_scale,
+        evidence_weight=evidence_weight,
+    )
+
+    breakdown = ContextualScoreBreakdown(
+        role=role_term,
+        urgency=urgency_term,
+        synergy=synergy_term,
+        redundancy=redundancy_term,
+        unsupported_payoff=unsupported_term,
+        fixing=fixing_term,
+    )
+    evidence: list[str] = []
+    if role_term > 0.01:
+        target_name = max(
+            role_candidates,
+            key=lambda item: (item[0], item[1]),
+            default=(0.0, "role", assignments[0]),
+        )[1]
+        evidence.append(
+            f"fills {target_name} deficit "
+            f"({target_map[target_name].count:g}/{target_map[target_name].preferred_minimum:g})"
+        )
+    if urgency_term > 0.01:
+        urgency_label = (
+            "late missing-role urgency"
+            if scoring_context.stage.global_pick_index > EXPECTED_TOTAL_PICKS // 2
+            else "emerging role urgency"
+        )
+        evidence.append(f"{urgency_label} {ledger.urgency:.2f}")
+    if synergy_term > 0.01:
+        evidence.extend(synergy_evidence)
+    if redundancy_term < -0.01:
+        evidence.extend(redundancy_evidence)
+    if unsupported_term < -0.01:
+        evidence.extend(unsupported_evidence)
+    if fixing_term > 0.01:
+        evidence.extend(fixing_evidence)
+    return breakdown, tuple(evidence)
+
+
+def _profile_evidence_weight(*, profile: SetProfile) -> float:
+    maturity_weight = {
+        "mature": 1.0,
+        "early": 0.8,
+        "semantic-only": 0.9,
+        "metadata-only": 0.45,
+        "generic": 0.0,
+    }.get(profile.maturity.value, 0.0)
+    return _clamp(value=profile.confidence * maturity_weight, lower=0.0, upper=1.0)
+
+
+def _stage_scale(*, stage: LedgerStage) -> float:
+    progress = _clamp(
+        value=(stage.global_pick_index - 1) / max(1, EXPECTED_TOTAL_PICKS - 1),
+        lower=0.0,
+        upper=1.0,
+    )
+    return _clamp(value=0.15 + (0.85 * progress), lower=0.0, upper=1.0)
+
+
+def _target_pressure(*, target: TargetCoverage) -> float:
+    if target.preferred_minimum <= 0:
+        return 0.0
+    return _clamp(
+        value=target.deficit / target.preferred_minimum,
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+def _bounded_term(*, value: float, lower: float, upper: float) -> float:
+    return float(f"{_clamp(value=value, lower=lower, upper=upper):.6f}")
+
+
+def _semantic_synergy_term(
+    *,
+    assignments: tuple[RoleAssignment, ...],
+    ledger: PoolRoleLedger,
+    stage_scale: float,
+    evidence_weight: float,
+) -> tuple[float, tuple[str, ...]]:
+    enablers = dict(ledger.enabler_counts)
+    payoffs = dict(ledger.payoff_counts)
+    candidates: list[tuple[float, str]] = []
+    for assignment in assignments:
+        for package, (enabler_roles, payoff_roles) in PACKAGE_ROLES.items():
+            if assignment.role in payoff_roles and enablers.get(package, 0) > 0:
+                other_count = enablers[package]
+            elif assignment.role in enabler_roles and payoffs.get(package, 0) > 0:
+                other_count = payoffs[package]
+            else:
+                continue
+            total_count = enablers.get(package, 0) + payoffs.get(package, 0)
+            support = _clamp(
+                value=other_count / max(1, total_count),
+                lower=0.0,
+                upper=1.0,
             )
-            if contribution <= 0:
-                continue
+            value = (
+                MAX_SYNERGY_TERM
+                * support
+                * assignment.confidence
+                * stage_scale
+                * evidence_weight
+            )
             candidates.append(
                 (
-                    contribution,
-                    (
-                        f"fills {target.name} deficit "
-                        f"({target.count:g}/{target.preferred_minimum:g}); "
-                        f"stage urgency {role_ledger.urgency:.2f}"
-                    ),
+                    value,
+                    f"supports {package} semantic package "
+                    f"({enablers.get(package, 0)} enabler(s), "
+                    f"{payoffs.get(package, 0)} payoff(s))",
                 )
             )
     if not candidates:
         return 0.0, ()
-    adjustment = max(value for value, _ in candidates)
-    evidence = tuple(sorted({reason for _, reason in candidates}))
-    return float(f"{adjustment:.6f}"), evidence
+    value, evidence = max(candidates, key=lambda item: (item[0], item[1]))
+    return _bounded_term(value=value, lower=0.0, upper=MAX_SYNERGY_TERM), (evidence,)
+
+
+def _redundancy_term(
+    *,
+    candidates: list[tuple[float, str, RoleAssignment]],
+    stage_scale: float,
+    evidence_weight: float,
+) -> tuple[float, tuple[str, ...]]:
+    if not candidates:
+        return 0.0, ()
+    pressure, target_name, assignment = max(candidates, key=lambda item: item[0])
+    value = -(
+        MAX_REDUNDANCY_TERM
+        * _clamp(value=pressure, lower=0.0, upper=1.0)
+        * stage_scale
+        * evidence_weight
+    )
+    return _bounded_term(
+        value=value,
+        lower=-MAX_REDUNDANCY_TERM,
+        upper=0.0,
+    ), (f"redundancy pressure for {target_name}",)
+
+
+def _unsupported_payoff_term(
+    *,
+    assignments: tuple[RoleAssignment, ...],
+    ledger: PoolRoleLedger,
+    stage_scale: float,
+    evidence_weight: float,
+) -> tuple[float, tuple[str, ...]]:
+    unsupported = dict(ledger.unsupported_payoff_counts)
+    payoffs = dict(ledger.payoff_counts)
+    enablers = dict(ledger.enabler_counts)
+    candidate_roles = frozenset(assignment.role for assignment in assignments)
+    candidate_enabled_packages = {
+        package
+        for package, (enabler_roles, _) in PACKAGE_ROLES.items()
+        if candidate_roles.intersection(enabler_roles)
+    }
+    candidates: list[tuple[float, str, RoleAssignment]] = []
+    for assignment in assignments:
+        package = PAYOFF_PACKAGES.get(assignment.role)
+        if (
+            package is None
+            or unsupported.get(package, 0) <= 0
+            or enablers.get(package, 0) > 0
+            or package in candidate_enabled_packages
+        ):
+            continue
+        pressure = _clamp(
+            value=unsupported[package] / max(1, payoffs.get(package, 0)),
+            lower=0.0,
+            upper=1.0,
+        )
+        candidates.append(
+            (
+                pressure,
+                f"unsupported {package} payoff (no enabler)",
+                assignment,
+            )
+        )
+    if not candidates:
+        return 0.0, ()
+    pressure, evidence, assignment = max(candidates, key=lambda item: item[0])
+    value = -(
+        MAX_UNSUPPORTED_PAYOFF_TERM
+        * pressure
+        * assignment.confidence
+        * stage_scale
+        * evidence_weight
+    )
+    return _bounded_term(
+        value=value,
+        lower=-MAX_UNSUPPORTED_PAYOFF_TERM,
+        upper=0.0,
+    ), (evidence,)
+
+
+def _fixing_term(
+    *,
+    assignments: tuple[RoleAssignment, ...],
+    target_map: dict[str, TargetCoverage],
+    ledger: PoolRoleLedger,
+    stage_scale: float,
+    evidence_weight: float,
+) -> tuple[float, tuple[str, ...]]:
+    candidates: list[tuple[float, str, RoleAssignment]] = []
+    for assignment in assignments:
+        if assignment.role not in FIXING_ROLES:
+            continue
+        target = target_map.get(assignment.role.value)
+        if target is None:
+            need = _clamp(
+                value=1.0 - (ledger.fixing_count / 2.0),
+                lower=0.0,
+                upper=1.0,
+            )
+            target_confidence = 1.0
+        else:
+            need = _target_pressure(target=target)
+            target_confidence = target.confidence
+        need *= target_confidence
+        if need > 0:
+            candidates.append(
+                (
+                    need,
+                    f"fixing need ({ledger.fixing_count} source(s))",
+                    assignment,
+                )
+            )
+    if not candidates:
+        return 0.0, ()
+    need, evidence, assignment = max(candidates, key=lambda item: item[0])
+    value = (
+        MAX_FIXING_TERM
+        * need
+        * assignment.confidence
+        * stage_scale
+        * evidence_weight
+    )
+    return _bounded_term(value=value, lower=0.0, upper=MAX_FIXING_TERM), (evidence,)
+
+
+def _contextual_theme(*, scoring_context: PickScoringContext | None) -> str | None:
+    if scoring_context is None or scoring_context.role_ledger.likely_pair is None:
+        return None
+    pair_profile = scoring_context.set_profile.pair(
+        scoring_context.role_ledger.likely_pair
+    )
+    return None if pair_profile is None else pair_profile.theme
+
+
+def _contextual_profile_maturity(
+    *,
+    scoring_context: PickScoringContext | None,
+) -> str | None:
+    return None if scoring_context is None else scoring_context.set_profile.maturity.value
+
+
+def _contextual_profile_confidence(
+    *,
+    scoring_context: PickScoringContext | None,
+) -> float | None:
+    return None if scoring_context is None else scoring_context.set_profile.confidence
 
 
 def score_pack(

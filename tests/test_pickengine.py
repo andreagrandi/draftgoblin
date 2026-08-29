@@ -8,8 +8,17 @@ import pytest
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.events import PackOfferedEvent
 from draftomen.pickengine import (
+    ContextualScoreBreakdown,
+    MAX_CONTEXTUAL_ADJUSTMENT,
+    MAX_FIXING_TERM,
+    MAX_REDUNDANCY_TERM,
+    MAX_ROLE_TERM,
+    MAX_SYNERGY_TERM,
+    MAX_UNSUPPORTED_PAYOFF_TERM,
+    MAX_URGENCY_TERM,
     PickEngine,
     PickScoringContext,
+    ScoredPack,
     recommendation_confidence_summary,
     recommendation_explanation,
 )
@@ -21,11 +30,20 @@ from draftomen.pool_ledger import (
 from draftomen.ranking import RANKING_MODES, rank_scored_cards
 from draftomen.replay import format_pack_offered_event
 from draftomen.set_profile import (
+    CardPairSynergy,
     PairProfile,
     ProfileMaturity,
+    RoleTarget,
     SampleSummary,
     SetProfile,
     SourceMetadata,
+)
+from draftomen.semantic_roles import (
+    CompiledRoleProfile,
+    ProfileCard,
+    ProducedResources,
+    Role,
+    RoleAssignment,
 )
 from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
@@ -239,6 +257,8 @@ def test_commitment_ramp_changes_same_card_score_by_pick_index() -> None:
     assert early.cards[0].color_fit == "open"
     assert mid.cards[0].color_fit == "on-color"
     assert early.cards[0].score < mid.cards[0].score < late.cards[0].score
+
+
 def test_explicit_global_pick_index_drives_commitment_and_ledger_stage() -> None:
     scored_pack = PickEngine().score_pack(
         offered_grp_ids=(7,),
@@ -256,6 +276,99 @@ def test_explicit_global_pick_index_drives_commitment_and_ledger_stage() -> None
     assert scored_pack.role_ledger.global_pick_index == 35
 
 
+def test_context_stage_index_controls_commitment_and_rejects_conflicts() -> None:
+    database = _card_database()
+    profile = _context_profile()
+    context = PickScoringContext(
+        set_profile=profile,
+        role_ledger=_context_ledger(profile=profile, database=database),
+    )
+    engine = PickEngine(scoring_context=context)
+
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(7,),
+        card_database=database,
+        pool_grp_ids=(1, 2),
+    )
+
+    assert scored_pack.commitment.pick_index == 35
+    assert scored_pack.commitment.phase == "locked"
+
+    with pytest.raises(ValueError, match="conflicts"):
+        engine.score_pack(
+            offered_grp_ids=(7,),
+            card_database=database,
+            pool_grp_ids=(1, 2),
+            pick_index=34,
+        )
+    with pytest.raises(ValueError, match="conflicts"):
+        engine.score_pack(
+            offered_grp_ids=(7,),
+            card_database=database,
+            pool_grp_ids=(1, 2),
+            global_pick_index=34,
+        )
+    with pytest.raises(ValueError, match="conflict"):
+        engine.score_pack(
+            offered_grp_ids=(7,),
+            card_database=database,
+            pool_grp_ids=(1, 2),
+            pick_index=34,
+            global_pick_index=35,
+        )
+
+
+@pytest.mark.parametrize(
+    ("coordinate", "value"),
+    [
+        ("pack_number", 1),
+        ("pick_number", 5),
+        ("pick_index", 34),
+        ("global_pick_index", 34),
+        ("estimated_remaining_picks", 6),
+    ],
+)
+def test_context_rejects_conflicting_stage_coordinates(
+    coordinate: str,
+    value: int,
+) -> None:
+    database = _card_database()
+    profile = _context_profile()
+    context = PickScoringContext(
+        set_profile=profile,
+        role_ledger=_context_ledger(profile=profile, database=database),
+    )
+
+    with pytest.raises(ValueError, match=coordinate):
+        PickEngine(scoring_context=context).score_pack(
+            offered_grp_ids=(7,),
+            card_database=database,
+            pool_grp_ids=(1, 2),
+            **{coordinate: value},
+        )
+
+
+def test_context_accepts_matching_redundant_stage_coordinates() -> None:
+    database = _card_database()
+    profile = _context_profile()
+    context = PickScoringContext(
+        set_profile=profile,
+        role_ledger=_context_ledger(profile=profile, database=database),
+    )
+
+    scored_pack = PickEngine(scoring_context=context).score_pack(
+        offered_grp_ids=(7,),
+        card_database=database,
+        pool_grp_ids=(1, 2),
+        pack_number=2,
+        pick_number=6,
+        pick_index=35,
+        global_pick_index=35,
+        estimated_remaining_picks=7,
+    )
+
+    assert scored_pack.scoring_context is context
+    assert scored_pack.commitment.pick_index == 35
 
 
 def test_off_color_cards_are_penalized_and_marked_when_committed() -> None:
@@ -1063,6 +1176,8 @@ def _card(
     mana_cost: str | None = "{2}",
     mana_value: float | None = 2.0,
     produced_mana: tuple[str, ...] = (),
+    set_code: str | None = None,
+    arena_id: int | None = None,
 ) -> CardInfo:
     return CardInfo(
         grp_id=grp_id,
@@ -1073,6 +1188,8 @@ def _card(
         types=types,
         mana_cost=mana_cost,
         produced_mana=produced_mana,
+        set_code=set_code,
+        arena_id=arena_id,
     )
 
 
@@ -1130,7 +1247,7 @@ def test_pick_scoring_context_validates_its_pre_pick_contract() -> None:
         )
 
 
-def test_scoring_context_propagates_without_changing_scores_or_order() -> None:
+def test_scoring_context_preserves_generic_scores_but_exposes_context() -> None:
     database = _card_database()
     ratings_data = _ratings_data()
     profile = _context_profile()
@@ -1157,10 +1274,590 @@ def test_scoring_context_propagates_without_changing_scores_or_order() -> None:
 
     assert through_constructor.scoring_context is context
     assert through_call.scoring_context is context
-    assert through_constructor.cards == baseline.cards
-    assert through_call.cards == baseline.cards
-    assert through_constructor.commitment == baseline.commitment
-    assert through_call.commitment == baseline.commitment
+    assert tuple(card.score for card in baseline.cards) == (90, 67, 67, 22)
+    assert tuple(card.score for card in through_constructor.cards) == (
+        90,
+        67,
+        67,
+        22,
+    )
+    assert tuple(card.card.grp_id for card in through_constructor.cards) == tuple(
+        card.card.grp_id for card in baseline.cards
+    )
+    assert tuple(card.score for card in through_call.cards) == (
+        90,
+        67,
+        67,
+        22,
+    )
+    assert tuple(card.score for card in through_call.cards) == tuple(
+        card.score for card in baseline.cards
+    )
+    assert through_constructor.commitment.pick_index == context.stage.global_pick_index
+    assert through_call.commitment.pick_index == context.stage.global_pick_index
+
+
+def test_freely_available_basic_land_ignores_contextual_adjustments() -> None:
+    generic_database = _card_database()
+    basic_land = replace(
+        generic_database.lookup(grp_id=13),
+        set_code="TST",
+        arena_id=13,
+        produced_mana=("W", "U"),
+    )
+    database = CardDatabase(cards={**generic_database.cards, 13: basic_land})
+    profile = _contextual_profile(
+        cards=(
+            ProfileCard(
+                key="arena_id:13",
+                assignments=(
+                    RoleAssignment(
+                        Role.FIXING,
+                        parameters=ProducedResources(("W", "U")),
+                    ),
+                ),
+            ),
+        ),
+        role_targets=(RoleTarget(Role.FIXING, 1),),
+    )
+    card = _score_with_context(
+        database=database,
+        profile=profile,
+        offered_grp_ids=(13,),
+        pool_grp_ids=(),
+    ).cards[0]
+
+    assert card.freely_available_basic is True
+    assert card.contextual_breakdown == ContextualScoreBreakdown()
+    assert card.contextual_evidence == ()
+    assert card.raw_score == 0
+    assert card.score == 0
+
+
+def test_contextual_terms_have_finite_individual_and_collective_bounds() -> None:
+    positive = ContextualScoreBreakdown(
+        role=MAX_ROLE_TERM,
+        urgency=MAX_URGENCY_TERM,
+        synergy=MAX_SYNERGY_TERM,
+        fixing=MAX_FIXING_TERM,
+    )
+    negative = ContextualScoreBreakdown(
+        redundancy=-MAX_REDUNDANCY_TERM,
+        unsupported_payoff=-MAX_UNSUPPORTED_PAYOFF_TERM,
+    )
+
+    assert positive.aggregate == MAX_CONTEXTUAL_ADJUSTMENT
+    assert negative.aggregate == -4.0
+    serialized = positive.to_json()
+    assert all(
+        -MAX_CONTEXTUAL_ADJUSTMENT
+        <= value
+        <= MAX_CONTEXTUAL_ADJUSTMENT
+        for value in (*serialized.values(), negative.aggregate)
+    )
+    assert serialized == {
+        "role": MAX_ROLE_TERM,
+        "urgency": MAX_URGENCY_TERM,
+        "synergy": MAX_SYNERGY_TERM,
+        "redundancy": 0.0,
+        "unsupported_payoff": 0.0,
+        "fixing": MAX_FIXING_TERM,
+        "aggregate": MAX_CONTEXTUAL_ADJUSTMENT,
+    }
+    with pytest.raises(ValueError, match="finite"):
+        ContextualScoreBreakdown(role=float("nan"))
+    with pytest.raises(ValueError, match="between"):
+        ContextualScoreBreakdown(urgency=MAX_URGENCY_TERM + 0.01)
+
+
+def test_early_quality_dominates_a_small_contextual_role_bonus() -> None:
+    database = _contextual_database()
+    profile = _contextual_profile(
+        cards=(
+            ProfileCard(
+                key="arena_id:7",
+                assignments=(RoleAssignment(Role.DRAW),),
+            ),
+        ),
+        role_targets=(RoleTarget(Role.DRAW, 1),),
+    )
+    scored_pack = _score_with_context(
+        database=database,
+        profile=profile,
+        offered_grp_ids=(7, 8),
+        pool_grp_ids=(1,),
+        global_pick_index=5,
+        pack_number=0,
+        pick_number=4,
+        estimated_remaining_picks=37,
+        ratings_data=_contextual_ratings(),
+    )
+
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+    assert scored_pack.cards[0].card.grp_id == 8
+    assert 0 < by_id[7].contextual_breakdown.role < MAX_ROLE_TERM
+    assert by_id[8].contextual_breakdown.aggregate == 0
+
+
+def test_supported_semantic_package_adds_value_without_forcing_the_card() -> None:
+    database = _contextual_database()
+    profile = _contextual_profile(
+        cards=(
+            ProfileCard(
+                key="arena_id:1",
+                assignments=(RoleAssignment(Role.GO_WIDE_ENABLER),),
+            ),
+            ProfileCard(
+                key="arena_id:2",
+                assignments=(RoleAssignment(Role.GO_WIDE_PAYOFF),),
+            ),
+        )
+    )
+    scored_pack = _score_with_context(
+        database=database,
+        profile=profile,
+        offered_grp_ids=(2, 3),
+        pool_grp_ids=(1,),
+        ratings_data=_contextual_ratings(),
+    )
+
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+    assert by_id[2].contextual_breakdown.synergy > 0
+    assert by_id[2].contextual_breakdown.unsupported_payoff == 0
+    assert scored_pack.cards[0].card.grp_id == 3
+
+
+def test_empirical_card_pair_synergy_does_not_change_contextual_score() -> None:
+    database = _contextual_database()
+    cards = (
+        ProfileCard(
+            key="arena_id:1",
+            assignments=(RoleAssignment(Role.GO_WIDE_ENABLER),),
+        ),
+        ProfileCard(
+            key="arena_id:2",
+            assignments=(RoleAssignment(Role.GO_WIDE_PAYOFF),),
+        ),
+    )
+    plain_profile = _contextual_profile(cards=cards)
+    empirical_profile = _contextual_profile(
+        cards=cards,
+        synergy=(
+            CardPairSynergy(
+                first_card="arena_id:1",
+                second_card="arena_id:2",
+                value=99.0,
+                samples=10000,
+            ),
+        ),
+    )
+
+    plain = _score_with_context(
+        database=database,
+        profile=plain_profile,
+        offered_grp_ids=(2,),
+        pool_grp_ids=(1,),
+    ).cards[0]
+    empirical = _score_with_context(
+        database=database,
+        profile=empirical_profile,
+        offered_grp_ids=(2,),
+        pool_grp_ids=(1,),
+    ).cards[0]
+
+    assert empirical.contextual_breakdown == plain.contextual_breakdown
+    assert empirical.score == plain.score
+
+
+def test_unsupported_payoff_is_penalized_without_an_enabler() -> None:
+    database = _contextual_database()
+    profile = _contextual_profile(
+        cards=(
+            ProfileCard(
+                key="arena_id:1",
+                assignments=(RoleAssignment(Role.GO_WIDE_PAYOFF),),
+            ),
+            ProfileCard(
+                key="arena_id:2",
+                assignments=(RoleAssignment(Role.GO_WIDE_PAYOFF),),
+            ),
+        )
+    )
+    card = _score_with_context(
+        database=database,
+        profile=profile,
+        offered_grp_ids=(2,),
+        pool_grp_ids=(1,),
+    ).cards[0]
+
+    assert card.contextual_breakdown.unsupported_payoff < 0
+    assert any("unsupported go_wide payoff" in item for item in card.contextual_evidence)
+
+def test_dual_role_candidate_supplies_its_own_payoff_enabler() -> None:
+    database = _contextual_database()
+    profile = _contextual_profile(
+        cards=(
+            ProfileCard(
+                key="arena_id:1",
+                assignments=(RoleAssignment(Role.GO_WIDE_PAYOFF),),
+            ),
+            ProfileCard(
+                key="arena_id:2",
+                assignments=(
+                    RoleAssignment(Role.GO_WIDE_ENABLER),
+                    RoleAssignment(Role.GO_WIDE_PAYOFF),
+                ),
+            ),
+        )
+    )
+
+    card = _score_with_context(
+        database=database,
+        profile=profile,
+        offered_grp_ids=(2,),
+        pool_grp_ids=(1,),
+    ).cards[0]
+
+    assert card.contextual_breakdown.unsupported_payoff == 0
+    assert not any(
+        "unsupported go_wide payoff" in item for item in card.contextual_evidence
+    )
+
+
+def test_fixing_and_redundancy_terms_use_projected_pool_evidence() -> None:
+    database = _contextual_database()
+    profile = _contextual_profile(
+        cards=(
+            ProfileCard(
+                key="arena_id:4",
+                assignments=(RoleAssignment(Role.DRAW),),
+            ),
+            ProfileCard(
+                key="arena_id:5",
+                assignments=(RoleAssignment(Role.DRAW),),
+            ),
+            ProfileCard(
+                key="arena_id:6",
+                assignments=(
+                    RoleAssignment(
+                        Role.FIXING,
+                        parameters=ProducedResources(("W", "U")),
+                    ),
+                ),
+            ),
+        ),
+        role_targets=(
+            RoleTarget(Role.DRAW, 1),
+            RoleTarget(Role.FIXING, 2),
+        ),
+    )
+    scored_pack = _score_with_context(
+        database=database,
+        profile=profile,
+        offered_grp_ids=(5, 6),
+        pool_grp_ids=(4,),
+    )
+
+    by_id = {card.card.grp_id: card for card in scored_pack.cards}
+    assert by_id[5].contextual_breakdown.redundancy < 0
+    assert by_id[6].contextual_breakdown.fixing > 0
+    assert any("redundancy pressure" in item for item in by_id[5].contextual_evidence)
+    assert any("fixing need" in item for item in by_id[6].contextual_evidence)
+
+def test_fixing_does_not_fallback_when_target_is_met_or_zero() -> None:
+    database = _contextual_database()
+    cards = (
+        ProfileCard(
+            key="arena_id:6",
+            assignments=(
+                RoleAssignment(
+                    Role.FIXING,
+                    parameters=ProducedResources(("W", "U")),
+                ),
+            ),
+        ),
+    )
+    met_profile = _contextual_profile(
+        cards=cards,
+        role_targets=(RoleTarget(Role.FIXING, 1),),
+    )
+    zero_profile = _contextual_profile(
+        cards=cards,
+        role_targets=(RoleTarget(Role.FIXING, 0),),
+    )
+
+    met_card = _score_with_context(
+        database=database,
+        profile=met_profile,
+        offered_grp_ids=(6,),
+        pool_grp_ids=(6,),
+    ).cards[0]
+    zero_card = _score_with_context(
+        database=database,
+        profile=zero_profile,
+        offered_grp_ids=(6,),
+        pool_grp_ids=(),
+    ).cards[0]
+
+    assert met_card.contextual_breakdown.fixing == 0
+    assert zero_card.contextual_breakdown.fixing == 0
+
+
+def test_role_evidence_tie_uses_target_name_without_comparing_assignments() -> None:
+    database = _contextual_database()
+    profile = _contextual_profile(
+        cards=(
+            ProfileCard(
+                key="arena_id:6",
+                assignments=(
+                    RoleAssignment(
+                        Role.FIXING,
+                        parameters=ProducedResources(("W",)),
+                    ),
+                    RoleAssignment(
+                        Role.FIXING,
+                        parameters=ProducedResources(("U",)),
+                    ),
+                ),
+            ),
+        ),
+        role_targets=(RoleTarget(Role.FIXING, 1),),
+    )
+
+    card = _score_with_context(
+        database=database,
+        profile=profile,
+        offered_grp_ids=(6,),
+        pool_grp_ids=(),
+    ).cards[0]
+
+    assert card.contextual_breakdown.role > 0
+    assert any("fills fixing deficit" in item for item in card.contextual_evidence)
+
+
+def test_generic_target_confidence_scales_redundancy_penalty() -> None:
+    database = _contextual_database()
+    cards = (
+        ProfileCard(
+            key="arena_id:5",
+            assignments=(RoleAssignment(Role.DRAW),),
+        ),
+    )
+    generic_card = _score_with_context(
+        database=database,
+        profile=_contextual_profile(cards=cards),
+        offered_grp_ids=(5,),
+        pool_grp_ids=(5,),
+    ).cards[0]
+    explicit_card = _score_with_context(
+        database=database,
+        profile=_contextual_profile(
+            cards=cards,
+            role_targets=(RoleTarget(Role.DRAW, 1),),
+        ),
+        offered_grp_ids=(5,),
+        pool_grp_ids=(5,),
+    ).cards[0]
+
+    assert generic_card.contextual_breakdown.redundancy == pytest.approx(
+        explicit_card.contextual_breakdown.redundancy * 0.25, abs=5e-7
+    )
+
+
+def test_low_confidence_target_scales_targeted_fixing() -> None:
+    database = _contextual_database()
+    profile = _contextual_profile(
+        cards=(
+            ProfileCard(
+                key="arena_id:6",
+                assignments=(
+                    RoleAssignment(
+                        Role.FIXING,
+                        parameters=ProducedResources(("W", "U")),
+                    ),
+                ),
+            ),
+        ),
+        role_targets=(RoleTarget(Role.FIXING, 2),),
+    )
+    high_confidence = _score_with_context(
+        database=database,
+        profile=profile,
+        offered_grp_ids=(6,),
+        pool_grp_ids=(),
+    ).cards[0]
+
+    ledger = _context_ledger(profile=profile, database=database)
+    low_confidence_coverage = tuple(
+        replace(item, confidence=0.25)
+        if item.name == Role.FIXING.value
+        else item
+        for item in ledger.target_coverage
+    )
+    low_confidence_ledger = replace(
+        ledger,
+        target_coverage=low_confidence_coverage,
+    )
+    low_confidence = PickEngine(
+        scoring_context=PickScoringContext(
+            set_profile=profile,
+            role_ledger=low_confidence_ledger,
+        )
+    ).score_pack(
+        offered_grp_ids=(6,),
+        card_database=database,
+        pool_grp_ids=(),
+    ).cards[0]
+
+    assert low_confidence.contextual_breakdown.fixing == pytest.approx(
+        high_confidence.contextual_breakdown.fixing * 0.25
+    )
+
+
+def test_explanation_exposes_context_metadata_and_material_late_terms() -> None:
+    database = _contextual_database()
+    profile = _contextual_profile(
+        cards=(
+            ProfileCard(
+                key="arena_id:7",
+                assignments=(RoleAssignment(Role.DRAW),),
+            ),
+        ),
+        role_targets=(RoleTarget(Role.DRAW, 1),),
+        theme="patient card advantage",
+    )
+    card = _score_with_context(
+        database=database,
+        profile=profile,
+        offered_grp_ids=(7,),
+        pool_grp_ids=(1,),
+    ).cards[0]
+    explanation = recommendation_explanation(
+        scored_card=card,
+        inferred_pair="WU",
+    )
+
+    assert "context WU, theme patient card advantage" in explanation
+    assert "mature profile (100% confidence)" in explanation
+    assert "material terms:" in explanation
+    assert "role +" in explanation
+    assert "urgency +" in explanation
+    assert "late missing-role urgency" in explanation
+
+
+def _score_with_context(
+    *,
+    database: CardDatabase,
+    profile: SetProfile,
+    offered_grp_ids: tuple[int, ...],
+    pool_grp_ids: tuple[int, ...],
+    ratings_data: SeventeenLandsData | None = None,
+    pack_number: int = 2,
+    pick_number: int = 6,
+    global_pick_index: int = 35,
+    estimated_remaining_picks: int = 7,
+) -> ScoredPack:
+    ledger = project_pool_role_ledger(
+        pool_before_pick=pool_grp_ids,
+        pack_number=pack_number,
+        pick_number=pick_number,
+        global_pick_index=global_pick_index,
+        estimated_remaining_picks=estimated_remaining_picks,
+        card_database=database,
+        ratings_data=ratings_data,
+        set_profile=profile,
+        likely_pair="WU",
+    )
+    context = PickScoringContext(set_profile=profile, role_ledger=ledger)
+    return PickEngine(
+        ratings_data=ratings_data,
+        scoring_context=context,
+    ).score_pack(
+        offered_grp_ids=offered_grp_ids,
+        card_database=database,
+        pool_grp_ids=pool_grp_ids,
+    )
+
+
+def _contextual_profile(
+    *,
+    cards: tuple[ProfileCard, ...],
+    role_targets: tuple[RoleTarget, ...] = (),
+    theme: str | None = None,
+    confidence: float = 1.0,
+    synergy: tuple[CardPairSynergy, ...] = (),
+) -> SetProfile:
+    pair = PairProfile(
+        pair="WU",
+        role_targets=role_targets,
+        synergy=synergy,
+        theme=theme,
+    )
+    return SetProfile(
+        set_code="TST",
+        event_format="quickdraft",
+        profile_version="contextual-test",
+        generated_at="1970-01-01T00:00:00+00:00",
+        source=SourceMetadata(provider="test"),
+        maturity=ProfileMaturity.MATURE,
+        samples=SampleSummary(total=1, by_pair=(("WU", 1),)),
+        confidence=confidence,
+        pairs=(pair,),
+        role_profile=CompiledRoleProfile(set_code="TST", cards=cards),
+    )
+
+
+def _contextual_database() -> CardDatabase:
+    return CardDatabase(
+        cards={
+            grp_id: _card(
+                grp_id=grp_id,
+                name=f"Context Card {grp_id}",
+                colors=("W",),
+                set_code="TST",
+                arena_id=grp_id,
+            )
+            for grp_id in (1, 2, 3, 4, 7, 8)
+        }
+        | {
+            5: _card(
+                grp_id=5,
+                name="Context Draw Redundant",
+                colors=("W",),
+                set_code="TST",
+                arena_id=5,
+            ),
+            6: _card(
+                grp_id=6,
+                name="Context Fixing",
+                colors=(),
+                types=("Land",),
+                mana_cost=None,
+                mana_value=None,
+                produced_mana=("W", "U"),
+                set_code="TST",
+                arena_id=6,
+            ),
+        },
+    )
+
+
+def _contextual_ratings() -> SeventeenLandsData:
+    data = _ratings_data()
+    primary = replace(
+        data.primary,
+        card_ratings={
+            grp_id: _stats(
+                grp_id=grp_id,
+                name=f"Context Card {grp_id}",
+                color="W",
+                gih=0.9 if grp_id == 3 or grp_id == 8 else 0.5,
+                games_in_hand=900,
+            )
+            for grp_id in (1, 2, 3, 4, 5, 6, 7, 8)
+        },
+    )
+    return replace(data, primary=primary)
 
 
 def _context_profile() -> SetProfile:
