@@ -895,7 +895,7 @@ def _run_generate_profile_cli(
         "--set-code",
         "TST",
         "--format",
-        "QuickDraft",
+        "quickdraft",
         "--stage",
         stage,
         "--generated-at",

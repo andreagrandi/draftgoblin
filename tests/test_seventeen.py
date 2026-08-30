@@ -28,6 +28,7 @@ from draftomen.seventeen import (
     augment_card_database_from_ratings,
     has_cached_17lands_data,
     load_17lands_structure_targets,
+    load_17lands_format_data,
     load_cached_17lands_data,
     load_or_refresh_17lands_data,
     load_or_refresh_17lands_format_data,
@@ -42,6 +43,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 QUICK_CARD_RATINGS_PATH = FIXTURE_DIR / "17lands-card-ratings-quick.json"
 PREMIER_CARD_RATINGS_PATH = FIXTURE_DIR / "17lands-card-ratings-premier.json"
 COLOR_RATINGS_PATH = FIXTURE_DIR / "17lands-color-ratings.json"
+PROFILE_GENERATION_RATINGS_PATH = FIXTURE_DIR / "profile-generation" / "ratings.json"
 
 
 class FrozenClock:
@@ -114,6 +116,28 @@ def test_17lands_format_data_is_cached_and_not_refetched_within_24h(
         event_format=QUICK_DRAFT_FORMAT,
         app_dir=tmp_path,
     ).exists()
+
+
+def test_explicit_ratings_loader_accepts_case_insensitive_format() -> None:
+    dataset = load_17lands_format_data(
+        set_code="tst",
+        event_format="quickdraft",
+        cache_path=PROFILE_GENERATION_RATINGS_PATH,
+    )
+
+    assert dataset.event_format == "QuickDraft"
+
+
+def test_explicit_ratings_loader_rejects_a_different_format() -> None:
+    with pytest.raises(
+        SeventeenLandsError,
+        match="17Lands cache .* is for format QuickDraft, not PremierDraft.",
+    ):
+        load_17lands_format_data(
+            set_code="TST",
+            event_format="PremierDraft",
+            cache_path=PROFILE_GENERATION_RATINGS_PATH,
+        )
 
 
 def test_17lands_refresh_refetches_fresh_cache(

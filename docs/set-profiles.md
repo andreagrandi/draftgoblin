@@ -47,6 +47,9 @@ The optional input and metadata options are:
 - `--profile-version VERSION`: the non-empty profile artifact version. It
   defaults to `1.0`.
 
+Set and format inputs are stripped and case-folded for profile, report, and
+publication-path identity. A pinned ratings cache must identify the requested
+set and format case-insensitively; its stored metadata is retained unchanged.
 The set code, format, and every input path are explicit. Keep the card database
 and ratings files unchanged when reproducibility matters. A source manifest is
 the pin for a draft dump: its `sha256` is the digest of the exact local bytes,

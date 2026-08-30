@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Fix `generate-profile --format quickdraft` to accept pinned ratings caches
+  with `QuickDraft` metadata in any casing while preserving normalized profile
+  identity.
 - Add the local-only `generate-profile` workflow for staged metadata, early,
   and mature set-profile artifacts with pinned inputs, validation, atomic
   publication, deterministic checksums, and privacy-safe aggregate output.
