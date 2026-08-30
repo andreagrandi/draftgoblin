@@ -4,13 +4,9 @@ Keep network access isolated so CI can exercise recorded responses only.
 
 from __future__ import annotations
 
-import csv
-import gzip
-import io
 import json
 import math
 import shutil
-import tarfile
 import tempfile
 import urllib.error
 import urllib.parse
@@ -40,6 +36,7 @@ from draftomen.config import (
     DeckBuilderConfig,
 )
 from draftomen.paths import app_data_dir
+from draftomen.public_dump import PublicDumpError, iter_public_dump_rows
 
 PathInput: TypeAlias = str | PathLike[str]
 Clock: TypeAlias = Callable[[], datetime]
@@ -1064,10 +1061,16 @@ def public_draft_data_url(*, set_code: str, event_format: str) -> str:
 
 def iter_17lands_draft_data_rows(*, path: PathInput) -> Iterable[Mapping[str, str]]:
     """Iterate rows from a public 17Lands draft-data dump.
-    CSV, CSV gzip, and tar archives use the same reader path.
+
+    The neutral public-dump reader owns container handling and CSV parsing;
+    this compatibility boundary preserves the historical row mapping API and
+    error type.
     """
 
-    return _iter_draft_data_rows(path=path)
+    try:
+        yield from iter_public_dump_rows(path)
+    except PublicDumpError as error:
+        raise SeventeenLandsError(str(error)) from error
 
 
 def card_ratings_url(
@@ -1955,7 +1958,7 @@ def _trophy_decks_from_draft_data(
     config: DeckBuilderConfig,
 ) -> dict[str, list[CardInfo]]:
     return _trophy_decks_from_rows(
-        rows=_iter_draft_data_rows(path=path),
+        rows=iter_17lands_draft_data_rows(path=path),
         set_code=set_code,
         event_format=event_format,
         card_database=card_database,
@@ -2019,47 +2022,6 @@ def _draft_row_matches(
     return row_format in {None, "", event_format}
 
 
-def _iter_draft_data_rows(*, path: PathInput) -> Iterable[Mapping[str, str]]:
-    draft_path = Path(path)
-    if tarfile.is_tarfile(draft_path):
-        with tarfile.open(draft_path, mode="r:*") as archive:
-            member = _first_regular_tar_member(archive=archive)
-            if member is None:
-                raise SeventeenLandsError(
-                    f"17Lands draft data archive {draft_path} contains no files."
-                )
-
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                raise SeventeenLandsError(
-                    f"Could not read {member.name} from {draft_path}."
-                )
-
-            with extracted:
-                with io.TextIOWrapper(
-                    extracted,
-                    encoding="utf-8",
-                    newline="",
-                ) as text_file:
-                    yield from csv.DictReader(text_file)
-
-        return
-
-    if draft_path.suffix == ".gz":
-        with gzip.open(draft_path, mode="rt", encoding="utf-8", newline="") as csv_file:
-            yield from csv.DictReader(csv_file)
-        return
-
-    with draft_path.open(mode="rt", encoding="utf-8", newline="") as csv_file:
-        yield from csv.DictReader(csv_file)
-
-
-def _first_regular_tar_member(*, archive: tarfile.TarFile) -> tarfile.TarInfo | None:
-    for member in archive:
-        if member.isfile():
-            return member
-
-    return None
 
 
 def _download_public_draft_data(
