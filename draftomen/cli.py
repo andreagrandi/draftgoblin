@@ -5,6 +5,7 @@ Define parser wiring and command handlers.
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -34,6 +35,10 @@ from draftomen.carddb import (
 from draftomen.set_profile import (
     SetProfileError,
     load_scoring_profile,
+)
+from draftomen.profile_publication import (
+    ProfilePublicationError,
+    generate_local_profile_artifacts,
 )
 from draftomen.corpus import (
     CorpusError,
@@ -527,7 +532,129 @@ def build_parser() -> argparse.ArgumentParser:
     )
     structure_parser.set_defaults(handler=handle_refresh_structure_targets)
 
+    profile_parser = subparsers.add_parser(
+        name="generate-profile",
+        help="Generate and publish a validated local set profile.",
+        description=(
+            "Generate a deterministic profile from explicitly pinned local "
+            "inputs and publish its validated artifact and generation marker."
+        ),
+    )
+    profile_parser.add_argument(
+        "--set-code",
+        required=True,
+        help="Set code for the profile to generate.",
+    )
+    profile_parser.add_argument(
+        "--format",
+        required=True,
+        help="17Lands event format for the profile to generate.",
+    )
+    profile_parser.add_argument(
+        "--stage",
+        required=True,
+        choices=("metadata", "early", "mature"),
+        help="Explicit profile generation stage.",
+    )
+    profile_parser.add_argument(
+        "--generated-at",
+        required=True,
+        type=_parse_generated_at,
+        help="Timezone-aware ISO-8601 generation timestamp.",
+    )
+    profile_parser.add_argument(
+        "--card-database-file",
+        required=True,
+        type=Path,
+        help="Local card database JSON cache.",
+    )
+    profile_parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help="Directory for the profile artifact and generation marker.",
+    )
+    profile_parser.add_argument(
+        "--ratings-file",
+        type=Path,
+        default=None,
+        help="Optional local 17Lands ratings JSON cache.",
+    )
+    profile_parser.add_argument(
+        "--source-manifest",
+        type=Path,
+        default=None,
+        help="Optional manifest selecting a pinned local draft-data source.",
+    )
+    profile_parser.add_argument(
+        "--draft-source-name",
+        default=None,
+        help="Optional source name to select from --source-manifest.",
+    )
+    profile_parser.add_argument(
+        "--profile-version",
+        default="1.0",
+        help="Profile schema version to embed (default: 1.0).",
+    )
+    profile_parser.set_defaults(handler=handle_generate_profile)
     return parser
+
+
+def _parse_generated_at(value: str) -> datetime:
+    """Parse a required timezone-aware ISO-8601 timestamp."""
+
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            "--generated-at must be a valid ISO-8601 timestamp."
+        ) from error
+    if parsed.tzinfo is None:
+        raise argparse.ArgumentTypeError(
+            "--generated-at must include a timezone offset."
+        )
+    try:
+        if parsed.utcoffset() is None:
+            raise argparse.ArgumentTypeError(
+                "--generated-at must include a timezone offset."
+            )
+        return parsed.astimezone(UTC)
+    except (OverflowError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            "--generated-at must be representable after UTC normalization."
+        ) from error
+
+
+def handle_generate_profile(args: argparse.Namespace) -> int:
+    """Generate and publish one validated local profile artifact."""
+
+    try:
+        result = generate_local_profile_artifacts(
+            set_code=args.set_code,
+            event_format=args.format,
+            stage=args.stage,
+            generated_at=args.generated_at,
+            card_database_path=args.card_database_file,
+            output_dir=args.output_dir,
+            ratings_path=args.ratings_file,
+            source_manifest_path=args.source_manifest,
+            draft_source_name=args.draft_source_name,
+            profile_version=args.profile_version,
+        )
+    except ProfilePublicationError as error:
+        print(f"generate-profile: {error}", file=sys.stderr)
+        return 1
+
+    maturity = result.generation.profile.maturity.value
+    print(f"maturity={maturity}")
+    print(f"input_count={result.input_count}")
+    print(f"sample_count={result.sample_count}")
+    print(f"skip_count={result.skip_count}")
+    print(f"error_count={result.error_count}")
+    print(f"validation={result.validation_outcome}")
+    print(f"artifact={result.artifact_path}")
+    print(f"generation_manifest={result.manifest_path}")
+    return 0
 
 
 def format_version() -> str:

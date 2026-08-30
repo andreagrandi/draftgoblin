@@ -74,13 +74,19 @@ download them.
 ### Terminal interface
 
 For a terminal workflow, use the stable `draftomen-tui` command. It preserves
-the watch, replay, build, backtest, benchmark, and data-refresh subcommands,
-including plain-text mode:
+the watch, replay, build, backtest, benchmark, data-refresh, and local
+`generate-profile` subcommands:
 
 ```bash
 draftomen-tui
 draftomen-tui watch --plain
 ```
+
+To generate a deterministic local set profile from pinned input files, use
+`generate-profile` with explicit set, format, stage, timezone-aware timestamp,
+card-database, and output paths. The complete metadata, early, and mature
+workflow, including optional ratings and source-manifest flags, is documented
+in [set profiles](docs/set-profiles.md).
 
 For development-only semantic analysis, use the reproducible [card corpus
 workflow](docs/corpus.md). It keeps pinned source bytes and locks outside

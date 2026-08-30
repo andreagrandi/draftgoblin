@@ -1,0 +1,512 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+import draftomen.profile_publication as publication
+from draftomen.carddb import CardDatabase, CardInfo
+from draftomen.config import COLOR_PAIRS, DeckBuilderConfig
+from draftomen.profile_generation import ProfileGenerationConfig
+from draftomen.public_dump import PublicDumpManifest, PublicDumpSource
+from draftomen.profile_statistics import BetaPrior
+from draftomen.seventeen import (
+    ColorPairWinRate,
+    RatingSampleCounts,
+    SeventeenCardStats,
+    SeventeenLandsFormatData,
+)
+from draftomen.set_profile import SetProfile
+
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "profile-generation"
+GENERATED_AT = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+
+
+def _database() -> CardDatabase:
+    return CardDatabase(
+        cards={
+            1: CardInfo(
+                grp_id=1,
+                name="Support Creature",
+                colors=("W", "U"),
+                mana_value=2,
+                rarity="common",
+                types=("Creature",),
+                type_line="Creature — Advisor",
+                oracle_text="Whenever this enters the battlefield, draw a card.",
+                oracle_id="support-id",
+                set_code="TST",
+            ),
+            2: CardInfo(
+                grp_id=2,
+                name="Removal Spell",
+                colors=("W", "U"),
+                mana_value=2,
+                rarity="common",
+                types=("Instant",),
+                type_line="Instant",
+                oracle_text="Destroy target creature.",
+                oracle_id="removal-id",
+                set_code="TST",
+            ),
+        }
+    )
+
+
+def _ratings() -> SeventeenLandsFormatData:
+    return SeventeenLandsFormatData(
+        set_code="TST",
+        event_format="QuickDraft",
+        fetched_at=GENERATED_AT,
+        card_ratings={
+            1: SeventeenCardStats(
+                grp_id=1,
+                name="Support Creature",
+                color="WU",
+                rarity="common",
+                average_last_seen_at=3.5,
+                gih_win_rate=0.60,
+                opening_hand_win_rate=None,
+                drawn_improvement_win_rate=None,
+                sample_counts=RatingSampleCounts(100, 50, 40, 20, 10),
+            )
+        },
+        pair_win_rates={
+            pair: ColorPairWinRate(pair=pair, wins=6, games=10, win_rate=0.60)
+            for pair in COLOR_PAIRS[:1]
+        },
+    )
+
+
+def _config() -> ProfileGenerationConfig:
+    return ProfileGenerationConfig(
+        card_prior=BetaPrior(mean=0.50, strength=500.0),
+        pair_prior=BetaPrior(mean=0.50, strength=500.0),
+        deck_builder_config=DeckBuilderConfig(
+            deck_size=40,
+            structure_min_land_count=14,
+            structure_max_land_count=20,
+        ),
+    )
+
+
+def _write_inputs(tmp_path: Path, *, ratings: bool = False) -> tuple[Path, Path | None]:
+    card_database_path = tmp_path / "cards.json"
+    card_database_path.write_text(
+        json.dumps(_database().to_json()),
+        encoding="utf-8",
+    )
+    ratings_path = None
+    if ratings:
+        ratings_path = tmp_path / "ratings.json"
+        ratings_path.write_text(json.dumps(_ratings().to_json()), encoding="utf-8")
+    return card_database_path, ratings_path
+
+
+def _manifest(tmp_path: Path, *names: str) -> Path:
+    sources = []
+    for name in names:
+        source_path = FIXTURE_DIR / name
+        relative_path = os.path.relpath(source_path, start=tmp_path)
+        sources.append(
+            PublicDumpSource(
+                name=name,
+                path=relative_path,
+                sha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                attribution="fixture public data",
+                license="CC0",
+            )
+        )
+    path = tmp_path / "manifest.json"
+    path.write_bytes(PublicDumpManifest(sources=tuple(sources)).to_bytes())
+    return path
+
+
+def _publish(
+    tmp_path: Path,
+    *,
+    stage: str = "metadata",
+    ratings: bool = False,
+    manifest: Path | None = None,
+    draft_source_name: str | None = None,
+    generated_at: datetime = GENERATED_AT,
+) -> publication.ProfilePublicationResult:
+    card_database_path, ratings_path = _write_inputs(tmp_path, ratings=ratings)
+    return publication.generate_local_profile_artifacts(
+        set_code="TST",
+        event_format="QuickDraft",
+        stage=stage,
+        generated_at=generated_at,
+        card_database_path=card_database_path,
+        output_dir=tmp_path / "published",
+        ratings_path=ratings_path,
+        source_manifest_path=manifest,
+        draft_source_name=draft_source_name,
+        config=_config(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_change", "expected_error"),
+    [
+        ("missing", "Could not verify the selected local draft source."),
+        ("mismatched", "The selected draft source does not match its SHA-256 pin."),
+    ],
+)
+def test_metadata_source_is_verified_before_generation(
+    source_change: str,
+    expected_error: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest(tmp_path, "no-data.csv")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    source = payload["sources"][0]
+    if source_change == "missing":
+        source["path"] = str(tmp_path / "missing-source.csv")
+    else:
+        source["sha256"] = "0" * 64
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    generation_called = False
+
+    def fail_if_called(**_: object) -> object:
+        nonlocal generation_called
+        generation_called = True
+        raise AssertionError("generation must not run for an unverifiable source")
+
+    monkeypatch.setattr(publication, "generate_set_profile", fail_if_called)
+    with pytest.raises(
+        publication.ProfilePublicationError,
+        match=expected_error,
+    ) as raised:
+        _publish(tmp_path, manifest=manifest)
+    assert "no-data.csv" not in str(raised.value)
+    assert str(tmp_path) not in str(raised.value)
+    assert not generation_called
+
+
+
+def test_early_source_checksum_failure_is_actionable_and_private(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path, "no-data.csv")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["sources"][0]["sha256"] = "0" * 64
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        publication.ProfilePublicationError,
+        match="The selected draft source does not match its SHA-256 pin.",
+    ) as raised:
+        _publish(tmp_path, stage="early", ratings=True, manifest=manifest)
+    assert "no-data.csv" not in str(raised.value)
+    assert str(FIXTURE_DIR) not in str(raised.value)
+    assert not (tmp_path / "published").exists()
+
+
+@pytest.mark.parametrize(
+    ("loader_name", "with_ratings", "with_manifest", "expected_error"),
+    [
+        (
+            "load_card_database",
+            False,
+            False,
+            "Could not load the card database input.",
+        ),
+        ("load_17lands_format_data", True, False, "Could not load the ratings input."),
+        ("load_public_dump_manifest", False, True, "Could not load the source manifest."),
+    ],
+)
+def test_input_loader_recursion_errors_are_wrapped(
+    loader_name: str,
+    with_ratings: bool,
+    with_manifest: bool,
+    expected_error: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest(tmp_path, "no-data.csv") if with_manifest else None
+
+    def recurse(*_: object, **__: object) -> object:
+        raise RecursionError("private loader details")
+
+    monkeypatch.setattr(publication, loader_name, recurse)
+    with pytest.raises(publication.ProfilePublicationError, match=expected_error):
+        _publish(
+            tmp_path,
+            ratings=with_ratings,
+            manifest=manifest,
+        )
+    assert not (tmp_path / "published").exists()
+
+
+def test_artifact_helper_precedes_marker_and_failed_artifact_preserves_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _publish(tmp_path)
+    first_marker = first.manifest_path.read_bytes()
+    calls: list[str] = []
+    publish_artifact = publication._reuse_or_publish_artifact
+    publish_marker = publication._publish_generation_marker
+
+    def record_artifact(**kwargs: object) -> None:
+        calls.append("artifact")
+        publish_artifact(**kwargs)
+
+    def record_marker(**kwargs: object) -> None:
+        calls.append("marker")
+        publish_marker(**kwargs)
+
+    monkeypatch.setattr(publication, "_reuse_or_publish_artifact", record_artifact)
+    monkeypatch.setattr(publication, "_publish_generation_marker", record_marker)
+    second = _publish(tmp_path, generated_at=GENERATED_AT + timedelta(seconds=1))
+    assert calls == ["artifact", "marker"]
+    assert second.manifest_path.read_bytes() != first_marker
+
+    marker_before_failure = second.manifest_path.read_bytes()
+    calls.clear()
+
+    def fail_artifact(**_: object) -> None:
+        calls.append("artifact")
+        raise publication.ProfilePublicationError("artifact write failed")
+
+    monkeypatch.setattr(publication, "_reuse_or_publish_artifact", fail_artifact)
+    with pytest.raises(publication.ProfilePublicationError, match="artifact write failed"):
+        _publish(tmp_path, generated_at=GENERATED_AT + timedelta(seconds=2))
+    assert calls == ["artifact"]
+    assert second.manifest_path.read_bytes() == marker_before_failure
+
+
+class _CorruptGzipResult(publication.ProfileGenerationResult):
+    @property
+    def gzip_bytes(self) -> bytes:
+        return b"not a gzip stream"
+
+
+class _NoncanonicalProfileResult(publication.ProfileGenerationResult):
+    @property
+    def profile_bytes(self) -> bytes:
+        value = json.loads(super().profile_bytes)
+        return (json.dumps(value) + "\n").encode("utf-8")
+
+
+def _valid_generation() -> publication.ProfileGenerationResult:
+    return publication.generate_set_profile(
+        set_code="TST",
+        event_format="QuickDraft",
+        stage="metadata",
+        generated_at=GENERATED_AT,
+        card_database=_database(),
+        config=_config(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("malformation", "expected_error"),
+    [
+        ("corrupt-gzip", "Generated profile gzip could not be validated."),
+        ("noncanonical", "Generated profile bytes are not canonical."),
+        ("report-checksum", "Generation report checksums or sizes do not reconcile."),
+        ("report-size", "Generation report checksums or sizes do not reconcile."),
+    ],
+)
+def test_malformed_generation_result_is_rejected_before_publication(
+    malformation: str,
+    expected_error: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = _valid_generation()
+    if malformation == "corrupt-gzip":
+        malformed: publication.ProfileGenerationResult = _CorruptGzipResult(
+            profile=generation.profile,
+            report=generation.report,
+        )
+    elif malformation == "noncanonical":
+        malformed = _NoncanonicalProfileResult(
+            profile=generation.profile,
+            report=generation.report,
+        )
+    elif malformation == "report-checksum":
+        malformed = replace(
+            generation,
+            report=replace(generation.report, gzip_sha256="0" * 64),
+        )
+    else:
+        malformed = replace(
+            generation,
+            report=replace(generation.report, gzip_bytes=generation.report.gzip_bytes + 1),
+        )
+    monkeypatch.setattr(publication, "generate_set_profile", lambda **_: malformed)
+
+    with pytest.raises(publication.ProfilePublicationError, match=expected_error):
+        _publish(tmp_path)
+    assert not (tmp_path / "published").exists()
+
+
+@pytest.mark.parametrize(
+    ("stage", "generator_error", "expected_error"),
+    [
+        (
+            "early",
+            "early profiles must contain empirical evidence.",
+            "Early profile generation requires empirical ratings or accepted draft evidence.",
+        ),
+        (
+            "mature",
+            "Mature profile generation requires accepted deck evidence.",
+            "Mature profile generation requires accepted draft-deck evidence and Stage C targets for every accepted color pair.",
+        ),
+        (
+            "mature",
+            "Mature profile generation requires Stage C targets for every accepted color pair.",
+            "Mature profile generation requires accepted draft-deck evidence and Stage C targets for every accepted color pair.",
+        ),
+    ],
+)
+def test_stage_evidence_failures_have_stable_actionable_categories(
+    stage: str,
+    generator_error: str,
+    expected_error: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_generation(**_: object) -> object:
+        raise publication.ProfileGenerationError(generator_error)
+
+    monkeypatch.setattr(publication, "generate_set_profile", fail_generation)
+    with pytest.raises(publication.ProfilePublicationError, match=expected_error):
+        _publish(tmp_path, stage=stage)
+    assert not (tmp_path / "published").exists()
+
+
+def test_metadata_publication_writes_canonical_profile_and_report(tmp_path: Path) -> None:
+    result = _publish(tmp_path)
+
+    assert result.artifact_path == (
+        tmp_path / "published" / "tst-quickdraft" / "artifacts" / f"{result.generation.report.gzip_sha256}.json.gz"
+    )
+    assert result.manifest_path.read_bytes() == result.generation.report.to_bytes()
+    profile_bytes = gzip.decompress(result.artifact_path.read_bytes())
+    assert SetProfile.from_json(json.loads(profile_bytes)) == result.generation.profile
+    assert result.sample_count == 0
+    assert result.validation_outcome == "passed"
+    assert result.input_count == 1
+
+
+def test_early_publication_is_deterministic_when_repeated(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path, "no-data.csv")
+    first = _publish(tmp_path, stage="early", ratings=True, manifest=manifest)
+    second = _publish(tmp_path, stage="early", ratings=True, manifest=manifest)
+
+    assert second.artifact_path == first.artifact_path
+    assert second.artifact_path.read_bytes() == first.artifact_path.read_bytes()
+    assert second.manifest_path.read_bytes() == first.manifest_path.read_bytes()
+    assert tuple((tmp_path / "published" / "tst-quickdraft" / "artifacts").iterdir()) == (
+        first.artifact_path,
+    )
+    assert second.input_count == 3
+
+
+def test_mature_publication_accepts_the_existing_generation_contract(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path, "mature-data.csv")
+    result = _publish(tmp_path, stage="mature", ratings=True, manifest=manifest)
+
+    assert result.generation.profile.maturity.value == "mature"
+    assert result.sample_count == result.generation.report.samples.total
+    assert result.skip_count == sum(result.generation.report.skip_reasons.values())
+    assert result.error_count == sum(result.generation.report.error_reasons.values())
+
+
+def test_manifest_selection_resolves_relative_paths_without_serializing_them(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path, "early-data.csv")
+    result = _publish(tmp_path, stage="early", ratings=True, manifest=manifest)
+
+    report_text = result.manifest_path.read_text(encoding="utf-8")
+    assert "early-data.csv" in report_text
+    assert '"path"' not in report_text
+    assert str(FIXTURE_DIR) not in report_text
+
+    ambiguous = _manifest(tmp_path, "early-data.csv", "no-data.csv")
+    with pytest.raises(publication.ProfilePublicationError, match="multiple sources"):
+        _publish(tmp_path, stage="early", ratings=True, manifest=ambiguous)
+
+
+def test_url_only_source_is_rejected_before_generation(tmp_path: Path) -> None:
+    card_database_path, _ = _write_inputs(tmp_path)
+    manifest_path = tmp_path / "remote.json"
+    manifest_path.write_bytes(
+        PublicDumpManifest(
+            sources=(
+                PublicDumpSource(
+                    name="remote",
+                    url="https://example.test/draft.csv.gz",
+                    sha256="a" * 64,
+                ),
+            )
+        ).to_bytes()
+    )
+
+    with pytest.raises(publication.ProfilePublicationError, match="local path"):
+        publication.generate_local_profile_artifacts(
+            set_code="TST",
+            event_format="QuickDraft",
+            stage="metadata",
+            generated_at=GENERATED_AT,
+            card_database_path=card_database_path,
+            output_dir=tmp_path / "published",
+            source_manifest_path=manifest_path,
+        )
+    assert not (tmp_path / "published").exists()
+
+
+def test_invalid_generated_bytes_are_rejected_before_output_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    card_database_path, _ = _write_inputs(tmp_path)
+    monkeypatch.setattr(publication, "generate_set_profile", lambda **_: object())
+
+    with pytest.raises(publication.ProfilePublicationError, match="invalid result"):
+        publication.generate_local_profile_artifacts(
+            set_code="TST",
+            event_format="QuickDraft",
+            stage="metadata",
+            generated_at=GENERATED_AT,
+            card_database_path=card_database_path,
+            output_dir=tmp_path / "published",
+        )
+    assert not (tmp_path / "published").exists()
+
+
+def test_existing_content_collision_does_not_replace_the_marker(tmp_path: Path) -> None:
+    first = _publish(tmp_path)
+    first_marker = first.manifest_path.read_bytes()
+    first.artifact_path.write_bytes(b"wrong content")
+
+    with pytest.raises(publication.ProfilePublicationError, match="different bytes"):
+        _publish(tmp_path)
+    assert first.manifest_path.read_bytes() == first_marker
+
+
+def test_marker_failure_preserves_the_last_authoritative_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _publish(tmp_path)
+    first_marker = first.manifest_path.read_bytes()
+
+    def fail_marker(**_: object) -> None:
+        raise publication.ProfilePublicationError("marker write failed")
+
+    monkeypatch.setattr(publication, "_publish_generation_marker", fail_marker)
+    with pytest.raises(publication.ProfilePublicationError, match="marker write failed"):
+        _publish(tmp_path, generated_at=GENERATED_AT + timedelta(seconds=1))
+    assert first.manifest_path.read_bytes() == first_marker
+

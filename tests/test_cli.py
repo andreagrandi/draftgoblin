@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 from typing import NoReturn
 
@@ -36,6 +40,12 @@ QUICK_DRAFT_FIXTURE_PATH = (
 )
 FIXTURE_ACCOUNT_ID = "FIXTURECLIENTID1234567890"
 FIXTURE_DRAFT_ID = "00000000-0000-4000-8000-000000000004"
+
+PROFILE_GENERATION_FIXTURE_DIR = (
+    Path(__file__).parent / "fixtures" / "profile-generation"
+)
+CLI_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+PROFILE_GENERATION_AT = "2026-08-30T12:00:00+00:00"
 
 
 def test_package_version_matches_installed_distribution_metadata() -> None:
@@ -81,6 +91,7 @@ def test_tui_parser_uses_tui_command_name(
         ("benchmark-picks", "Offline benchmark"),
         ("refresh-data", "Scryfall"),
         ("refresh-structure-targets", "17Lands"),
+        ("generate-profile", "Generate"),
     ],
 )
 def test_subcommands_are_registered_with_help_text(
@@ -865,3 +876,252 @@ def _build_draft_state(*, account_id: str, draft_id: str) -> DraftState:
         picks=(),
         pool_grp_ids=(1, 2, 3, 4, 5),
     )
+
+
+def _run_generate_profile_cli(
+    *,
+    stage: str,
+    output_dir: Path,
+    card_database_path: Path = PROFILE_GENERATION_FIXTURE_DIR / "card-database.json",
+    ratings_path: Path | None = None,
+    source_manifest_path: Path | None = None,
+    generated_at: str = PROFILE_GENERATION_AT,
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "draftomen.cli",
+        "generate-profile",
+        "--set-code",
+        "TST",
+        "--format",
+        "QuickDraft",
+        "--stage",
+        stage,
+        "--generated-at",
+        generated_at,
+        "--card-database-file",
+        str(card_database_path),
+        "--output-dir",
+        str(output_dir),
+    ]
+    if ratings_path is not None:
+        command.extend(["--ratings-file", str(ratings_path)])
+    if source_manifest_path is not None:
+        command.extend(["--source-manifest", str(source_manifest_path)])
+    return subprocess.run(
+        command,
+        cwd=CLI_REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
+def _assert_profile_cli_success(
+    *,
+    completed: subprocess.CompletedProcess[str],
+    expected_input_count: int,
+    expected_stage: str,
+) -> tuple[Path, Path, bytes, bytes]:
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+
+    report_lines = completed.stdout.splitlines()
+    assert len(report_lines) == 8
+    reported = dict(line.split("=", maxsplit=1) for line in report_lines)
+    assert set(reported) == {
+        "maturity",
+        "input_count",
+        "sample_count",
+        "skip_count",
+        "error_count",
+        "validation",
+        "artifact",
+        "generation_manifest",
+    }
+
+    artifact_path = Path(reported["artifact"])
+    manifest_path = Path(reported["generation_manifest"])
+    artifact_bytes = artifact_path.read_bytes()
+    manifest_bytes = manifest_path.read_bytes()
+    report = json.loads(manifest_bytes)
+    profile_bytes = gzip.decompress(artifact_bytes)
+    profile = SetProfile.from_json(json.loads(profile_bytes))
+
+    assert profile.set_code == "tst"
+    assert profile.event_format == "quickdraft"
+    assert profile.maturity.value == reported["maturity"]
+    assert report["stage"] == expected_stage
+    assert report["set_code"] == "tst"
+    assert report["event_format"] == "quickdraft"
+    assert report["profile_sha256"] == hashlib.sha256(profile_bytes).hexdigest()
+    assert report["gzip_sha256"] == hashlib.sha256(artifact_bytes).hexdigest()
+    assert artifact_path.name == f"{report['gzip_sha256']}.json.gz"
+    assert manifest_bytes == (
+        json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    expected_reported = {
+        "maturity": profile.maturity.value,
+        "input_count": str(expected_input_count),
+        "sample_count": str(report["samples"]["total"]),
+        "skip_count": str(sum(report["skip_reasons"].values())),
+        "error_count": str(sum(report["error_reasons"].values())),
+        "validation": "passed",
+        "artifact": str(artifact_path),
+        "generation_manifest": str(manifest_path),
+    }
+    assert reported == expected_reported
+    assert completed.stdout == "".join(
+        f"{key}={expected_reported[key]}\n"
+        for key in (
+            "maturity",
+            "input_count",
+            "sample_count",
+            "skip_count",
+            "error_count",
+            "validation",
+            "artifact",
+            "generation_manifest",
+        )
+    )
+    assert not any(
+        secret in completed.stdout
+        for secret in ("alpha", "beta", "Support Creature", "Removal Spell", "FIXTURECLIENTID")
+    )
+    return artifact_path, manifest_path, artifact_bytes, manifest_bytes
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected_input_count", "source_manifest_name", "with_ratings"),
+    [
+        ("metadata", 2, "manifest-no-data.json", False),
+        ("early", 3, "manifest-early-data.json", True),
+        ("mature", 3, "manifest-mature-data.json", True),
+    ],
+)
+def test_generate_profile_cli_processes_all_stages_deterministically(
+    stage: str,
+    expected_input_count: int,
+    source_manifest_name: str,
+    with_ratings: bool,
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "published"
+    source_manifest_path = PROFILE_GENERATION_FIXTURE_DIR / source_manifest_name
+    ratings_path = (
+        PROFILE_GENERATION_FIXTURE_DIR / "ratings.json" if with_ratings else None
+    )
+
+    first = _run_generate_profile_cli(
+        stage=stage,
+        output_dir=output_dir,
+        ratings_path=ratings_path,
+        source_manifest_path=source_manifest_path,
+    )
+    first_artifact, first_manifest, first_artifact_bytes, first_manifest_bytes = (
+        _assert_profile_cli_success(
+            completed=first,
+            expected_input_count=expected_input_count,
+            expected_stage=stage,
+        )
+    )
+
+    second = _run_generate_profile_cli(
+        stage=stage,
+        output_dir=output_dir,
+        ratings_path=ratings_path,
+        source_manifest_path=source_manifest_path,
+    )
+    second_artifact, second_manifest, second_artifact_bytes, second_manifest_bytes = (
+        _assert_profile_cli_success(
+            completed=second,
+            expected_input_count=expected_input_count,
+            expected_stage=stage,
+        )
+    )
+
+    assert second.stdout == first.stdout
+    assert second_artifact == first_artifact
+    assert second_manifest == first_manifest
+    assert second_artifact_bytes == first_artifact_bytes
+    assert second_manifest_bytes == first_manifest_bytes
+    assert hashlib.sha256(second_artifact_bytes).hexdigest() == Path(
+        second_artifact
+    ).name.removesuffix(".json.gz")
+
+
+def test_generate_profile_cli_failure_preserves_last_valid_publication(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "published"
+    first = _run_generate_profile_cli(
+        stage="early",
+        output_dir=output_dir,
+        ratings_path=PROFILE_GENERATION_FIXTURE_DIR / "ratings.json",
+        source_manifest_path=PROFILE_GENERATION_FIXTURE_DIR / "manifest-early-data.json",
+    )
+    artifact_path, manifest_path, artifact_bytes, manifest_bytes = (
+        _assert_profile_cli_success(
+            completed=first,
+            expected_input_count=3,
+            expected_stage="early",
+        )
+    )
+
+    failed = _run_generate_profile_cli(
+        stage="early",
+        output_dir=output_dir,
+        card_database_path=tmp_path / "missing-card-database.json",
+        ratings_path=PROFILE_GENERATION_FIXTURE_DIR / "ratings.json",
+        source_manifest_path=PROFILE_GENERATION_FIXTURE_DIR / "manifest-early-data.json",
+    )
+    assert failed.returncode == 1
+    assert failed.stdout == ""
+    assert failed.stderr == (
+        "generate-profile: Could not load the card database input.\n"
+    )
+    assert "Support Creature" not in failed.stderr
+    assert "alpha" not in failed.stderr
+    assert artifact_path.read_bytes() == artifact_bytes
+    assert manifest_path.read_bytes() == manifest_bytes
+
+
+@pytest.mark.parametrize(
+    ("generated_at", "expected_error"),
+    [
+        (
+            "2026-08-30T12:00:00",
+            "--generated-at must include a timezone offset.",
+        ),
+        (
+            "0001-01-01T00:00:00+14:00",
+            "--generated-at must be representable after UTC normalization.",
+        ),
+        (
+            "not-an-iso-timestamp",
+            "--generated-at must be a valid ISO-8601 timestamp.",
+        ),
+    ],
+)
+def test_generate_profile_cli_rejects_invalid_timestamp_as_argparse_error(
+    generated_at: str,
+    expected_error: str,
+) -> None:
+    completed = _run_generate_profile_cli(
+        stage="metadata",
+        output_dir=Path("/tmp/draftomen-profile-cli-invalid"),
+        generated_at=generated_at,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "Traceback" not in completed.stderr
+    assert (
+        "draftomen-tui generate-profile: error: argument --generated-at: "
+        f"{expected_error}"
+    ) in completed.stderr.splitlines()
+    assert expected_error in completed.stderr
+    assert not completed.stderr.startswith("generate-profile:")
+

@@ -1,7 +1,10 @@
 # Changelog
 
 ## [Unreleased]
-- Add reusable deterministic offline profile generation and statistical artifacts for metadata, early, and mature profiles from existing neutral ingestion. (#273)
+- Add the local-only `generate-profile` workflow for staged metadata, early,
+  and mature set-profile artifacts with pinned inputs, validation, atomic
+  publication, deterministic checksums, and privacy-safe aggregate output.
+  (#274)
 - Add a deterministic, provenance-preserving offline reader for public CSV dumps with checksum verification and privacy-safe reports. (#272)
 - Route shared 17Lands draft-row ingestion through the provenance-preserving structure-target builder. (#272)
 - Extend bounded whole-package deck ranking with profile-aware semantic and

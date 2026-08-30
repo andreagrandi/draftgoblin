@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "attribution": "Fixture public data",
+      "license": "CC0",
+      "name": "no-data",
+      "path": "no-data.csv",
+      "retrieved_at": "2026-08-30T12:00:00+00:00",
+      "sha256": "89fa27e25cd27b6ba8aedaca39381dd43a6baf296cf72ca7375b5fc593c6b5b7"
+    }
+  ]
+}
