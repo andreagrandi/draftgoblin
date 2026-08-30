@@ -1,0 +1,72 @@
+{
+  "set_code": "HOB",
+  "offered_grp_ids": [901, 901, 902, 902, 903, 904, 905, 906],
+  "cards": [
+    {
+      "arena_id": 1901,
+      "grp_id": 901,
+      "name": "Master's Councillor",
+      "colors": ["U"],
+      "mana_value": 2.0,
+      "rarity": "common",
+      "types": ["Creature"],
+      "set": "HOB",
+      "raw_score": 82.0
+    },
+    {
+      "arena_id": 1902,
+      "grp_id": 902,
+      "name": "Patient Instructor",
+      "colors": ["U"],
+      "mana_value": 3.0,
+      "rarity": "common",
+      "types": ["Creature"],
+      "set": "HOB",
+      "raw_score": 68.0
+    },
+    {
+      "arena_id": 1903,
+      "grp_id": 903,
+      "name": "Weak Master's Councillor",
+      "colors": ["U"],
+      "mana_value": 2.0,
+      "rarity": "common",
+      "types": ["Creature"],
+      "set": "HOB",
+      "raw_score": 45.0
+    },
+    {
+      "arena_id": 1904,
+      "grp_id": 904,
+      "name": "Generic Filler One",
+      "colors": ["R"],
+      "mana_value": 3.0,
+      "rarity": "common",
+      "types": ["Creature"],
+      "set": "HOB",
+      "raw_score": 80.0
+    },
+    {
+      "arena_id": 1905,
+      "grp_id": 905,
+      "name": "Generic Filler Two",
+      "colors": ["R"],
+      "mana_value": 3.0,
+      "rarity": "common",
+      "types": ["Creature"],
+      "set": "HOB",
+      "raw_score": 79.0
+    },
+    {
+      "arena_id": 1906,
+      "grp_id": 906,
+      "name": "Generic Filler Three",
+      "colors": ["R"],
+      "mana_value": 3.0,
+      "rarity": "common",
+      "types": ["Creature"],
+      "set": "HOB",
+      "raw_score": 70.0
+    }
+  ]
+}

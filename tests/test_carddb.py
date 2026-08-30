@@ -137,6 +137,7 @@ def test_card_info_power_toughness_round_trip_preserves_text() -> None:
         types=("Creature",),
         power="*",
         toughness="1+*",
+        oracle_id="oracle-textual-stats",
         faces=(CardFace(name="Face", power="X", toughness="*"),),
     )
 
@@ -160,6 +161,24 @@ def test_scryfall_malformed_present_faces_fail() -> None:
 
     with pytest.raises(CardDatabaseError, match="card_faces"):
         build_card_database_from_scryfall_cards(cards=(card,))
+
+
+def test_scryfall_oracle_id_is_normalized() -> None:
+    database = build_card_database_from_scryfall_cards(
+        cards=(
+            {
+                "arena_id": 9101,
+                "oracle_id": "oracle-scryfall",
+                "name": "Scryfall Identity",
+                "colors": ["U"],
+                "cmc": 2,
+                "rarity": "common",
+                "type_line": "Creature",
+            },
+        )
+    )
+
+    assert database.lookup(grp_id=9101).oracle_id == "oracle-scryfall"
 
 
 def test_scryfall_bulk_keeps_mana_cost_produced_mana_and_image_uri(
@@ -241,6 +260,7 @@ def test_arena_linked_faces_keep_face_local_semantics() -> None:
         cards=(
             {
                 "grpid": 7001,
+                "oracle_id": "oracle-arena",
                 "titleId": 1,
                 "cmc": 2,
                 "rarity": 3,
@@ -285,6 +305,7 @@ def test_arena_linked_faces_keep_face_local_semantics() -> None:
         "Front rules",
         "Back rules",
     ]
+    assert card.oracle_id == "oracle-arena"
     assert card.source_provenance == ("arena",)
 
 
@@ -305,6 +326,7 @@ def test_mtgjson_other_face_ids_augment_only_missing_canonical_fields() -> None:
                     oracle_text=None,
                     type_line=None,
                     source_provenance=("scryfall",),
+                    oracle_id="oracle-base",
                 )
             }
         ),
@@ -331,6 +353,7 @@ def test_mtgjson_other_face_ids_augment_only_missing_canonical_fields() -> None:
                 "rarity": "rare",
                 "setCode": "SEM",
                 "number": "4",
+                "identifiers": {"scryfallOracleId": "oracle-overlay"},
                 "otherFaceIds": ["back"],
             },
             {
@@ -347,6 +370,7 @@ def test_mtgjson_other_face_ids_augment_only_missing_canonical_fields() -> None:
     )
 
     card = database.lookup(grp_id=8001)
+    assert card.oracle_id == "oracle-base"
     assert card.name == "MTG Front"
     assert card.colors == ("G",)
     assert card.rarity == "rare"
@@ -394,11 +418,13 @@ def test_unmatched_mtgjson_seed_uses_17lands_provenance_and_can_retry() -> None:
                 "rarity": "common",
                 "type": "Creature",
                 "availability": ["arena"],
+                "identifiers": {"scryfallOracleId": "oracle-retry"},
             },
         ),
     )
     retried_card = retried.lookup(grp_id=8010)
     assert retried_card.unknown is False
+    assert retried_card.oracle_id == "oracle-retry"
     assert "17lands" in retried_card.source_provenance
     assert "mtgjson" in retried_card.source_provenance
 
@@ -636,6 +662,7 @@ def test_schema_three_cache_migrates_with_explicit_metadata_defaults(
     assert card.oracle_text is None
     assert card.faces == ()
     assert card.source_provenance == ("unknown",)
+    assert card.oracle_id is None
     assert database.to_json()["schema_version"] == 5
 
 

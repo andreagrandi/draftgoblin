@@ -181,6 +181,7 @@ class CardInfo:
     source_provenance: tuple[str, ...] = ()
     power: str | None = None
     toughness: str | None = None
+    oracle_id: str | None = None
 
     @classmethod
     def unknown_card(cls, *, grp_id: int) -> CardInfo:
@@ -262,6 +263,10 @@ class CardInfo:
                 if arena_id_value is None
                 else _required_int(arena_id_value, field_name="card.arena_id")
             ),
+            oracle_id=_optional_str(
+                data.get("oracle_id"),
+                field_name="card.oracle_id",
+            ),
             source_provenance=provenance,
             power=_optional_str(data.get("power"), field_name="card.power"),
             toughness=_optional_str(
@@ -288,6 +293,7 @@ class CardInfo:
             "mana_value": self.mana_value,
             "name": self.name,
             "oracle_text": self.oracle_text,
+            "oracle_id": self.oracle_id,
             "power": self.power,
             "produced_mana": list(self.produced_mana),
             "rarity": self.rarity,
@@ -1121,6 +1127,7 @@ def _card_info_from_mtgjson(
         set_code=_optional_source_text(card.get("setCode", card.get("set"))),
         collector_number=_optional_source_text(card.get("number")),
         arena_id=seed.grp_id,
+        oracle_id=_source_oracle_id(card=card),
         source_provenance=("mtgjson",),
         power=power,
         toughness=toughness,
@@ -1228,6 +1235,23 @@ def _cache_path(
         return Path(cache_path)
 
     return card_database_cache_path(app_dir=app_dir)
+
+
+def _source_oracle_id(*, card: Mapping[str, Any]) -> str | None:
+    """Return an oracle identifier from a supported source card object."""
+
+    for field_name in ("oracle_id", "oracleId"):
+        value = card.get(field_name)
+        if value is not None:
+            return _optional_source_text(value)
+
+    identifiers = card.get("identifiers")
+    if isinstance(identifiers, Mapping):
+        for field_name in ("scryfallOracleId", "oracle_id", "oracleId"):
+            value = identifiers.get(field_name)
+            if value is not None:
+                return _optional_source_text(value)
+    return None
 
 
 def _optional_source_text(value: Any) -> str | None:
@@ -1485,6 +1509,7 @@ def _card_info_from_scryfall(*, card: Mapping[str, Any]) -> CardInfo | None:
         set_code=_optional_source_text(card.get("set")),
         collector_number=_optional_source_text(card.get("collector_number")),
         arena_id=grp_id,
+        oracle_id=_source_oracle_id(card=card),
         source_provenance=("scryfall",),
         power=power,
         toughness=toughness,
@@ -1597,6 +1622,7 @@ def _card_info_from_arena(
             card.get("collector_number", card.get("collectorNumber"))
         ),
         arena_id=grp_id,
+        oracle_id=_source_oracle_id(card=card),
         source_provenance=("arena",),
         power=power,
         toughness=toughness,
@@ -1707,6 +1733,11 @@ def _merge_card_info(*, base: CardInfo, overlay: CardInfo) -> CardInfo:
             base.collector_number
             if base.collector_number is not None
             else overlay.collector_number
+        ),
+        oracle_id=(
+            base.oracle_id
+            if base.oracle_id is not None
+            else overlay.oracle_id
         ),
         arena_id=base.arena_id if base.arena_id is not None else overlay.arena_id,
         source_provenance=provenance,

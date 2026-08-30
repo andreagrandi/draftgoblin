@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NoReturn
 
 import pytest
@@ -15,7 +16,14 @@ from draftomen.audit import load_draft_audit_records
 from draftomen.carddb import CardDatabase
 from draftomen.cli import build_parser, main
 from draftomen.pool import DraftState, load_draft_state, save_draft_state
+from draftomen.set_profile import (
+    SetProfile,
+    dump_set_profile,
+    load_set_profile,
+    set_profile_path,
+)
 from draftomen.seventeen import (
+    QUICK_DRAFT_FORMAT,
     SeventeenLandsError,
     seventeen_lands_structure_targets_cache_path,
 )
@@ -479,6 +487,84 @@ def test_build_pool_file_selects_pair_offline(
     assert "Card data from 17Lands" in captured.out
     assert captured.err == ""
 
+
+def test_build_cli_loads_local_profile_and_passes_it_to_builder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    app_dir = tmp_path / "app"
+    profile = load_set_profile(
+        Path(__file__).parent / "fixtures" / "set-profiles" / "mature.json",
+        expected_set_code="TST",
+        expected_format=QUICK_DRAFT_FORMAT,
+    )
+    dump_set_profile(
+        profile,
+        set_profile_path(
+            set_code="TST",
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=app_dir,
+        ),
+    )
+    bulk_file = _write_build_bulk_file(directory=tmp_path)
+    pool_file = tmp_path / "pool.json"
+    pool_file.write_text(
+        json.dumps({"set_code": "TST", "pool_grp_ids": [1, 2, 3, 4, 5]}),
+        encoding="utf-8",
+    )
+
+    loaded_profiles: list[SetProfile | None] = []
+    real_load = cli.load_scoring_profile
+
+    def record_load(
+        set_code: str,
+        event_format: str,
+        *,
+        app_dir: Path | None = None,
+        **kwargs: object,
+    ) -> SetProfile | None:
+        loaded = real_load(
+            set_code=set_code,
+            event_format=event_format,
+            app_dir=app_dir,
+            **kwargs,
+        )
+        loaded_profiles.append(loaded)
+        return loaded
+
+    builder_kwargs: dict[str, object] = {}
+
+    def record_build(**kwargs: object) -> tuple[object, SimpleNamespace]:
+        builder_kwargs.update(kwargs)
+        return object(), SimpleNamespace(
+            spell_selection=object(),
+            mana_base=object(),
+        )
+
+    monkeypatch.setattr(cli, "load_scoring_profile", record_load)
+    monkeypatch.setattr(cli, "build_deck_from_pool", record_build)
+    monkeypatch.setattr(cli, "format_build_result", lambda **kwargs: "stub build\n")
+
+    exit_code = main(
+        argv=[
+            "build",
+            "--pool",
+            str(pool_file),
+            "--bulk-file",
+            str(bulk_file),
+            "--app-dir",
+            str(app_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert loaded_profiles == [profile]
+    assert builder_kwargs["set_profile"] is loaded_profiles[0]
+    assert captured.out == "stub build\n"
+    assert captured.err == ""
 
 
 def test_build_defaults_to_splash_but_requires_an_eligible_card(
