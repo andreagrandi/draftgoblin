@@ -400,12 +400,14 @@ def _decision_payload(
     app_version: str,
     decision_id: str,
 ) -> AuditRecord:
-    rankings = {
-        mode: [
-            card.card.grp_id
-            for card in rank_scored_cards(cards=scored_pack.cards, ranking_mode=mode)
-        ]
+    ranked_cards = {
+        mode: rank_scored_cards(cards=scored_pack.cards, ranking_mode=mode)
         for mode in RANKING_MODES
+    }
+    recommendation = ranked_cards["score"][0] if ranked_cards["score"] else None
+    rankings = {
+        mode: [card.card.grp_id for card in cards]
+        for mode, cards in ranked_cards.items()
     }
     return {
         "decision_id": decision_id,
@@ -444,12 +446,64 @@ def _decision_payload(
             if scored_pack.role_ledger is None
             else scored_pack.role_ledger.to_json()
         ),
+        "context_provenance": _context_provenance(
+            scored_pack=scored_pack,
+        ),
         "rankings": rankings,
-        "recommended_grp_id": rankings["score"][0] if rankings["score"] else None,
+        "recommended_grp_id": (
+            None if recommendation is None else recommendation.card.grp_id
+        ),
+        "recommendation": _recommendation_payload(scored_card=recommendation),
         "candidates": [
             _candidate_payload(scored_card=card, rank=rank)
             for rank, card in enumerate(scored_pack.cards, start=1)
         ],
+    }
+
+
+def _context_provenance(
+    *,
+    scored_pack: ScoredPack,
+) -> AuditRecord | None:
+    context = scored_pack.scoring_context
+    if context is None:
+        return None
+
+    profile = context.set_profile
+    stage = context.stage
+    return {
+        "stage": {
+            "pack_number": stage.pack_number,
+            "pick_number": stage.pick_number,
+            "global_pick_index": stage.global_pick_index,
+            "estimated_remaining_picks": stage.estimated_remaining_picks,
+        },
+        "profile": {
+            "set_code": profile.set_code,
+            "format": profile.event_format,
+            "profile_version": profile.profile_version,
+            "maturity": profile.maturity.value,
+            "confidence": profile.confidence,
+            "fingerprint": profile.fingerprint,
+            "source": profile.source.to_json(),
+        },
+    }
+
+
+def _recommendation_payload(*, scored_card: ScoredCard | None) -> AuditRecord | None:
+    if scored_card is None:
+        return None
+    return {
+        "grp_id": scored_card.card.grp_id,
+        "score": scored_card.score,
+        "source_label": scored_card.source_label,
+        "color_fit": scored_card.color_fit,
+        "contextual_breakdown": scored_card.contextual_breakdown.to_json(),
+        "contextual_evidence": list(scored_card.contextual_evidence),
+        "contextual_pair": scored_card.contextual_pair,
+        "contextual_theme": scored_card.contextual_theme,
+        "contextual_profile_maturity": scored_card.contextual_profile_maturity,
+        "contextual_profile_confidence": scored_card.contextual_profile_confidence,
     }
 
 

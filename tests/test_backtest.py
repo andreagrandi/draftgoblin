@@ -6,10 +6,21 @@ from pathlib import Path
 
 import pytest
 
+import draftomen.cli as cli_module
 from draftomen.backtest import format_backtest_report, generate_backtest_report
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.cli import main
 from draftomen.pool import DraftPick, DraftState, draft_state_path, save_draft_state
+from draftomen.set_profile import (
+    PairProfile,
+    ProfileMaturity,
+    SampleSummary,
+    SetProfile,
+    SourceMetadata,
+    dump_set_profile,
+    set_profile_path,
+)
+from draftomen.seventeen import QUICK_DRAFT_FORMAT
 
 FIXTURE_NOW = datetime(2026, 7, 3, 12, 0, tzinfo=UTC).isoformat()
 
@@ -62,6 +73,81 @@ def test_backtest_uses_saved_pool_before_pick_for_recommendation() -> None:
     assert "Summary: 1/2 recommendations matched actual picks (50.0%)." in output
 
 
+def test_backtest_retains_profile_context_and_recommendation_evidence() -> None:
+    state = _draft_state(
+        picks=(
+            DraftPick(
+                pack_number=0,
+                pick_number=5,
+                offered_grp_ids=(4, 3),
+                pool_before_pick=(1, 2),
+                chosen_grp_id=3,
+            ),
+        ),
+        pool_grp_ids=(1, 2, 3),
+    )
+    profile = _set_profile()
+
+    report = generate_backtest_report(
+        state=state,
+        card_database=_card_database(),
+        set_profile=profile,
+    )
+
+    row = report.rows[0]
+    assert row.recommended is not None
+    assert row.scoring_context is not None
+    assert row.scoring_context.set_profile is profile
+    assert row.scoring_context.stage.pack_number == 0
+    assert row.scoring_context.stage.pick_number == 5
+    assert row.scoring_context.stage.global_pick_index == 6
+    assert row.scoring_context.stage.estimated_remaining_picks == (
+        42 - row.scoring_context.stage.global_pick_index
+    )
+    assert row.scoring_context.role_ledger.pool_size == 2
+    assert row.contextual_evidence is row.recommended.contextual_evidence
+    assert row.contextual_evidence == row.recommended.contextual_evidence
+
+
+def test_backtest_no_profile_retains_generic_scoring_without_context() -> None:
+    state = _draft_state(
+        picks=(
+            DraftPick(
+                pack_number=0,
+                pick_number=5,
+                offered_grp_ids=(4, 3),
+                pool_before_pick=(1, 2),
+                chosen_grp_id=3,
+            ),
+        ),
+        pool_grp_ids=(1, 2, 3),
+    )
+
+    row = generate_backtest_report(
+        state=state,
+        card_database=_card_database(),
+    ).rows[0]
+
+    assert row.scoring_context is None
+    assert row.contextual_evidence == ()
+    assert row.recommended is not None
+    assert row.recommended.contextual_evidence == ()
+
+
+def _set_profile() -> SetProfile:
+    return SetProfile(
+        set_code="TST",
+        event_format="quickdraft",
+        profile_version="backtest-context-test",
+        generated_at="1970-01-01T00:00:00+00:00",
+        source=SourceMetadata(provider="test"),
+        maturity=ProfileMaturity.MATURE,
+        samples=SampleSummary(total=1, by_pair=(("WU", 1),)),
+        confidence=1.0,
+        pairs=(PairProfile(pair="WU"),),
+    )
+
+
 def test_backtest_cli_skips_missing_offered_history_without_mutating_state(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -111,6 +197,87 @@ def test_backtest_cli_skips_missing_offered_history_without_mutating_state(
     assert "Summary: no comparable picks; 1 skipped." in captured.out
     assert captured.err == ""
     assert state_path.read_text(encoding="utf-8") == before
+
+
+def test_backtest_cli_loads_state_profile_once_and_passes_it_to_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    app_dir = tmp_path / "app"
+    bulk_file = _write_bulk_file(directory=tmp_path)
+    state = _draft_state(
+        picks=(
+            DraftPick(
+                pack_number=0,
+                pick_number=5,
+                offered_grp_ids=(4, 3),
+                pool_before_pick=(1, 2),
+                chosen_grp_id=3,
+            ),
+        ),
+        pool_grp_ids=(1, 2, 3),
+    )
+    save_draft_state(state=state, app_dir=app_dir)
+    profile = _set_profile()
+    dump_set_profile(
+        profile,
+        set_profile_path(
+            set_code=state.set_code,
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=app_dir,
+        ),
+    )
+
+    profile_calls: list[tuple[str, str, Path]] = []
+    real_load = cli_module.load_scoring_profile
+
+    def record_load(
+        set_code: str,
+        event_format: str,
+        *,
+        app_dir: Path | None = None,
+        **kwargs: object,
+    ) -> SetProfile | None:
+        assert app_dir is not None
+        profile_calls.append((set_code, event_format, app_dir))
+        return real_load(
+            set_code=set_code,
+            event_format=event_format,
+            app_dir=app_dir,
+            **kwargs,
+        )
+
+    observed: dict[str, object] = {}
+    real_generate = cli_module.generate_backtest_report
+
+    def record_generate(**kwargs: object):
+        observed["set_profile"] = kwargs["set_profile"]
+        return real_generate(**kwargs)
+
+    monkeypatch.setattr(cli_module, "load_scoring_profile", record_load)
+    monkeypatch.setattr(cli_module, "generate_backtest_report", record_generate)
+    exit_code = main(
+        argv=[
+            "backtest",
+            "--account",
+            state.account_id,
+            "--draft-id",
+            state.draft_id,
+            "--bulk-file",
+            str(bulk_file),
+            "--app-dir",
+            str(app_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert profile_calls == [(state.set_code, QUICK_DRAFT_FORMAT, app_dir)]
+    assert observed["set_profile"] == profile
+    assert "Draft Omen backtest" in captured.out
+    assert captured.err == ""
 
 
 def _draft_state(

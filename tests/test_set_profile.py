@@ -17,6 +17,7 @@ from draftomen.set_profile import (
     SetProfileSchemaError,
     dump_set_profile,
     load_set_profile,
+    load_scoring_profile,
     safe_load_set_profile,
 )
 
@@ -262,6 +263,46 @@ def test_safe_loader_rejects_wrong_target_and_direct_missing_corrupt_future_fall
         assert result.profile.samples is None
         assert result.profile.pair_profiles == ()
         assert any("rejected:" in diagnostic for diagnostic in result.diagnostics)
+
+
+@pytest.mark.parametrize("fixture_name", ("missing.json", "corrupt.json"))
+def test_scoring_profile_loader_maps_generic_fallback_to_none(fixture_name: str) -> None:
+    assert (
+        load_scoring_profile(
+            "tst",
+            "quickdraft",
+            profile_path=FIXTURE_DIR / fixture_name,
+        )
+        is None
+    )
+
+
+def test_scoring_profile_loader_preserves_compatible_last_valid_identity() -> None:
+    last_valid = load_set_profile(FIXTURE_DIR / "mature.json")
+
+    selected = load_scoring_profile(
+        "tst",
+        "quickdraft",
+        profile_path=FIXTURE_DIR / "missing.json",
+        last_valid_profile=last_valid,
+    )
+
+    assert selected is last_valid
+    assert selected.maturity is ProfileMaturity.MATURE
+
+
+def test_scoring_profile_loader_maps_generic_last_valid_to_none() -> None:
+    generic = SetProfile.generic(set_code="TST", event_format="quickdraft")
+
+    assert (
+        load_scoring_profile(
+            "tst",
+            "quickdraft",
+            profile_path=FIXTURE_DIR / "missing.json",
+            last_valid_profile=generic,
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("method", ("expanduser", "resolve"))

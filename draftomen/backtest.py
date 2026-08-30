@@ -10,7 +10,7 @@ from typing import TypeAlias
 
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.events import EXPECTED_PICKS_PER_PACK, EXPECTED_TOTAL_PICKS
-from draftomen.pickengine import PickEngine, ScoredCard
+from draftomen.pickengine import PickEngine, PickScoringContext, ScoredCard
 from draftomen.pool import DraftPick, DraftState, list_draft_states
 from draftomen.pool_ledger import PoolRoleLedger
 from draftomen.ranking import DEFAULT_RANKING_MODE, rank_scored_cards, ranking_label
@@ -43,6 +43,9 @@ class BacktestPickResult:
     skipped_reason: str | None
     data_source: str | None
     role_ledger: PoolRoleLedger | None = None
+    scoring_context: PickScoringContext | None = None
+    contextual_evidence: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True, slots=True)
 class BacktestReport:
@@ -242,6 +245,8 @@ def _score_pick(
             skipped_reason="missing actual selected card",
             data_source=scored_pack.source_summary,
             role_ledger=scored_pack.role_ledger,
+            scoring_context=scored_pack.scoring_context,
+            contextual_evidence=recommended.contextual_evidence,
         )
 
     return BacktestPickResult(
@@ -255,6 +260,8 @@ def _score_pick(
         skipped_reason=None,
         data_source=scored_pack.source_summary,
         role_ledger=scored_pack.role_ledger,
+        scoring_context=scored_pack.scoring_context,
+        contextual_evidence=recommended.contextual_evidence,
     )
 
 

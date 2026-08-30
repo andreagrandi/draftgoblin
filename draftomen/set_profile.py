@@ -727,6 +727,31 @@ def safe_load_set_profile(
     return SetProfileLoadResult(profile=generic, source="generic", diagnostics=tuple(diagnostics))
 
 
+def load_scoring_profile(
+    set_code: str,
+    event_format: str,
+    *,
+    profile_path: PathInput | None = None,
+    profile_paths: Iterable[PathInput] = (),
+    app_dir: PathInput | None = None,
+    last_valid_profile: SetProfile | None = None,
+) -> SetProfile | None:
+    """Load the profile usable by scoring, without exposing generic fallback data."""
+
+    result = safe_load_set_profile(
+        set_code=set_code,
+        event_format=event_format,
+        profile_path=profile_path,
+        profile_paths=profile_paths,
+        app_dir=app_dir,
+        last_valid_profile=last_valid_profile,
+    )
+    if result.source == "generic" or result.profile.maturity is ProfileMaturity.GENERIC:
+        return None
+    return result.profile
+...
+
+
 def _parse_role_profile(value: Any, *, set_code: Any) -> CompiledRoleProfile | None:
     if value is None:
         return None
