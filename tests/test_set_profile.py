@@ -10,8 +10,13 @@ import draftomen.set_profile as set_profile_module
 from draftomen.config import COLOR_PAIRS
 from draftomen.semantic_roles import CompiledRoleProfile, ProfileCard, Role, RoleAssignment
 from draftomen.set_profile import (
+    CardRating,
+    NumericTarget,
     PairProfile,
     ProfileMaturity,
+    RateEstimate,
+    RemovalTarget,
+    RoleTarget,
     SetProfile,
     SetProfileError,
     SetProfileSchemaError,
@@ -428,3 +433,256 @@ def test_semantic_roles_survive_absent_empirical_sections_and_incompatible_data_
     assert fallback.source == "local_classifier"
     assert fallback.diagnostics == ("profile_incompatible_versions:used_local_classifier",)
     assert Role.RAMP not in fallback.assignments
+
+
+def _rate(
+    *,
+    raw_value: float | None = 0.55,
+    value: float = 0.54,
+    samples: int = 12,
+    prior_value: float = 0.50,
+    source: str = "17lands",
+) -> RateEstimate:
+    return RateEstimate(
+        raw_value=raw_value,
+        value=value,
+        samples=samples,
+        prior_value=prior_value,
+        source=source,
+    )
+
+
+def test_early_card_and_pair_evidence_round_trip_is_deterministic_without_samples() -> None:
+    profile = SetProfile(
+        set_code="TST",
+        event_format="QuickDraft",
+        profile_version="generator-1",
+        generated_at="2026-08-30T00:00:00+00:00",
+        source=set_profile_module.SourceMetadata(provider="fixture"),
+        maturity=ProfileMaturity.EARLY,
+        samples=None,
+        confidence=0.4,
+        pairs=(PairProfile(pair="RG", performance=_rate()),),
+        card_ratings=(
+            CardRating(
+                card_key="oracle_id:z",
+                gih_win_rate=_rate(),
+                average_last_seen_at=3.2,
+            ),
+            CardRating(card_key="oracle_id:a", gih_win_rate=_rate(value=0.53)),
+        ),
+    )
+
+    assert tuple(item.card_key for item in profile.card_ratings) == (
+        "oracle_id:a",
+        "oracle_id:z",
+    )
+    rg = profile.pair("RG")
+    assert rg is not None
+    assert rg.performance == _rate()
+    restored = SetProfile.from_json(profile.to_json())
+    assert restored.card_ratings == profile.card_ratings
+    assert restored.to_bytes() == profile.to_bytes()
+    assert profile.to_bytes() == (
+        json.dumps(
+            profile.to_json(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("target_type", "payload"),
+    (
+        (NumericTarget, {"name": "curve", "value": 3.0, "raw_value": 2.0}),
+        (RoleTarget, {"role": "draw", "value": 1.0, "samples": 4}),
+        (RemovalTarget, {"kind": "destroy", "value": 1.0, "source": "17lands"}),
+    ),
+)
+def test_target_evidence_requires_all_fields(
+    target_type: type[object],
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(SetProfileSchemaError, match="evidence"):
+        target_type.from_json(payload)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    (
+        ({"raw_value": 1.1}, "raw_value"),
+        ({"value": float("nan")}, "value"),
+        ({"prior_value": -0.1}, "prior_value"),
+        ({"samples": -1}, "samples"),
+        ({"source": "  "}, "source"),
+    ),
+)
+def test_rate_estimate_rejects_invalid_values(kwargs: dict[str, object], message: str) -> None:
+    values: dict[str, object] = {
+        "raw_value": 0.55,
+        "value": 0.54,
+        "samples": 12,
+        "prior_value": 0.50,
+        "source": "17lands",
+    }
+    values.update(kwargs)
+    with pytest.raises(SetProfileSchemaError, match=message):
+        RateEstimate(**values)  # type: ignore[arg-type]
+
+
+def test_rate_estimate_zero_samples_is_prior_only() -> None:
+    estimate = _rate(raw_value=None, value=0.5, samples=0)
+    assert estimate.raw_value is None
+    assert RateEstimate.from_json(estimate.to_json()) == estimate
+
+    with pytest.raises(SetProfileSchemaError, match="raw_value"):
+        _rate(raw_value=0.55, samples=0)
+
+    with pytest.raises(SetProfileSchemaError, match="raw_value"):
+        _rate(raw_value=None, samples=1)
+
+
+def test_card_ratings_reject_duplicate_card_identities() -> None:
+    rating = CardRating(card_key="Oracle_ID:Bomb", gih_win_rate=_rate())
+    with pytest.raises(SetProfileSchemaError, match="duplicate"):
+        SetProfile(
+            set_code="TST",
+            event_format="quickdraft",
+            profile_version="generator-1",
+            generated_at="2026-08-30T00:00:00+00:00",
+            source=set_profile_module.SourceMetadata(provider="fixture"),
+            maturity=ProfileMaturity.EARLY,
+            samples=None,
+            confidence=0.4,
+            pairs=(),
+            card_ratings=(
+                rating,
+                CardRating(card_key="oracle_id:bomb", gih_win_rate=_rate()),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("maturity", "pairs", "card_ratings"),
+    (
+        (ProfileMaturity.EARLY, (), (CardRating("a", _rate()),)),
+        (ProfileMaturity.MATURE, (PairProfile("WU", performance=_rate()),), ()),
+    ),
+)
+def test_card_and_pair_rates_count_as_empirical_evidence(
+    maturity: ProfileMaturity,
+    pairs: tuple[PairProfile, ...],
+    card_ratings: tuple[CardRating, ...],
+) -> None:
+    profile = SetProfile(
+        set_code="TST",
+        event_format="quickdraft",
+        profile_version="generator-1",
+        generated_at="2026-08-30T00:00:00+00:00",
+        source=set_profile_module.SourceMetadata(provider="fixture"),
+        maturity=maturity,
+        samples=None,
+        confidence=0.4,
+        pairs=pairs,
+        card_ratings=card_ratings,
+    )
+    assert profile.maturity is maturity
+
+
+@pytest.mark.parametrize("maturity", (ProfileMaturity.EARLY, ProfileMaturity.MATURE))
+def test_prior_only_pair_rates_do_not_count_as_empirical_evidence(maturity: ProfileMaturity) -> None:
+    prior_only = _rate(raw_value=None, value=0.5, samples=0)
+    pairs = tuple(PairProfile(pair=pair, performance=prior_only) for pair in COLOR_PAIRS)
+
+    with pytest.raises(SetProfileSchemaError, match="empirical evidence"):
+        SetProfile(
+            set_code="TST",
+            event_format="quickdraft",
+            profile_version="generator-1",
+            generated_at="2026-08-30T00:00:00+00:00",
+            source=set_profile_module.SourceMetadata(provider="fixture"),
+            maturity=maturity,
+            samples=None,
+            confidence=0.4,
+            pairs=pairs,
+        )
+
+
+@pytest.mark.parametrize("maturity", (ProfileMaturity.EARLY, ProfileMaturity.MATURE))
+def test_observed_pair_rates_count_as_empirical_evidence(maturity: ProfileMaturity) -> None:
+    observed = _rate(samples=1)
+    pairs = tuple(PairProfile(pair=pair, performance=observed) for pair in COLOR_PAIRS)
+
+    profile = SetProfile(
+        set_code="TST",
+        event_format="quickdraft",
+        profile_version="generator-1",
+        generated_at="2026-08-30T00:00:00+00:00",
+        source=set_profile_module.SourceMetadata(provider="fixture"),
+        maturity=maturity,
+        samples=None,
+        confidence=0.4,
+        pairs=pairs,
+    )
+
+    assert profile.maturity is maturity
+
+
+def test_maturity_rejects_new_evidence_in_metadata_semantic_and_generic_profiles() -> None:
+    common = {
+        "set_code": "TST",
+        "event_format": "quickdraft",
+        "profile_version": "generator-1",
+        "generated_at": "2026-08-30T00:00:00+00:00",
+        "source": set_profile_module.SourceMetadata(provider="fixture"),
+        "samples": None,
+        "confidence": 0.4,
+    }
+    card_ratings = (CardRating("a", _rate()),)
+    with pytest.raises(SetProfileSchemaError, match="cannot contain empirical evidence"):
+        SetProfile(maturity=ProfileMaturity.METADATA_ONLY, pairs=(), card_ratings=card_ratings, **common)
+    with pytest.raises(SetProfileSchemaError, match="cannot contain empirical evidence"):
+        SetProfile(
+            maturity=ProfileMaturity.SEMANTIC_ONLY,
+            pairs=(PairProfile("WU", performance=_rate()),),
+            role_profile=load_set_profile(FIXTURE_DIR / "semantic-only.json").role_profile,
+            card_ratings=(),
+            **common,
+        )
+    with pytest.raises(SetProfileSchemaError, match="cannot contain evidence"):
+        SetProfile(maturity=ProfileMaturity.GENERIC, pairs=(), card_ratings=card_ratings, **common)
+
+
+def test_target_evidence_round_trip_preserves_all_fields() -> None:
+    targets = (
+        NumericTarget(
+            name="average_land_count",
+            value=3.2,
+            raw_value=3.0,
+            prior_value=3.4,
+            samples=17,
+            source="17lands",
+        ),
+        RoleTarget(
+            role=Role.DRAW,
+            value=0.8,
+            raw_value=0.75,
+            prior_value=0.6,
+            samples=17,
+            source="17lands",
+        ),
+        RemovalTarget(
+            kind="destroy",
+            value=0.7,
+            raw_value=0.65,
+            prior_value=0.5,
+            samples=17,
+            source="17lands",
+        ),
+    )
+    for target in targets:
+        restored = type(target).from_json(target.to_json())
+        assert restored == target
