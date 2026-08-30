@@ -1398,7 +1398,7 @@ def load_17lands_format_data(
             f"17Lands cache {path} is for set {dataset.set_code}, not {set_code.upper()}."
         )
 
-    if dataset.event_format != event_format:
+    if dataset.event_format.casefold() != event_format.casefold():
         raise SeventeenLandsError(
             f"17Lands cache {path} is for format {dataset.event_format}, "
             f"not {event_format}."

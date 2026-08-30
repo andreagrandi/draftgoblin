@@ -167,8 +167,8 @@ def generate_local_profile_artifacts(
     if ratings_path is not None:
         try:
             ratings = load_17lands_format_data(
-                set_code=set_code,
-                event_format=event_format,
+                set_code=normalized_set,
+                event_format=normalized_format,
                 cache_path=ratings_path,
             )
         except (

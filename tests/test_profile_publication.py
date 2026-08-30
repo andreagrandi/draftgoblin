@@ -141,7 +141,7 @@ def _publish(
     card_database_path, ratings_path = _write_inputs(tmp_path, ratings=ratings)
     return publication.generate_local_profile_artifacts(
         set_code="TST",
-        event_format="QuickDraft",
+        event_format="quickdraft",
         stage=stage,
         generated_at=generated_at,
         card_database_path=card_database_path,
