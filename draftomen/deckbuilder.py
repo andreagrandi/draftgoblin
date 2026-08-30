@@ -255,6 +255,49 @@ class _ConstraintPlan:
 
 
 
+@dataclass(frozen=True, slots=True)
+class _SuffixFeasibility:
+    """Exact completion states for every candidate suffix in one selection."""
+
+    states_by_start: tuple[frozenset[tuple[int, int, int, int, int]], ...]
+    candidate_features: tuple[tuple[int, int, int, int], ...]
+    spell_count: int
+    minimum_two_drops: int
+
+    def can_complete_values(
+        self,
+        *,
+        total: int,
+        creatures: int,
+        two_drops: int,
+        expensive: int,
+        splashes: int,
+        start: int,
+        constraints: SpellConstraints,
+    ) -> bool:
+        slots_remaining = self.spell_count - total
+        if slots_remaining < 0 or start < 0 or start >= len(self.states_by_start):
+            return False
+        if slots_remaining == 0:
+            return _counts_satisfy_constraints(
+                counts=SpellCounts(
+                    total=total,
+                    creatures=creatures,
+                    two_drops=two_drops,
+                    expensive=expensive,
+                    splashes=splashes,
+                ),
+                constraints=constraints,
+            )
+        return (
+            slots_remaining,
+            creatures,
+            min(two_drops, self.minimum_two_drops),
+            expensive,
+            splashes,
+        ) in self.states_by_start[start]
+
+
 def load_pool_file(*, path: PathInput, set_code: str | None = None) -> BuildPool:
     """Load a fixture pool JSON file for offline building.
     Draftomen state JSON and compact pool objects are both supported.
@@ -1481,6 +1524,131 @@ def _constraint_plans() -> tuple[_ConstraintPlan, ...]:
     )
 
 
+def _build_suffix_feasibility(
+    *,
+    candidates: tuple[ScoredCard, ...],
+    pair: str,
+    constraints: SpellConstraints,
+    config: DeckBuilderConfig,
+) -> _SuffixFeasibility:
+    """Index exact completion states for every candidate suffix."""
+    candidate_features = tuple(
+        (
+            int(_is_creature_card(card=card.card)),
+            int(_is_two_drop(card=card, config=config)),
+            int(_is_expensive_spell(card=card, config=config)),
+            int(_is_splash_card(card=card.card, pair=pair)),
+        )
+        for card in candidates
+    )
+    minimum_two_drops = constraints.minimum_two_drops
+    states_by_start: list[frozenset[tuple[int, int, int, int, int]]] = [
+        frozenset(
+            (
+                (0, creatures, minimum_two_drops, expensive, splashes)
+                for creatures in range(
+                    constraints.creature_floor, constraints.creature_ceiling + 1
+                )
+                for expensive in range(constraints.maximum_expensive_spells + 1)
+                for splashes in range(constraints.maximum_splash_spells + 1)
+            )
+        )
+    ]
+    for feature in reversed(candidate_features):
+        next_states = states_by_start[-1]
+        states = set(next_states)
+        creature, two_drop, expensive, splash = feature
+        for slots, creatures, two_drops, expensive_spells, splashes in next_states:
+            if slots >= constraints.spell_count:
+                continue
+            if creatures < creature or expensive_spells < expensive:
+                continue
+            if splashes < splash:
+                continue
+            current_slots = slots + 1
+            current_creatures = creatures - creature
+            current_expensive = expensive_spells - expensive
+            current_splashes = splashes - splash
+            if two_drop:
+                if minimum_two_drops == 0:
+                    current_two_drops = (0,)
+                elif two_drops == minimum_two_drops:
+                    current_two_drops = (minimum_two_drops - 1, minimum_two_drops)
+                elif two_drops > 0:
+                    current_two_drops = (two_drops - 1,)
+                else:
+                    current_two_drops = ()
+            else:
+                current_two_drops = (two_drops,)
+            states.update(
+                (
+                    current_slots,
+                    current_creatures,
+                    current_two_drops_value,
+                    current_expensive,
+                    current_splashes,
+                )
+                for current_two_drops_value in current_two_drops
+            )
+        states_by_start.append(frozenset(states))
+    states_by_start.reverse()
+    return _SuffixFeasibility(
+        states_by_start=tuple(states_by_start),
+        candidate_features=candidate_features,
+        spell_count=constraints.spell_count,
+        minimum_two_drops=minimum_two_drops,
+    )
+
+
+def _counts_after_feature(
+    *,
+    counts: SpellCounts,
+    feature: tuple[int, int, int, int],
+) -> SpellCounts:
+    creature, two_drop, expensive, splash = feature
+    return SpellCounts(
+        total=counts.total + 1,
+        creatures=counts.creatures + creature,
+        two_drops=counts.two_drops + two_drop,
+        expensive=counts.expensive + expensive,
+        splashes=counts.splashes + splash,
+        instants=0,
+    )
+
+
+def _can_add_spell_with_suffix(
+    *,
+    counts: SpellCounts,
+    feature: tuple[int, int, int, int],
+    suffix_start: int,
+    suffix_feasibility: _SuffixFeasibility,
+    constraints: SpellConstraints,
+) -> bool:
+    creature, two_drop, expensive, splash = feature
+    next_total = counts.total + 1
+    next_creatures = counts.creatures + creature
+    next_two_drops = counts.two_drops + two_drop
+    next_expensive = counts.expensive + expensive
+    next_splashes = counts.splashes + splash
+    if next_total > constraints.spell_count:
+        return False
+    if next_creatures > constraints.creature_ceiling:
+        return False
+    if next_expensive > constraints.maximum_expensive_spells:
+        return False
+    if next_splashes > constraints.maximum_splash_spells:
+        return False
+    return suffix_feasibility.can_complete_values(
+        total=next_total,
+        creatures=next_creatures,
+        two_drops=next_two_drops,
+        expensive=next_expensive,
+        splashes=next_splashes,
+        start=suffix_start,
+        constraints=constraints,
+    )
+
+
 def _select_with_constraints(
     *,
     candidates: tuple[ScoredCard, ...],
@@ -1490,47 +1658,90 @@ def _select_with_constraints(
     config: DeckBuilderConfig,
 ) -> tuple[ScoredCard, ...] | None:
     """Select one feasible package with bounded deterministic beam search.
-    Complete candidates receive bounded local improvement before tie-breaking.
+    The best complete candidate receives bounded local improvement.
     """
 
     if constraints.spell_count == 0:
         return ()
 
-    beam: list[tuple[float, tuple[int, ...], tuple[ScoredCard, ...]]] = [
-        (0.0, (), ())
-    ]
+    candidates = _limit_cards_to_pool_quantities(
+        cards=candidates,
+        available_quantities=available_quantities,
+    )
+    suffix_feasibility = _build_suffix_feasibility(
+        candidates=candidates,
+        pair=pair,
+        constraints=constraints,
+        config=config,
+    )
+    empty_counts = SpellCounts(
+        total=0,
+        creatures=0,
+        two_drops=0,
+        expensive=0,
+        splashes=0,
+        instants=0,
+    )
+    beam: list[
+        tuple[
+            float,
+            tuple[int, ...],
+            tuple[ScoredCard, ...],
+            SpellCounts,
+            float,
+            float,
+        ]
+    ] = [(0.0, (), (), empty_counts, 0.0, 0.0)]
     node_count = 0
     for _ in range(constraints.spell_count):
-        expansions: list[tuple[float, tuple[int, ...], tuple[ScoredCard, ...]]] = []
-        for _, indices, selected in beam:
+        expansions: list[
+            tuple[
+                float,
+                tuple[int, ...],
+                tuple[ScoredCard, ...],
+                SpellCounts,
+                float,
+                float,
+            ]
+        ] = []
+        for _, indices, selected, counts, raw_score_sum, mana_value_sum in beam:
             start = indices[-1] + 1 if indices else 0
             for candidate_index in range(start, len(candidates)):
                 if node_count >= config.optimizer_max_search_nodes:
                     break
                 node_count += 1
-                candidate = candidates[candidate_index]
-                remaining_after = candidates[candidate_index + 1 :]
-                next_selected = (*selected, candidate)
-                if not _can_add_spell(
-                    candidate=candidate,
-                    selected=selected,
-                    remaining_after=remaining_after,
-                    available_quantities=available_quantities,
+                if not _can_add_spell_with_suffix(
+                    counts=counts,
+                    feature=suffix_feasibility.candidate_features[candidate_index],
+                    suffix_start=candidate_index + 1,
+                    suffix_feasibility=suffix_feasibility,
                     constraints=constraints,
-                    pair=pair,
-                    config=config,
                 ):
                     continue
+                candidate = candidates[candidate_index]
+                next_selected = (*selected, candidate)
+                next_counts = _counts_after_feature(
+                    counts=counts,
+                    feature=suffix_feasibility.candidate_features[candidate_index],
+                )
+                next_raw_score_sum = raw_score_sum + candidate.raw_score
+                next_mana_value_sum = mana_value_sum + (
+                    candidate.card.mana_value or 0.0
+                )
                 expansions.append(
                     (
-                        _optimizer_objective(
-                            cards=next_selected,
-                            pair=pair,
+                        _optimizer_objective_from_aggregates(
+                            counts=next_counts,
+                            raw_score_sum=next_raw_score_sum,
+                            mana_value_sum=next_mana_value_sum,
                             constraints=constraints,
                             config=config,
                         ),
                         (*indices, candidate_index),
                         next_selected,
+                        next_counts,
+                        next_raw_score_sum,
+                        next_mana_value_sum,
                     )
                 )
         if not expansions:
@@ -1540,7 +1751,7 @@ def _select_with_constraints(
 
     complete: list[tuple[float | None, tuple[ScoredCard, ...]]] = [
         (score, cards)
-        for score, _, cards in beam
+        for score, _, cards, _, _, _ in beam
         if len(cards) == constraints.spell_count
         and _counts_satisfy_constraints(
             counts=_spell_counts(cards=cards, pair=pair, config=config),
@@ -1563,41 +1774,30 @@ def _select_with_constraints(
             return None
         complete = [(None, fallback)]
 
-    evaluations = 0
-    improved: list[
-        tuple[float | None, tuple[int, ...], tuple[ScoredCard, ...]]
-    ] = []
-    for initial_score, package in complete:
-        package, used_evaluations, improved_score = _improve_complete_package(
-            cards=package,
-            candidates=candidates,
-            available_quantities=available_quantities,
-            pair=pair,
-            constraints=constraints,
-            config=config,
-            evaluation_budget=max(0, config.optimizer_max_evaluations - evaluations),
-        )
-        evaluations += used_evaluations
-        improved.append(
-            (
-                improved_score if improved_score is not None else initial_score,
-                tuple(card.original_index for card in package),
-                package,
-            )
-        )
-
-    improved.sort(
+    complete.sort(
         key=lambda item: (
             -float("-inf") if item[0] is None else -item[0],
-            item[1],
+            tuple(card.original_index for card in item[1]),
         )
     )
+    package = complete[0][1]
+    package, _, _ = _improve_complete_package(
+        cards=package,
+        candidates=candidates,
+        available_quantities=available_quantities,
+        pair=pair,
+        constraints=constraints,
+        config=config,
+        evaluation_budget=max(0, config.optimizer_max_evaluations),
+    )
     return _ordered_selected_package(
-        cards=improved[0][2],
+        cards=package,
         pair=pair,
         constraints=constraints,
         config=config,
     )
+
+
 
 
 def _ordered_selected_package(
@@ -1771,11 +1971,35 @@ def _optimizer_objective(
     if not cards:
         return 0.0
 
-    quality = sum(card.raw_score for card in cards) / len(cards)
+    raw_score_sum = sum(card.raw_score for card in cards)
     counts = _spell_counts(cards=cards, pair=pair, config=config)
+    mana_value_sum = sum(card.card.mana_value or 0.0 for card in cards)
+    return _optimizer_objective_from_aggregates(
+        counts=counts,
+        raw_score_sum=raw_score_sum,
+        mana_value_sum=mana_value_sum,
+        constraints=constraints,
+        config=config,
+    )
+
+
+def _optimizer_objective_from_aggregates(
+    *,
+    counts: SpellCounts,
+    raw_score_sum: float,
+    mana_value_sum: float,
+    constraints: SpellConstraints,
+    config: DeckBuilderConfig,
+) -> float:
+    """Score a package from its exact structural and numeric aggregates."""
+
+    if counts.total == 0:
+        return 0.0
+
+    quality = raw_score_sum / counts.total
     curve = _optimizer_curve_score(
         counts=counts,
-        cards=cards,
+        mana_value_sum=mana_value_sum,
         constraints=constraints,
         config=config,
     )
@@ -1793,11 +2017,11 @@ def _optimizer_objective(
 def _optimizer_curve_score(
     *,
     counts: SpellCounts,
-    cards: tuple[ScoredCard, ...],
+    mana_value_sum: float,
     constraints: SpellConstraints,
     config: DeckBuilderConfig,
 ) -> float:
-    average = _average_mana_value(cards=cards)
+    average = mana_value_sum / counts.total if counts.total else 0.0
     two_drop_fit = min(1.0, counts.two_drops / max(1, constraints.minimum_two_drops))
     expensive_fit = 1.0 - min(
         1.0,
