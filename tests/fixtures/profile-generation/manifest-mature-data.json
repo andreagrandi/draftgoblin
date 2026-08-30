@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "attribution": "Fixture public data",
+      "license": "CC0",
+      "name": "mature-data",
+      "path": "mature-data.csv",
+      "retrieved_at": "2026-08-30T12:00:00+00:00",
+      "sha256": "d255dd95b51a202d93674a29efc92280dfe27a008fb83ae99fc2d523c0b475ea"
+    }
+  ]
+}

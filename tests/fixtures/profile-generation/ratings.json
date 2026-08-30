@@ -1,0 +1,34 @@
+{
+  "card_ratings": {
+    "1": {
+      "average_last_seen_at": 3.5,
+      "color": "WU",
+      "drawn_improvement_win_rate": null,
+      "gih_win_rate": 0.6,
+      "grp_id": 1,
+      "name": "Support Creature",
+      "opening_hand_win_rate": null,
+      "rarity": "common",
+      "sample_counts": {
+        "games_in_hand": 10,
+        "games_played": 40,
+        "opening_hand": 20,
+        "picked": 50,
+        "seen": 100
+      }
+    }
+  },
+  "event_format": "QuickDraft",
+  "fetched_at": "2026-08-30T12:00:00+00:00",
+  "pair_win_rates": {
+    "WU": {
+      "games": 10,
+      "pair": "WU",
+      "win_rate": 0.6,
+      "wins": 6
+    }
+  },
+  "schema_version": 2,
+  "set_code": "TST",
+  "source": "17lands"
+}

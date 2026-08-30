@@ -1,0 +1,70 @@
+{
+  "cards": {
+    "1": {
+      "arena_id": 1,
+      "collector_number": null,
+      "colors": [
+        "W",
+        "U"
+      ],
+      "faces": [],
+      "grp_id": 1,
+      "image_uri": null,
+      "keywords": [],
+      "layout": null,
+      "mana_cost": null,
+      "mana_value": 2,
+      "name": "Support Creature",
+      "oracle_id": "support-id",
+      "oracle_text": "Whenever this enters the battlefield, draw a card.",
+      "power": null,
+      "produced_mana": [],
+      "rarity": "common",
+      "set": "TST",
+      "source_provenance": [],
+      "subtypes": [
+        "Advisor"
+      ],
+      "toughness": null,
+      "type_line": "Creature — Advisor",
+      "types": [
+        "Creature"
+      ],
+      "unknown": false
+    },
+    "2": {
+      "arena_id": 2,
+      "collector_number": null,
+      "colors": [
+        "W",
+        "U"
+      ],
+      "faces": [],
+      "grp_id": 2,
+      "image_uri": null,
+      "keywords": [],
+      "layout": null,
+      "mana_cost": null,
+      "mana_value": 2,
+      "name": "Removal Spell",
+      "oracle_id": "removal-id",
+      "oracle_text": "Destroy target creature.",
+      "power": null,
+      "produced_mana": [],
+      "rarity": "common",
+      "set": "TST",
+      "source_provenance": [],
+      "subtypes": [],
+      "toughness": null,
+      "type_line": "Instant",
+      "types": [
+        "Instant"
+      ],
+      "unknown": false
+    }
+  },
+  "generated_at": "2026-08-30T12:00:00+00:00",
+  "image_uris_by_name": {},
+  "schema_version": 5,
+  "source": "scryfall-default-cards"
+}
