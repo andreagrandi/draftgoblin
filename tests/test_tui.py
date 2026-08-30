@@ -39,10 +39,11 @@ from draftomen.seventeen import (
     QUICK_DRAFT_FORMAT,
     RatingSampleCounts,
     SeventeenCardStats,
-    SeventeenLandsData,
     SeventeenLandsDownloadProgress,
+    SeventeenLandsData,
     SeventeenLandsFormatData,
 )
+from draftomen.set_profile import dump_set_profile, load_set_profile, set_profile_path
 from draftomen.session import (
     ApplicationPhase,
     CardView,
@@ -99,6 +100,61 @@ async def _assert_tui_renders_shared_setup_guidance(tmp_path: Path) -> None:
 
 def test_tui_fixture_stream_updates_pack_panel_and_status_bar(tmp_path: Path) -> None:
     asyncio.run(_assert_fixture_stream_updates_pack_panel(tmp_path=tmp_path))
+
+
+def test_tui_auto_loads_conventional_profile_through_shared_session(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_assert_tui_auto_loads_conventional_profile(tmp_path=tmp_path))
+
+
+async def _assert_tui_auto_loads_conventional_profile(tmp_path: Path) -> None:
+    profile = load_set_profile(
+        Path(__file__).parent / "fixtures" / "set-profiles" / "mature.json",
+        expected_set_code="TST",
+        expected_format=QUICK_DRAFT_FORMAT,
+    )
+    app_dir = tmp_path / "app"
+    dump_set_profile(
+        profile,
+        set_profile_path(
+            set_code="TST",
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=app_dir,
+        ),
+    )
+    app = _tui_app(tmp_path=tmp_path)
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.process_lines(lines=[line.replace("MSH", "TST") for line in _first_pack_lines()])
+        await pilot.pause()
+
+        snapshot = app.session.snapshot
+        scored_pack = snapshot.current_scored_pack
+        assert scored_pack is not None
+        context = scored_pack.scoring_context
+        assert context is not None
+        assert context.set_profile == profile
+        assert context.set_profile.fingerprint == profile.fingerprint
+        assert context.set_profile.source == profile.source
+        assert context.role_ledger.profile_fingerprint == profile.fingerprint
+        assert context.role_ledger.profile_source == f"profile:{profile.maturity.value}"
+        assert snapshot.recommendations.cards
+        scored_cards = {card.card.grp_id: card for card in scored_pack.cards}
+        for recommendation in snapshot.recommendations.cards:
+            scored_card = scored_cards[recommendation.card.grp_id]
+            assert recommendation.contextual_breakdown == scored_card.contextual_breakdown
+            assert recommendation.contextual_evidence == scored_card.contextual_evidence
+            assert recommendation.contextual_pair == scored_card.contextual_pair
+            assert recommendation.contextual_theme == scored_card.contextual_theme
+            assert (
+                recommendation.contextual_profile_maturity
+                == scored_card.contextual_profile_maturity
+            )
+            assert (
+                recommendation.contextual_profile_confidence
+                == scored_card.contextual_profile_confidence
+            )
 
 
 def test_tui_splash_details_use_plain_color_and_mana_language() -> None:
@@ -270,6 +326,13 @@ async def _assert_fixture_stream_updates_pack_panel(tmp_path: Path) -> None:
         assert snapshot.current_pack_event is not None
         assert snapshot.current_pack_event.account_id == FIXTURE_ACCOUNT_ID
         assert snapshot.current_scored_pack is not None
+        assert snapshot.current_scored_pack.scoring_context is None
+        assert {
+            recommendation.card.grp_id
+            for recommendation in snapshot.recommendations.cards
+        } == {
+            card.card.grp_id for card in snapshot.current_scored_pack.cards
+        }
         assert DraftomenTuiApp.TITLE == "Draft Omen"
         assert any("Fixture Spider" in row for row in _card_cells(rows=rows))
         assert "Account: FixturePlayer" in status

@@ -16,6 +16,7 @@ from draftomen.seventeen import (
     SeventeenLandsError,
     SeventeenLandsFormatData,
 )
+from draftomen.set_profile import dump_set_profile, load_set_profile, set_profile_path
 from draftomen.watch import PlainLogWatcher
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
@@ -117,6 +118,74 @@ def test_plain_watch_scores_accountless_pack_through_shared_session(
     assert "Status: active account unknown, pick P1P1" in output
     assert "Pack 1 Pick 1" in output
     assert "Fixture Spider (grpId 105097)" in output
+    snapshot = watcher.session.snapshot
+    assert snapshot.current_scored_pack is not None
+    assert snapshot.current_scored_pack.scoring_context is None
+    assert snapshot.recommendations.cards
+
+
+def test_plain_watch_auto_loads_conventional_profile_through_shared_session(
+    tmp_path: Path,
+) -> None:
+    profile = load_set_profile(
+        Path(__file__).parent / "fixtures" / "set-profiles" / "mature.json",
+        expected_set_code="TST",
+        expected_format=QUICK_DRAFT_FORMAT,
+    )
+    app_dir = tmp_path / "app"
+    dump_set_profile(
+        profile,
+        set_profile_path(
+            set_code="TST",
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=app_dir,
+        ),
+    )
+    watcher = PlainLogWatcher(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+        poll_interval=0.01,
+    )
+
+    watcher.process_lines(
+        lines=[
+            _pack_line(
+                event_name="QuickDraft_TST_20260829",
+                pack_number=1,
+                pick_number=2,
+                draft_pack=(104894, 104976),
+                picked_cards=(104894,) * 44,
+            )
+        ]
+    )
+
+    snapshot = watcher.session.snapshot
+    scored_pack = snapshot.current_scored_pack
+    assert scored_pack is not None
+    context = scored_pack.scoring_context
+    assert context is not None
+    assert context.set_profile == profile
+    assert context.set_profile.fingerprint == profile.fingerprint
+    assert context.set_profile.source == profile.source
+    assert context.role_ledger.profile_fingerprint == profile.fingerprint
+    assert context.role_ledger.profile_source == f"profile:{profile.maturity.value}"
+    assert snapshot.recommendations.cards
+    scored_cards = {card.card.grp_id: card for card in scored_pack.cards}
+    for recommendation in snapshot.recommendations.cards:
+        scored_card = scored_cards[recommendation.card.grp_id]
+        assert recommendation.contextual_breakdown == scored_card.contextual_breakdown
+        assert recommendation.contextual_evidence == scored_card.contextual_evidence
+        assert recommendation.contextual_pair == scored_card.contextual_pair
+        assert recommendation.contextual_theme == scored_card.contextual_theme
+        assert (
+            recommendation.contextual_profile_maturity
+            == scored_card.contextual_profile_maturity
+        )
+        assert (
+            recommendation.contextual_profile_confidence
+            == scored_card.contextual_profile_confidence
+        )
 
 
 def test_plain_watch_does_not_assign_post_login_draft_events_to_prior_account(

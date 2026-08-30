@@ -7,14 +7,21 @@ import threading
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import draftomen.session as session_module
 from draftomen.audit import load_draft_audit_records
+from draftomen.backtest import (
+    BacktestPickResult as DomainBacktestPickResult,
+    BacktestReport as DomainBacktestReport,
+)
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.cardimages import CardImageError, CardImageService
 from draftomen.events import (
+    EXPECTED_PICKS_PER_PACK,
+    EXPECTED_TOTAL_PICKS,
     AccountEvent,
     DraftCompletedEvent,
     DraftStartedEvent,
@@ -24,8 +31,12 @@ from draftomen.events import (
 )
 from draftomen.pickengine import (
     ColorCommitment,
+    ContextualScoreBreakdown,
+    PickScoringContext,
     ScoreNormalization,
+    ScoredCard,
     ScoredPack,
+    build_pick_scoring_context,
 )
 from draftomen.pool import (
     DraftPick,
@@ -85,12 +96,25 @@ from draftomen.seventeen import (
     SeventeenLandsDownloadProgress,
     SeventeenLandsFormatData,
 )
+from draftomen.set_profile import (
+    SetProfile,
+    dump_set_profile,
+    load_set_profile,
+    set_profile_path,
+)
 from draftomen.splash import SplashState
 
 PROJECT_ROOT = Path(__file__).parent.parent
 FIXTURE_LOG_PATH = PROJECT_ROOT / "tests" / "fixtures" / "quick-draft-msh-player.log"
+FIXTURE_PROFILE_PATH = (
+    PROJECT_ROOT / "tests" / "fixtures" / "set-profiles" / "mature.json"
+)
 FIXTURE_ACCOUNT_ID = "FIXTURECLIENTID1234567890"
 FIXTURE_DRAFT_ID = "00000000-0000-4000-8000-000000000004"
+CONTEXT_EVENT_NAME = "QuickDraft_TST_20260829"
+CONTEXT_PACK_NUMBER = 1
+CONTEXT_PICK_NUMBER = 2
+CONTEXT_OFFERED_GRP_IDS = (104894, 104976)
 
 
 def test_default_live_session_snapshot_has_neutral_initial_state() -> None:
@@ -649,6 +673,390 @@ def test_live_session_publishes_consumed_events_with_resulting_state(
     assert published[-1].snapshot is session.snapshot
     assert published[-1].scored_pack is not None
     assert published[-1].snapshot.recommendations.cards
+
+
+def test_live_session_profiled_scoring_publishes_context_and_matching_evidence(
+    tmp_path: Path,
+) -> None:
+    profile = _fixture_set_profile()
+    pool_before_pick = _fixture_pool_before_pick(
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        set_profile=profile,
+    )
+
+    snapshot = session.process_lines(
+        lines=_profiled_history_lines(pool_before_pick=pool_before_pick)
+    )
+
+    event = snapshot.current_pack_event
+    scored_pack = snapshot.current_scored_pack
+    assert event is not None
+    assert scored_pack is not None
+    context = _assert_profile_context(
+        scored_pack=scored_pack,
+        profile=profile,
+        event=event,
+        expect_identity=True,
+    )
+    scored_cards = _assert_recommendation_context_parity(
+        snapshot=snapshot,
+        scored_pack=scored_pack,
+    )
+    assert any(
+        recommendation.contextual_pair == "WU"
+        and recommendation.contextual_theme == "tempo flyers"
+        and recommendation.contextual_profile_maturity == "mature"
+        and recommendation.contextual_profile_confidence == pytest.approx(0.91)
+        for recommendation in snapshot.recommendations.cards
+    )
+
+    audit_records = load_draft_audit_records(
+        account_id="profiled-account",
+        draft_id="profiled-draft",
+        app_dir=tmp_path / "app",
+    )
+    decision = next(
+        record
+        for record in reversed(audit_records)
+        if record["record_type"] == "decision_evaluated"
+    )
+    assert decision["pool_before_pick"] == list(pool_before_pick)
+    assert "pool_before_pick" not in decision["context_provenance"]
+    assert decision["context_provenance"]["stage"] == {
+        "pack_number": context.stage.pack_number,
+        "pick_number": context.stage.pick_number,
+        "global_pick_index": context.stage.global_pick_index,
+        "estimated_remaining_picks": context.stage.estimated_remaining_picks,
+    }
+    recommended_id = decision["recommended_grp_id"]
+    assert recommended_id is not None
+    source_card = scored_cards[recommended_id]
+    recommendation_payload = decision["recommendation"]
+    assert recommendation_payload["contextual_breakdown"] == (
+        source_card.contextual_breakdown.to_json()
+    )
+    assert recommendation_payload["contextual_evidence"] == list(
+        source_card.contextual_evidence
+    )
+    assert recommendation_payload["contextual_pair"] == source_card.contextual_pair
+    assert recommendation_payload["contextual_theme"] == source_card.contextual_theme
+    assert recommendation_payload["contextual_profile_maturity"] == (
+        source_card.contextual_profile_maturity
+    )
+    assert recommendation_payload["contextual_profile_confidence"] == (
+        source_card.contextual_profile_confidence
+    )
+
+
+def test_live_session_auto_loads_conventional_profile_for_default_entry(
+    tmp_path: Path,
+) -> None:
+    profile = _fixture_set_profile()
+    app_dir = tmp_path / "app"
+    dump_set_profile(
+        profile,
+        set_profile_path(
+            set_code="TST",
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=app_dir,
+        ),
+    )
+    pool_before_pick = _fixture_pool_before_pick(
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+    )
+
+    snapshot = session.process_lines(
+        lines=_profiled_history_lines(pool_before_pick=pool_before_pick)
+    )
+
+    event = snapshot.current_pack_event
+    scored_pack = snapshot.current_scored_pack
+    assert event is not None
+    assert scored_pack is not None
+    _assert_profile_context(scored_pack=scored_pack, profile=profile, event=event)
+    _assert_recommendation_context_parity(
+        snapshot=snapshot,
+        scored_pack=scored_pack,
+    )
+
+
+def test_live_session_auto_profile_is_cached_per_set_across_clear(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _fixture_set_profile()
+    app_dir = tmp_path / "app"
+    dump_set_profile(
+        profile,
+        set_profile_path(
+            set_code="TST",
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=app_dir,
+        ),
+    )
+    load_calls: list[tuple[str, str, Path]] = []
+    real_loader = session_module.load_scoring_profile
+
+    def load_profile(
+        set_code: str,
+        event_format: str,
+        *,
+        app_dir: Path,
+    ) -> SetProfile | None:
+        load_calls.append((set_code, event_format, app_dir))
+        return real_loader(set_code, event_format, app_dir=app_dir)
+
+    monkeypatch.setattr(session_module, "load_scoring_profile", load_profile)
+    session = LiveSession(log_path=tmp_path / "Player.log", app_dir=app_dir)
+
+    session._set_active_set_code(set_code="tst")
+    loaded = session._set_profile
+    session._set_active_set_code(set_code=None)
+    assert session._set_profile is None
+    session._set_active_set_code(set_code="TST")
+
+    assert load_calls == [("TST", QUICK_DRAFT_FORMAT, app_dir)]
+    assert loaded is not None
+    assert session._set_profile is not None
+    assert session._set_profile == loaded
+    assert session._set_profile.fingerprint == loaded.fingerprint
+    assert session._set_profile.source == loaded.source
+    assert session._set_profiles_by_set == {"TST": profile}
+
+
+def test_live_session_explicit_profile_remains_authoritative_over_local_profile(
+    tmp_path: Path,
+) -> None:
+    explicit_profile = _fixture_set_profile()
+    local_profile = replace(explicit_profile, confidence=0.12)
+    app_dir = tmp_path / "app"
+    dump_set_profile(
+        local_profile,
+        set_profile_path(
+            set_code="TST",
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=app_dir,
+        ),
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        set_profile=explicit_profile,
+    )
+
+    session._set_active_set_code(set_code="TST")
+
+    assert session._set_profile is explicit_profile
+    assert session._set_profiles_by_set == {}
+
+
+def test_live_session_recovered_profiled_pack_uses_shared_context(
+    tmp_path: Path,
+) -> None:
+    profile = _fixture_set_profile()
+    pool_before_pick = _fixture_pool_before_pick(
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+    )
+    pending_pick = DraftPick(
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+        offered_grp_ids=CONTEXT_OFFERED_GRP_IDS,
+        pool_before_pick=pool_before_pick,
+    )
+    state = replace(
+        _draft_state(
+            account_id="recovered-account",
+            screen_name="Recovered",
+            draft_id="recovered-draft",
+            updated_at="2026-08-29T10:00:00+00:00",
+            pool_grp_ids=pool_before_pick,
+        ),
+        picks=(pending_pick,),
+    )
+    app_dir = tmp_path / "app"
+    save_draft_state(state=state, app_dir=app_dir)
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        card_database=_fixture_card_database(),
+        set_profile=profile,
+    )
+
+    snapshot = session.process_lines(
+        lines=(_auth_line(account_id="recovered-account", screen_name="Recovered"),)
+    )
+
+    event = snapshot.current_pack_event
+    scored_pack = snapshot.current_scored_pack
+    assert event is not None
+    assert event.pool_grp_ids == pending_pick.pool_before_pick
+    assert scored_pack is not None
+    context = _assert_profile_context(
+        scored_pack=scored_pack,
+        profile=profile,
+        event=event,
+        expect_identity=True,
+    )
+    assert snapshot.recommendations.cards
+    assert snapshot.recommendations.cards[0].contextual_pair == (
+        scored_pack.cards[0].contextual_pair
+    )
+
+
+def test_live_session_accountless_profiled_pack_uses_shared_context(
+    tmp_path: Path,
+) -> None:
+    profile = _fixture_set_profile()
+    pool_before_pick = _fixture_pool_before_pick(
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        set_profile=profile,
+    )
+
+    snapshot = session.process_lines(
+        lines=(
+            _profiled_pack_line(pool_before_pick=pool_before_pick),
+        )
+    )
+
+    assert snapshot.active_account is None
+    event = snapshot.current_pack_event
+    scored_pack = snapshot.current_scored_pack
+    assert event is not None
+    assert event.pool_grp_ids == pool_before_pick
+    assert scored_pack is not None
+    context = _assert_profile_context(
+        scored_pack=scored_pack,
+        profile=profile,
+        event=event,
+        expect_identity=True,
+    )
+    assert snapshot.recommendations.cards
+    assert any(
+        recommendation.contextual_pair == "WU"
+        for recommendation in snapshot.recommendations.cards
+    )
+
+
+def test_live_session_without_profile_keeps_generic_scoring(
+    tmp_path: Path,
+) -> None:
+    pool_before_pick = _fixture_pool_before_pick(
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+    )
+
+    snapshot = session.process_lines(
+        lines=(
+            _profiled_pack_line(pool_before_pick=pool_before_pick),
+        )
+    )
+
+    scored_pack = snapshot.current_scored_pack
+    assert scored_pack is not None
+    assert scored_pack.scoring_context is None
+    assert snapshot.recommendations.cards
+    assert all(
+        recommendation.contextual_breakdown == ContextualScoreBreakdown()
+        and recommendation.contextual_evidence == ()
+        and recommendation.contextual_pair is None
+        and recommendation.contextual_theme is None
+        and recommendation.contextual_profile_maturity is None
+        and recommendation.contextual_profile_confidence is None
+        for recommendation in snapshot.recommendations.cards
+    )
+
+
+def test_session_backtest_projection_preserves_domain_context_fields() -> None:
+    profile = _fixture_set_profile()
+    database = _fixture_card_database()
+    pool_before_pick = _fixture_pool_before_pick(
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+    )
+    projection_event = PackOfferedEvent(
+        event_name=CONTEXT_EVENT_NAME,
+        set_code="TST",
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+        offered_grp_ids=CONTEXT_OFFERED_GRP_IDS,
+        pool_grp_ids=pool_before_pick,
+        account_id="account-1",
+    )
+    global_pick_index = session_module._draft_pick_index(event=projection_event)
+    estimated_remaining_picks = max(0, EXPECTED_TOTAL_PICKS - global_pick_index)
+    context = build_pick_scoring_context(
+        pool_grp_ids=pool_before_pick,
+        card_database=database,
+        set_profile=profile,
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+        global_pick_index=global_pick_index,
+        estimated_remaining_picks=estimated_remaining_picks,
+    )
+    assert context is not None
+    source_card = SimpleNamespace(
+        card=database.lookup(grp_id=104894),
+        score=73,
+        rating=SimpleNamespace(gih_win_rate=0.64),
+        contextual_evidence=("profile evidence",),
+    )
+    state = _draft_state(
+        account_id="account-1",
+        screen_name="Player",
+        draft_id="draft-1",
+        updated_at="2026-08-29T10:00:00+00:00",
+        pool_grp_ids=pool_before_pick,
+    )
+    report = DomainBacktestReport(
+        state=state,
+        ranking_mode="score",
+        rows=(
+            DomainBacktestPickResult(
+                pack_number=CONTEXT_PACK_NUMBER,
+                pick_number=CONTEXT_PICK_NUMBER,
+                pool_size=len(pool_before_pick),
+                offered_count=2,
+                recommended=source_card,
+                actual=database.lookup(grp_id=104894),
+                match=True,
+                skipped_reason=None,
+                data_source="fixture",
+                role_ledger=context.role_ledger,
+                scoring_context=context,
+                contextual_evidence=source_card.contextual_evidence,
+            ),
+        ),
+    )
+
+    projected = session_module._backtest_result(report=report).rows[0]
+
+    assert projected.role_ledger is context.role_ledger
+    assert projected.scoring_context is context
+    assert projected.contextual_evidence == source_card.contextual_evidence
 
 
 def test_live_session_account_pick_retains_recommendations_and_colors(
@@ -3281,6 +3689,173 @@ def _fixture_stats(
             games_in_hand=1_000,
         ),
     )
+
+
+def _fixture_set_profile() -> SetProfile:
+    return load_set_profile(
+        FIXTURE_PROFILE_PATH,
+        expected_set_code="TST",
+        expected_format=QUICK_DRAFT_FORMAT,
+    )
+
+
+def _fixture_pool_before_pick(
+    *,
+    pack_number: int,
+    pick_number: int,
+) -> tuple[int, ...]:
+    return (104894,) * (pack_number * EXPECTED_PICKS_PER_PACK + pick_number)
+
+
+def _profiled_history_lines(*, pool_before_pick: tuple[int, ...]) -> list[str]:
+    lines = [
+        _auth_line(account_id="profiled-account", screen_name="Profiled"),
+        _course_line(
+            event_name=CONTEXT_EVENT_NAME,
+            course_id="profiled-draft",
+        ),
+    ]
+    for pick_index, picked_card in enumerate(pool_before_pick):
+        pack_number, pick_number = divmod(
+            pick_index,
+            EXPECTED_PICKS_PER_PACK,
+        )
+        lines.extend(
+            (
+                _pack_line(
+                    event_name=CONTEXT_EVENT_NAME,
+                    pack_number=pack_number,
+                    pick_number=pick_number,
+                    draft_pack=(picked_card,),
+                    picked_cards=pool_before_pick[:pick_index],
+                ),
+                _pick_request_line(
+                    event_name=CONTEXT_EVENT_NAME,
+                    request_id=f"profiled-pick-{pick_index}",
+                    card_id=picked_card,
+                    pack_number=pack_number,
+                    pick_number=pick_number,
+                ),
+            )
+        )
+    lines.append(_profiled_pack_line(pool_before_pick=pool_before_pick))
+    return lines
+
+
+def _profiled_pack_line(*, pool_before_pick: tuple[int, ...]) -> str:
+    return _pack_line(
+        event_name=CONTEXT_EVENT_NAME,
+        pack_number=CONTEXT_PACK_NUMBER,
+        pick_number=CONTEXT_PICK_NUMBER,
+        draft_pack=CONTEXT_OFFERED_GRP_IDS,
+        picked_cards=pool_before_pick,
+    )
+
+
+def _assert_profile_context(
+    *,
+    scored_pack: ScoredPack,
+    profile: SetProfile,
+    event: PackOfferedEvent,
+    expect_identity: bool = False,
+) -> PickScoringContext:
+    context = scored_pack.scoring_context
+    assert context is not None
+    if expect_identity:
+        assert context.set_profile is profile
+    else:
+        assert context.set_profile == profile
+    assert context.set_profile.fingerprint == profile.fingerprint
+    assert context.set_profile.source == profile.source
+    assert context.stage.pack_number == event.pack_number
+    assert context.stage.pick_number == event.pick_number
+    global_pick_index = session_module._draft_pick_index(event=event)
+    assert context.stage.global_pick_index == global_pick_index
+    assert context.stage.estimated_remaining_picks == max(
+        0,
+        EXPECTED_TOTAL_PICKS - global_pick_index,
+    )
+    assert context.role_ledger.pool_size == len(event.pool_grp_ids)
+    assert context.role_ledger.profile_fingerprint == profile.fingerprint
+    assert context.role_ledger.profile_source == f"profile:{profile.maturity.value}"
+    return context
+
+
+def _assert_recommendation_context_parity(
+    *,
+    snapshot: LiveSessionSnapshot,
+    scored_pack: ScoredPack,
+) -> dict[int, ScoredCard]:
+    recommendations = {
+        recommendation.card.grp_id: recommendation
+        for recommendation in snapshot.recommendations.cards
+    }
+    scored_cards = {card.card.grp_id: card for card in scored_pack.cards}
+    assert recommendations
+    assert recommendations.keys() == scored_cards.keys()
+    for grp_id, recommendation in recommendations.items():
+        scored_card = scored_cards[grp_id]
+        for field_name in (
+            "contextual_breakdown",
+            "contextual_evidence",
+            "contextual_pair",
+            "contextual_theme",
+            "contextual_profile_maturity",
+            "contextual_profile_confidence",
+        ):
+            assert getattr(recommendation, field_name) == getattr(
+                scored_card,
+                field_name,
+            )
+    return scored_cards
+
+
+def _pick_request_line(
+    *,
+    event_name: str,
+    request_id: str,
+    card_id: int,
+    pack_number: int,
+    pick_number: int,
+) -> str:
+    request = {
+        "EventName": event_name,
+        "PickInfo": {
+            "EventName": event_name,
+            "CardIds": [str(card_id)],
+            "PackNumber": pack_number,
+            "PickNumber": pick_number,
+        },
+    }
+    envelope = {"id": request_id, "request": json.dumps(request)}
+    return f"[UnityCrossThreadLogger]==> BotDraftDraftPick {json.dumps(envelope)}"
+
+
+def _pack_line(
+    *,
+    event_name: str,
+    pack_number: int,
+    pick_number: int,
+    draft_pack: tuple[int, ...],
+    picked_cards: tuple[int, ...],
+) -> str:
+    return _payload_line(
+        module="BotDraft",
+        payload={
+            "Result": "Success",
+            "EventName": event_name,
+            "DraftStatus": "PickNext",
+            "PackNumber": pack_number,
+            "PickNumber": pick_number,
+            "NumCardsToPick": 1,
+            "DraftPack": [str(grp_id) for grp_id in draft_pack],
+            "PickedCards": [str(grp_id) for grp_id in picked_cards],
+        },
+    )
+
+
+def _payload_line(*, module: str, payload: dict[str, object]) -> str:
+    return json.dumps({"CurrentModule": module, "Payload": json.dumps(payload)})
 
 
 def _write_lines(*, path: Path, lines: list[str]) -> None:

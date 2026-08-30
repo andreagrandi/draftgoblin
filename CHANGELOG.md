@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Route validated pre-pick scoring context through live, recovery, accountless, replay, backtest, benchmark, and audit workflows with recommendation/audit evidence parity. (#250)
 - Define immutable pre-pick scoring context with deterministic profile provenance and pair-theme annotations. (#251)
 - Add bounded contextual pick-score terms for projected role need, late
   urgency, semantic package support, redundancy, unsupported payoffs, and

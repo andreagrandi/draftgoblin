@@ -40,6 +40,19 @@ Rows show a `Fit` marker: `On` for cards inside the inferred pair, `Off!` for of
 
 ## Pre-pick scoring context
 
+`build_pick_scoring_context` is the public construction entry point for the
+single validated pre-pick context boundary. It accepts the authoritative
+pool-before-pick IDs and card database, ratings/config for pair inference, the
+exact selected `SetProfile`, and either `pick_index` or the complete stage
+coordinates (`pack_number`, `pick_number`, `global_pick_index`,
+`estimated_remaining_picks`). Partial coordinates are rejected. An existing
+context is authoritative: conflicting coordinates are rejected and the same
+context is returned unchanged. `PickEngine.score_pack` resolves stage and
+commitment once, then uses the same private validated construction path.
+Workflow entry points automatically call `load_scoring_profile` for the active
+set/format, selecting a conventional local non-generic profile before
+passing it into scoring; an explicitly supplied profile remains authoritative.
+
 `PickScoringContext` is an immutable value with exactly two fields:
 
 - `set_profile: SetProfile`
@@ -50,6 +63,9 @@ uses `PRE_PICK_PROJECTION`, its stage is present, and its
 `profile_source` is exactly `profile:{set_profile.maturity.value}`. The
 validated ledger stage is exposed through the context's read-only `stage`
 property.
+
+`ScoredPack.scoring_context` retains the supplied or constructed context
+exactly, and `ScoredPack.role_ledger` retains its ledger.
 
 When a validated profile-backed pre-pick context is available, the engine scores
 with six small additive contextual terms from that validated pre-pick state:
@@ -79,6 +95,22 @@ not independently affect scoring. Contextual scoring uses only the supplied
 pre-pick ledger and never projects against offered or future cards. Without a
 validated profile-backed context, scores and ordering remain the generic
 rating/color results.
+
+All live, recovered, and accountless session paths, replay, backtest, and
+benchmark route pre-pick scoring through `PickEngine.score_pack` and use the
+`ScoredPack` handoff. Audit serialization consumes that same pack rather than
+reconstructing context; watch and TUI adapters consume shared session state
+and do not build context.
+
+Session recommendations, replay explanations, and backtest results use the
+scored-card contextual evidence. Audit records serialize matching
+recommendation/candidate breakdown and evidence, pair/theme/profile metadata,
+and context stage/profile provenance, preserving recommendation/audit parity.
+
+Missing, corrupt, incompatible, or generic profiles normalize to no context:
+`build_pick_scoring_context` returns `None` and
+`ScoredPack.scoring_context` remains `None`; generic rating/color results stay
+unchanged, although a stage-aware generic role ledger may still be retained.
 
 
 ## Splash recommendations

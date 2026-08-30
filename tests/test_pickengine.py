@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from draftomen.carddb import CardDatabase, CardInfo
-from draftomen.config import COLOR_PAIRS
+from draftomen.config import COLOR_PAIRS, PickEngineConfig
 from draftomen.events import PackOfferedEvent
 from draftomen.pickengine import (
     ContextualScoreBreakdown,
@@ -20,6 +20,7 @@ from draftomen.pickengine import (
     PickEngine,
     PickScoringContext,
     ScoredPack,
+    build_pick_scoring_context,
     recommendation_confidence_summary,
     recommendation_explanation,
 )
@@ -1533,6 +1534,187 @@ def test_pick_scoring_context_validates_its_pre_pick_contract() -> None:
             set_profile=profile,
             role_ledger=replace(ledger, profile_source="profile:early"),
         )
+
+
+def test_build_pick_scoring_context_preserves_full_stage_provenance() -> None:
+    profile = _context_profile()
+    database = _card_database()
+    full = build_pick_scoring_context(
+        pool_grp_ids=(1, 2),
+        card_database=database,
+        set_profile=profile,
+        pack_number=2,
+        pick_number=6,
+        global_pick_index=35,
+        estimated_remaining_picks=7,
+    )
+    pick_only = build_pick_scoring_context(
+        pool_grp_ids=(1, 2),
+        card_database=database,
+        set_profile=profile,
+        pick_index=35,
+    )
+
+    assert full is not None
+    assert pick_only is not None
+    assert full.stage == pick_only.stage
+    assert full.stage.pack_number == 2
+    assert full.stage.pick_number == 6
+    assert full.stage.global_pick_index == 35
+    assert full.stage.estimated_remaining_picks == 7
+    assert full.role_ledger.profile_source == "profile:mature"
+    assert full.role_ledger.profile_fingerprint == profile.fingerprint
+    assert full.role_ledger.likely_pair == "WU"
+
+
+def test_build_pick_scoring_context_keeps_explicit_context_authoritative() -> None:
+    profile = _context_profile()
+    database = _card_database()
+    context = build_pick_scoring_context(
+        pool_grp_ids=(1, 2),
+        card_database=database,
+        set_profile=profile,
+        pack_number=2,
+        pick_number=6,
+        global_pick_index=35,
+        estimated_remaining_picks=7,
+    )
+
+    assert build_pick_scoring_context(
+        pool_grp_ids=(1, 2),
+        card_database=database,
+        set_profile=profile,
+        scoring_context=context,
+        pack_number=2,
+        pick_number=6,
+        global_pick_index=35,
+        estimated_remaining_picks=7,
+    ) is context
+    with pytest.raises(ValueError, match="pack_number"):
+        build_pick_scoring_context(
+            pool_grp_ids=(),
+            card_database=database,
+            scoring_context=context,
+            pack_number=1,
+        )
+    with pytest.raises(ValueError, match="pick_index and global_pick_index"):
+        build_pick_scoring_context(
+            pool_grp_ids=(),
+            card_database=database,
+            scoring_context=context,
+            pick_index=34,
+            global_pick_index=35,
+        )
+
+
+def test_generic_profile_is_normalized_to_no_context_with_stage_ledger() -> None:
+    database = _card_database()
+    generic = SetProfile.generic(set_code="TST", event_format="quickdraft")
+
+    assert build_pick_scoring_context(
+        pool_grp_ids=(1, 2),
+        card_database=database,
+        set_profile=generic,
+        pick_index=35,
+    ) is None
+
+    engine = PickEngine(set_profile=generic)
+    assert engine.set_profile is None
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(7,),
+        card_database=database,
+        pool_grp_ids=(1, 2),
+        pick_index=35,
+    )
+
+    assert scored_pack.scoring_context is None
+    assert scored_pack.role_ledger is not None
+    assert scored_pack.role_ledger.profile_source == "generic"
+    assert scored_pack.role_ledger.stage is not None
+    assert scored_pack.role_ledger.stage.global_pick_index == 35
+    card = scored_pack.cards[0]
+    assert card.contextual_breakdown == ContextualScoreBreakdown()
+    assert card.contextual_evidence == ()
+    assert card.contextual_pair is None
+    assert card.contextual_theme is None
+    assert card.contextual_profile_maturity is None
+    assert card.contextual_profile_confidence is None
+
+
+def test_explicit_mature_profile_identity_is_preserved_for_scoring_context() -> None:
+    profile = _context_profile()
+    database = _card_database()
+
+    engine = PickEngine(set_profile=profile)
+    context = build_pick_scoring_context(
+        pool_grp_ids=(1, 2),
+        card_database=database,
+        set_profile=profile,
+        pick_index=35,
+    )
+    scored_pack = engine.score_pack(
+        offered_grp_ids=(7,),
+        card_database=database,
+        pool_grp_ids=(1, 2),
+        pick_index=35,
+    )
+
+    assert engine.set_profile is profile
+    assert context is not None
+    assert context.set_profile is profile
+    assert scored_pack.scoring_context is not None
+    assert scored_pack.scoring_context.set_profile is profile
+
+
+def test_build_pick_scoring_context_keeps_no_profile_generic_compatibility() -> None:
+    database = _card_database()
+    assert build_pick_scoring_context(
+        pool_grp_ids=(1, 2),
+        card_database=database,
+        pick_index=35,
+    ) is None
+
+    scored_pack = PickEngine().score_pack(
+        offered_grp_ids=(7,),
+        card_database=database,
+        pool_grp_ids=(1, 2),
+        pick_index=35,
+    )
+    assert scored_pack.scoring_context is None
+    assert scored_pack.role_ledger is not None
+    assert scored_pack.role_ledger.stage is not None
+    assert scored_pack.role_ledger.stage.global_pick_index == 35
+
+
+def test_build_pick_scoring_context_uses_custom_pair_inference_config() -> None:
+    profile = _context_profile()
+    database = _card_database()
+    custom_config = PickEngineConfig(minimum_pair_colors=3)
+    custom_context = build_pick_scoring_context(
+        pool_grp_ids=(1, 2),
+        card_database=database,
+        set_profile=profile,
+        config=custom_config,
+        pick_index=35,
+    )
+    assert custom_context is not None
+
+    scored_pack = PickEngine(
+        config=custom_config,
+        set_profile=profile,
+    ).score_pack(
+        offered_grp_ids=(7,),
+        card_database=database,
+        pool_grp_ids=(1, 2),
+        pick_index=35,
+    )
+
+    assert scored_pack.scoring_context == custom_context
+    assert scored_pack.role_ledger == custom_context.role_ledger
+    assert custom_context.role_ledger.likely_pair == "WU"
+    assert scored_pack.commitment.inferred_pair is None
+    assert scored_pack.commitment.phase == "open"
+    assert scored_pack.cards[0].contextual_pair == "WU"
 
 
 def test_scoring_context_preserves_generic_scores_but_exposes_context() -> None:

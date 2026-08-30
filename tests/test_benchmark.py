@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import csv
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+import draftomen.benchmark as benchmark_module
+import draftomen.cli as cli_module
 from draftomen.benchmark import (
     _database_with_rating_metadata,
     build_pick_benchmark_report_from_rows,
@@ -14,7 +17,14 @@ from draftomen.benchmark import (
 )
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.cli import main
-from draftomen.pickengine import PickEngine
+from draftomen.events import EXPECTED_PICKS_PER_PACK, EXPECTED_TOTAL_PICKS
+from draftomen.pickengine import PickEngine, ScoredPack
+from draftomen.set_profile import (
+    SetProfile,
+    dump_set_profile,
+    load_set_profile,
+    set_profile_path,
+)
 from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
     RatingSampleCounts,
@@ -23,6 +33,8 @@ from draftomen.seventeen import (
     SeventeenLandsFormatData,
     save_17lands_format_data,
 )
+
+PROFILE_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "set-profiles"
 
 
 def test_pick_benchmark_compares_wr_and_do_score_by_phase() -> None:
@@ -66,6 +78,99 @@ def test_pick_benchmark_compares_wr_and_do_score_by_phase() -> None:
     assert "Non-ML heuristic candidate from misses" in output
 
 
+def test_pick_benchmark_propagates_profile_and_complete_stage_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _benchmark_profile()
+    constructor_profiles: list[object] = []
+    score_calls: list[dict[str, object]] = []
+
+    class SpyPickEngine(PickEngine):
+        def __init__(self, **kwargs: object) -> None:
+            constructor_profiles.append(kwargs.get("set_profile"))
+            super().__init__(**kwargs)
+
+        def score_pack(self, **kwargs: object) -> ScoredPack:
+            score_calls.append(
+                {
+                    key: kwargs[key]
+                    for key in (
+                        "pool_grp_ids",
+                        "pack_number",
+                        "pick_number",
+                        "pick_index",
+                        "global_pick_index",
+                        "estimated_remaining_picks",
+                    )
+                }
+            )
+            return super().score_pack(**kwargs)
+
+    monkeypatch.setattr(benchmark_module, "PickEngine", SpyPickEngine)
+    report = build_pick_benchmark_report_from_rows(
+        set_code="TST",
+        event_format=PREMIER_DRAFT_FORMAT,
+        rows=_benchmark_rows(),
+        card_database=_benchmark_card_database(),
+        ratings_data=_benchmark_ratings_data(),
+        set_profile=profile,
+    )
+
+    assert constructor_profiles == [profile]
+    assert score_calls == [
+        {
+            "pool_grp_ids": (),
+            "pack_number": 0,
+            "pick_number": 0,
+            "pick_index": 1,
+            "global_pick_index": 1,
+            "estimated_remaining_picks": EXPECTED_TOTAL_PICKS - 1,
+        },
+        {
+            "pool_grp_ids": (1,),
+            "pack_number": 0,
+            "pick_number": 1,
+            "pick_index": 2,
+            "global_pick_index": 2,
+            "estimated_remaining_picks": EXPECTED_TOTAL_PICKS - 2,
+        },
+        {
+            "pool_grp_ids": (1, 2),
+            "pack_number": 1,
+            "pick_number": 2,
+            "pick_index": EXPECTED_PICKS_PER_PACK + 3,
+            "global_pick_index": EXPECTED_PICKS_PER_PACK + 3,
+            "estimated_remaining_picks": (
+                EXPECTED_TOTAL_PICKS - EXPECTED_PICKS_PER_PACK - 3
+            ),
+        },
+    ]
+    assert all(
+        rank.actual_card.contextual_profile_maturity == profile.maturity.value
+        for pick in report.picks
+        for rank in pick.rankings
+    )
+
+
+def test_pick_benchmark_without_profile_keeps_generic_scoring() -> None:
+    report = build_pick_benchmark_report_from_rows(
+        set_code="TST",
+        event_format=PREMIER_DRAFT_FORMAT,
+        rows=_benchmark_rows(),
+        card_database=_benchmark_card_database(),
+        ratings_data=_benchmark_ratings_data(),
+        set_profile=None,
+    )
+
+    assert all(
+        rank.actual_card.contextual_profile_maturity is None
+        and rank.actual_card.contextual_profile_confidence is None
+        and rank.actual_card.contextual_evidence == ()
+        for pick in report.picks
+        for rank in pick.rankings
+    )
+
+
 def test_benchmark_metadata_augmentation_preserves_card_data_update_time() -> None:
     timestamp = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
     augmented = _database_with_rating_metadata(
@@ -103,11 +208,9 @@ def test_benchmark_picks_cli_reads_local_public_draft_data(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    app_dir = tmp_path / "app"
-    bulk_file = _write_benchmark_bulk_file(directory=tmp_path)
-    draft_data_file = _write_benchmark_draft_data_file(directory=tmp_path)
-    save_17lands_format_data(dataset=_benchmark_format_data(), app_dir=app_dir)
-
+    app_dir, bulk_file, draft_data_file = _prepare_benchmark_cli_fixture(
+        directory=tmp_path,
+    )
     exit_code = main(
         argv=[
             "benchmark-picks",
@@ -135,6 +238,68 @@ def test_benchmark_picks_cli_reads_local_public_draft_data(
     assert "benchmark-picks: loading 17Lands ratings" in captured.err
     assert "benchmark-picks: scoring public draft rows" in captured.err
     assert "benchmark-picks: done" in captured.err
+
+
+def test_benchmark_picks_cli_passes_valid_local_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir, bulk_file, draft_data_file = _prepare_benchmark_cli_fixture(
+        directory=tmp_path,
+    )
+    profile = _benchmark_profile()
+    dump_set_profile(
+        profile,
+        set_profile_path(
+            set_code="TST",
+            event_format=PREMIER_DRAFT_FORMAT,
+            app_dir=app_dir,
+        ),
+    )
+
+    observed: dict[str, object] = {}
+    real_generate = cli_module.generate_pick_benchmark_report
+
+    def spy_generate(**kwargs: object):
+        observed["set_profile"] = kwargs["set_profile"]
+        return real_generate(**kwargs)
+
+    monkeypatch.setattr(cli_module, "generate_pick_benchmark_report", spy_generate)
+    assert (
+        main(
+            argv=[
+                "benchmark-picks",
+                "--set-code",
+                "TST",
+                "--format",
+                PREMIER_DRAFT_FORMAT,
+                "--draft-data-file",
+                str(draft_data_file),
+                "--bulk-file",
+                str(bulk_file),
+                "--app-dir",
+                str(app_dir),
+            ]
+        )
+        == 0
+    )
+    assert observed["set_profile"] == profile
+
+
+def _prepare_benchmark_cli_fixture(
+    *,
+    directory: Path,
+) -> tuple[Path, Path, Path]:
+    app_dir = directory / "app"
+    bulk_file = _write_benchmark_bulk_file(directory=directory)
+    draft_data_file = _write_benchmark_draft_data_file(directory=directory)
+    save_17lands_format_data(dataset=_benchmark_format_data(), app_dir=app_dir)
+    return app_dir, bulk_file, draft_data_file
+
+
+def _benchmark_profile() -> SetProfile:
+    profile = load_set_profile(PROFILE_FIXTURE_DIR / "mature.json")
+    return replace(profile, event_format=PREMIER_DRAFT_FORMAT)
 
 
 def _benchmark_rows() -> tuple[dict[str, str], ...]:

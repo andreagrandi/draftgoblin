@@ -18,6 +18,13 @@ from draftomen.config import PICK_ENGINE
 from draftomen.events import DraftCompletedEvent, PackOfferedEvent, PickMadeEvent
 from draftomen.pickengine import PickEngine
 from draftomen.pool import DraftState
+from draftomen.set_profile import (
+    PairProfile,
+    ProfileMaturity,
+    SampleSummary,
+    SetProfile,
+    SourceMetadata,
+)
 
 ACCOUNT_ID = "account-a"
 DRAFT_ID = "draft-a"
@@ -136,6 +143,11 @@ def test_audit_records_complete_decision_and_choice_without_duplicates(
     assert decision["candidates"][0]["splash"]["reasons"] == [
         "primary colors are still open"
     ]
+    assert decision["context_provenance"] is None
+    assert decision["recommendation"]["grp_id"] == decision["recommended_grp_id"]
+    assert decision["recommendation"]["contextual_evidence"] == (
+        decision["candidates"][0]["scoring"]["contextual_evidence"]
+    )
 
     choice = records[2]
     assert choice["evaluation_id"] == decision["evaluation_id"]
@@ -148,6 +160,88 @@ def test_audit_records_complete_decision_and_choice_without_duplicates(
     assert completion["picked_grp_ids"] == [102]
     assert completion["pick_count"] == 1
     assert completion["inferred"] is False
+
+
+def test_audit_context_provenance_omits_pool_but_preserves_profile_and_evidence(
+    tmp_path: Path,
+) -> None:
+    state = _draft_state()
+    offer = _pack_event(pool_grp_ids=(101,))
+    profile = _set_profile()
+    engine = PickEngine(set_profile=profile)
+    scored_pack = engine.score_pack(
+        offered_grp_ids=offer.offered_grp_ids,
+        card_database=_card_database(),
+        pool_grp_ids=offer.pool_grp_ids,
+        pack_number=offer.pack_number,
+        pick_number=offer.pick_number,
+        global_pick_index=1,
+        estimated_remaining_picks=41,
+    )
+    store = DraftAuditStore(app_dir=tmp_path, clock=_fixed_clock)
+
+    store.record_decision(
+        state=state,
+        event=offer,
+        scored_pack=scored_pack,
+        config=engine.config,
+        ratings_data=engine.ratings_data,
+    )
+
+    records = load_draft_audit_records(
+        account_id=ACCOUNT_ID,
+        draft_id=DRAFT_ID,
+        app_dir=tmp_path,
+    )
+    decision = records[0]
+    provenance = decision["context_provenance"]
+    assert decision["pool_before_pick"] == [101]
+    assert provenance == {
+        "stage": {
+            "pack_number": 0,
+            "pick_number": 0,
+            "global_pick_index": 1,
+            "estimated_remaining_picks": 41,
+        },
+        "profile": {
+            "set_code": "abc",
+            "format": "quickdraft",
+            "profile_version": "audit-context-test",
+            "maturity": "mature",
+            "confidence": 1.0,
+            "fingerprint": profile.fingerprint,
+            "source": {"provider": "test"},
+        },
+    }
+    recommendation = decision["recommendation"]
+    assert recommendation is not None
+    assert recommendation["grp_id"] == decision["recommended_grp_id"]
+    candidate = next(
+        candidate
+        for candidate in decision["candidates"]
+        if candidate["grp_id"] == recommendation["grp_id"]
+    )
+    for candidate_payload, scored_card in zip(
+        decision["candidates"],
+        scored_pack.cards,
+    ):
+        assert candidate_payload["scoring"]["contextual_evidence"] == list(
+            scored_card.contextual_evidence
+        )
+    for field in (
+        "contextual_breakdown",
+        "contextual_evidence",
+        "contextual_pair",
+        "contextual_theme",
+        "contextual_profile_maturity",
+        "contextual_profile_confidence",
+    ):
+        expected = (
+            list(candidate["scoring"][field])
+            if field == "contextual_evidence"
+            else candidate["scoring"][field]
+        )
+        assert recommendation[field] == expected
 
 
 def test_restart_does_not_re_evaluate_a_pick_with_a_recorded_choice(
@@ -296,6 +390,20 @@ def _draft_state() -> DraftState:
     )
 
 
+def _set_profile() -> SetProfile:
+    return SetProfile(
+        set_code="ABC",
+        event_format="quickdraft",
+        profile_version="audit-context-test",
+        generated_at="1970-01-01T00:00:00+00:00",
+        source=SourceMetadata(provider="test"),
+        maturity=ProfileMaturity.MATURE,
+        samples=SampleSummary(total=1, by_pair=(("WU", 1),)),
+        confidence=1.0,
+        pairs=(PairProfile(pair="WU"),),
+    )
+
+
 def _completed_state() -> DraftState:
     state = _draft_state()
     return DraftState(
@@ -313,14 +421,14 @@ def _completed_state() -> DraftState:
     )
 
 
-def _pack_event() -> PackOfferedEvent:
+def _pack_event(*, pool_grp_ids: tuple[int, ...] = ()) -> PackOfferedEvent:
     return PackOfferedEvent(
         event_name=EVENT_NAME,
         set_code=SET_CODE,
         pack_number=0,
         pick_number=0,
         offered_grp_ids=(101, 102),
-        pool_grp_ids=(),
+        pool_grp_ids=pool_grp_ids,
         account_id=ACCOUNT_ID,
     )
 

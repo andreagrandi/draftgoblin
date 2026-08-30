@@ -22,7 +22,7 @@ from draftomen.pool_ledger import (
     project_pool_role_ledger,
 )
 from draftomen.semantic_roles import Role, RoleAssignment, resolve_card_roles
-from draftomen.set_profile import SetProfile
+from draftomen.set_profile import ProfileMaturity, SetProfile
 from draftomen.seventeen import (
     FORMAT_RATING_SOURCE,
     NEUTRAL_PRIOR_SOURCE,
@@ -137,6 +137,8 @@ class PickScoringContext:
     def __post_init__(self) -> None:
         if not isinstance(self.set_profile, SetProfile):
             raise TypeError("PickScoringContext.set_profile must be a SetProfile.")
+        if self.set_profile.maturity is ProfileMaturity.GENERIC:
+            raise ValueError("PickScoringContext requires a non-generic profile.")
         if not isinstance(self.role_ledger, PoolRoleLedger):
             raise TypeError(
                 "PickScoringContext.role_ledger must be a PoolRoleLedger."
@@ -170,6 +172,26 @@ class PickScoringContext:
 
         assert self.role_ledger.stage is not None
         return self.role_ledger.stage
+
+
+def _normalize_scoring_profile(
+    profile: SetProfile | None,
+) -> SetProfile | None:
+    if profile is None or profile.maturity is ProfileMaturity.GENERIC:
+        return None
+    return profile
+
+
+def _normalize_scoring_context(
+    scoring_context: PickScoringContext | None,
+) -> PickScoringContext | None:
+    if scoring_context is None:
+        return None
+    if not isinstance(scoring_context, PickScoringContext):
+        raise TypeError("scoring_context must be a PickScoringContext.")
+    if scoring_context.set_profile.maturity is ProfileMaturity.GENERIC:
+        return None
+    return scoring_context
 
 
 def recommendation_confidence_summary(
@@ -418,7 +440,6 @@ class ScoredPack:
     scoring_context: PickScoringContext | None = None
 
 
-
 class PickEngine:
     """Score offered cards using 17Lands data and configured priors.
     Pool color weights progressively bias scores toward an inferred pair.
@@ -433,14 +454,11 @@ class PickEngine:
         set_profile: SetProfile | None = None,
         scoring_context: PickScoringContext | None = None,
     ) -> None:
-        if scoring_context is not None and not isinstance(
-            scoring_context, PickScoringContext
-        ):
-            raise TypeError("scoring_context must be a PickScoringContext.")
+        scoring_context = _normalize_scoring_context(scoring_context)
         self.ratings_data = ratings_data
         self.config = config
         self.splash_enabled = splash_enabled
-        self.set_profile = set_profile
+        self.set_profile = _normalize_scoring_profile(set_profile)
         self.scoring_context = scoring_context
         self.normalization = _normalization_from_data(
             ratings_data=ratings_data,
@@ -466,50 +484,25 @@ class PickEngine:
         ``PickScoringContext``. A profile-backed ledger built for this exact
         pool and stage becomes that context when no explicit one is supplied.
         """
-        active_context = (
+        candidate_context = _normalize_scoring_context(
             self.scoring_context if scoring_context is None else scoring_context
         )
-        if active_context is not None and not isinstance(
-            active_context, PickScoringContext
-        ):
-            raise TypeError("scoring_context must be a PickScoringContext.")
-
-        explicit_indices = tuple(
-            index
-            for index in (pick_index, global_pick_index)
-            if index is not None
+        resolved_stage = _resolve_pre_pick_stage(
+            pick_index=pick_index,
+            pack_number=pack_number,
+            pick_number=pick_number,
+            global_pick_index=global_pick_index,
+            estimated_remaining_picks=estimated_remaining_picks,
+            scoring_context=candidate_context,
         )
-        if len(explicit_indices) == 2 and explicit_indices[0] != explicit_indices[1]:
-            raise ValueError("pick_index and global_pick_index conflict.")
-        if active_context is not None:
-            context_stage = active_context.stage
-            if (
-                explicit_indices
-                and explicit_indices[0] != context_stage.global_pick_index
-            ):
-                raise ValueError(
-                    "Explicit pick_index/global_pick_index conflicts with "
-                    "PickScoringContext.stage.global_pick_index."
-                )
-            for coordinate_name, explicit_value, context_value in (
-                ("pack_number", pack_number, context_stage.pack_number),
-                ("pick_number", pick_number, context_stage.pick_number),
-                (
-                    "estimated_remaining_picks",
-                    estimated_remaining_picks,
-                    context_stage.estimated_remaining_picks,
-                ),
-            ):
-                if explicit_value is not None and explicit_value != context_value:
-                    raise ValueError(
-                        f"Explicit {coordinate_name} conflicts with "
-                        f"PickScoringContext.stage.{coordinate_name}."
-                    )
-            resolved_pick_index = context_stage.global_pick_index
+        if resolved_stage is not None:
+            resolved_pick_index = resolved_stage.global_pick_index
         else:
             resolved_pick_index = _pick_index(
                 pool_grp_ids=pool_grp_ids,
-                pick_index=explicit_indices[0] if explicit_indices else None,
+                pick_index=(
+                    pick_index if pick_index is not None else global_pick_index
+                ),
             )
         commitment = _color_commitment(
             pool_grp_ids=pool_grp_ids,
@@ -529,31 +522,36 @@ class PickEngine:
             ),
             enabled=self.splash_enabled,
         )
-        if active_context is not None:
-            role_ledger = active_context.role_ledger
-        else:
-            role_ledger = _pre_pick_ledger(
+        active_context = candidate_context
+        if active_context is None and resolved_stage is not None:
+            active_context = _build_pick_scoring_context(
                 pool_grp_ids=pool_grp_ids,
                 card_database=card_database,
                 ratings_data=self.ratings_data,
                 set_profile=self.set_profile,
-                pick_index=pick_index,
-                pack_number=pack_number,
-                pick_number=pick_number,
-                global_pick_index=global_pick_index,
-                estimated_remaining_picks=estimated_remaining_picks,
+                stage=resolved_stage,
                 likely_pair=commitment.inferred_pair,
             )
-            if role_ledger is not None and self.set_profile is not None:
-                active_context = PickScoringContext(
-                    set_profile=self.set_profile,
-                    role_ledger=role_ledger,
-                )
-        active_profile = (
-            self.set_profile
-            if active_context is None
-            else active_context.set_profile
-        )
+        if active_context is not None:
+            role_ledger = active_context.role_ledger
+        elif resolved_stage is None:
+            role_ledger = None
+        else:
+            role_ledger = project_pool_role_ledger(
+                pool_before_pick=pool_grp_ids,
+                pack_number=resolved_stage.pack_number,
+                pick_number=resolved_stage.pick_number,
+                global_pick_index=resolved_stage.global_pick_index,
+                estimated_remaining_picks=resolved_stage.estimated_remaining_picks,
+                card_database=card_database,
+                ratings_data=self.ratings_data,
+                set_profile=self.set_profile,
+                likely_pair=commitment.inferred_pair,
+            )
+        if active_context is None:
+            active_profile = self.set_profile
+        else:
+            active_profile = active_context.set_profile
         require_material_rate_margin = (
             active_profile is not None
             and active_profile.maturity.value != "generic"
@@ -1180,20 +1178,128 @@ def _pick_index(
     return len(pool_grp_ids) + 1
 
 
-def _pre_pick_ledger(
+def build_pick_scoring_context(
+    *,
+    pool_grp_ids: tuple[int, ...],
+    card_database: CardDatabase,
+    ratings_data: SeventeenLandsData | None = None,
+    config: PickEngineConfig = PICK_ENGINE,
+    set_profile: SetProfile | None = None,
+    pick_index: int | None = None,
+    pack_number: int | None = None,
+    pick_number: int | None = None,
+    global_pick_index: int | None = None,
+    estimated_remaining_picks: int | None = None,
+    scoring_context: PickScoringContext | None = None,
+) -> PickScoringContext | None:
+    """Build validated pre-pick context from authoritative inputs."""
+
+    scoring_context = _normalize_scoring_context(scoring_context)
+    set_profile = _normalize_scoring_profile(set_profile)
+    resolved_stage = _resolve_pre_pick_stage(
+        pick_index=pick_index,
+        pack_number=pack_number,
+        pick_number=pick_number,
+        global_pick_index=global_pick_index,
+        estimated_remaining_picks=estimated_remaining_picks,
+        scoring_context=scoring_context,
+    )
+    if scoring_context is not None:
+        return scoring_context
+    if set_profile is None or resolved_stage is None:
+        return None
+    inferred_pair = _inferred_pair(
+        weights=_pool_color_weights(
+            pool_grp_ids=pool_grp_ids,
+            card_database=card_database,
+            ratings_data=ratings_data,
+            config=config,
+        ),
+        config=config,
+    )
+    return _build_pick_scoring_context(
+        pool_grp_ids=pool_grp_ids,
+        card_database=card_database,
+        ratings_data=ratings_data,
+        set_profile=set_profile,
+        stage=resolved_stage,
+        likely_pair=inferred_pair,
+    )
+
+
+def _build_pick_scoring_context(
     *,
     pool_grp_ids: tuple[int, ...],
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData | None,
     set_profile: SetProfile | None,
+    stage: LedgerStage,
+    likely_pair: str | None,
+) -> PickScoringContext | None:
+    set_profile = _normalize_scoring_profile(set_profile)
+    if set_profile is None:
+        return None
+    role_ledger = project_pool_role_ledger(
+        pool_before_pick=pool_grp_ids,
+        pack_number=stage.pack_number,
+        pick_number=stage.pick_number,
+        global_pick_index=stage.global_pick_index,
+        estimated_remaining_picks=stage.estimated_remaining_picks,
+        card_database=card_database,
+        ratings_data=ratings_data,
+        set_profile=set_profile,
+        likely_pair=likely_pair,
+    )
+    return PickScoringContext(set_profile=set_profile, role_ledger=role_ledger)
+
+
+def _resolve_pre_pick_stage(
+    *,
     pick_index: int | None,
     pack_number: int | None,
     pick_number: int | None,
     global_pick_index: int | None,
     estimated_remaining_picks: int | None,
-    likely_pair: str | None,
-) -> PoolRoleLedger | None:
-    explicit = (pack_number, pick_number, global_pick_index, estimated_remaining_picks)
+    scoring_context: PickScoringContext | None,
+) -> LedgerStage | None:
+    explicit_indices = tuple(
+        index
+        for index in (pick_index, global_pick_index)
+        if index is not None
+    )
+    if len(explicit_indices) == 2 and explicit_indices[0] != explicit_indices[1]:
+        raise ValueError("pick_index and global_pick_index conflict.")
+    if scoring_context is not None:
+        context_stage = scoring_context.stage
+        if (
+            explicit_indices
+            and explicit_indices[0] != context_stage.global_pick_index
+        ):
+            raise ValueError(
+                "Explicit pick_index/global_pick_index conflicts with "
+                "PickScoringContext.stage.global_pick_index."
+            )
+        for coordinate_name, explicit_value, context_value in (
+            ("pack_number", pack_number, context_stage.pack_number),
+            ("pick_number", pick_number, context_stage.pick_number),
+            (
+                "estimated_remaining_picks",
+                estimated_remaining_picks,
+                context_stage.estimated_remaining_picks,
+            ),
+        ):
+            if explicit_value is not None and explicit_value != context_value:
+                raise ValueError(
+                    f"Explicit {coordinate_name} conflicts with "
+                    f"PickScoringContext.stage.{coordinate_name}."
+                )
+        return context_stage
+    explicit = (
+        pack_number,
+        pick_number,
+        global_pick_index,
+        estimated_remaining_picks,
+    )
     if all(value is None for value in explicit):
         if pick_index is None:
             return None
@@ -1203,20 +1309,16 @@ def _pre_pick_ledger(
         estimated_remaining_picks = max(0, EXPECTED_TOTAL_PICKS - pick_index)
     elif any(value is None for value in explicit):
         raise ValueError(
-            "Ledger scoring requires pack, pick, global index, and remaining picks together."
+            "Ledger scoring requires pack, pick, global index, and remaining "
+            "picks together."
         )
     if pick_index is not None and global_pick_index != pick_index:
         raise ValueError("Ledger pick_index and global_pick_index must agree.")
-    return project_pool_role_ledger(
-        pool_before_pick=pool_grp_ids,
+    return LedgerStage(
         pack_number=pack_number,
         pick_number=pick_number,
         global_pick_index=global_pick_index,
         estimated_remaining_picks=estimated_remaining_picks,
-        card_database=card_database,
-        ratings_data=ratings_data,
-        set_profile=set_profile,
-        likely_pair=likely_pair,
     )
 
 

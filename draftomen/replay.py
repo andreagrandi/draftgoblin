@@ -24,13 +24,19 @@ from draftomen.events import (
     PickMadeEvent,
     parse_events,
 )
-from draftomen.pickengine import PickEngine, ScoredCard, ScoredPack
+from draftomen.pickengine import (
+    PickEngine,
+    ScoredCard,
+    ScoredPack,
+    recommendation_explanation,
+)
 from draftomen.pool import DraftPoolStore
 from draftomen.set_profile import SetProfile
 from draftomen.seventeen import SEVENTEEN_LANDS_ATTRIBUTION, SeventeenLandsData
 
 PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
+ProfileLoader: TypeAlias = Callable[[str], SetProfile | None]
 
 
 class ReplayError(RuntimeError):
@@ -58,11 +64,12 @@ def replay_log_file(
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData | None = None,
     ratings_loader: RatingsLoader | None = None,
+    profile_loader: ProfileLoader | None = None,
     splash_enabled: bool = True,
     set_profile: SetProfile | None = None,
 ) -> str:
     """Replay one captured Player.log file into deterministic text.
-    Ratings are caller-supplied or loaded once from the parsed set code.
+    Ratings and profiles are caller-supplied or loaded once from parsed set code.
     """
 
     path = Path(logfile)
@@ -77,6 +84,7 @@ def replay_log_file(
         card_database=card_database,
         ratings_data=ratings_data,
         ratings_loader=ratings_loader,
+        profile_loader=profile_loader,
         splash_enabled=splash_enabled,
         set_profile=set_profile,
     )
@@ -88,6 +96,7 @@ def render_replay_events(
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData | None = None,
     ratings_loader: RatingsLoader | None = None,
+    profile_loader: ProfileLoader | None = None,
     splash_enabled: bool = True,
     set_profile: SetProfile | None = None,
 ) -> str:
@@ -107,10 +116,15 @@ def render_replay_events(
         ratings_data=ratings_data,
         ratings_loader=ratings_loader,
     )
+    loaded_profile = _set_profile_for_replay(
+        header=header,
+        set_profile=set_profile,
+        profile_loader=profile_loader,
+    )
     pick_engine = PickEngine(
         ratings_data=loaded_ratings,
         splash_enabled=splash_enabled,
-        set_profile=set_profile,
+        set_profile=loaded_profile,
     )
     lines = _format_header(header=header)
     lines.append("")
@@ -142,7 +156,7 @@ def render_replay_events(
                     card_database=card_database,
                     ratings_data=loaded_ratings,
                     splash_enabled=splash_enabled,
-                    set_profile=set_profile,
+                    set_profile=loaded_profile,
                 )
             )
 
@@ -168,6 +182,21 @@ def _ratings_data_for_replay(
         return None
 
     return ratings_loader(header.set_code)
+
+
+def _set_profile_for_replay(
+    *,
+    header: _ReplayHeader,
+    set_profile: SetProfile | None,
+    profile_loader: ProfileLoader | None,
+) -> SetProfile | None:
+    if set_profile is not None or profile_loader is None:
+        return set_profile
+
+    if header.set_code is None:
+        return None
+
+    return profile_loader(header.set_code)
 
 
 def _format_completed_build_sheet(
@@ -353,6 +382,14 @@ def _format_pack(
     lines.extend(_format_scored_cards(cards=scored_pack.cards))
     if any(card.no_data for card in scored_pack.cards):
         lines.append("  * Prior uses neutral prior adjusted by ALSA when available.")
+    if scored_pack.scoring_context is not None and scored_pack.cards:
+        lines.append(
+            "Recommendation: "
+            + recommendation_explanation(
+                scored_card=scored_pack.cards[0],
+                inferred_pair=scored_pack.commitment.inferred_pair,
+            )
+        )
 
     return lines
 

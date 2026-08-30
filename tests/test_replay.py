@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+import draftomen.cli as cli_module
 from draftomen.carddb import (
     CardDatabase,
     build_card_database_from_bulk_file,
@@ -13,7 +15,16 @@ from draftomen.carddb import (
     refresh_card_database,
 )
 from draftomen.cli import main
-from draftomen.replay import replay_log_file
+from draftomen.events import (
+    EXPECTED_PICKS_PER_PACK,
+    EXPECTED_TOTAL_PICKS,
+    DraftStartedEvent,
+    PackOfferedEvent,
+    PickMadeEvent,
+)
+from draftomen.pickengine import PickEngine, ScoredPack
+from draftomen.replay import render_replay_events, replay_log_file
+from draftomen.set_profile import SetProfile, dump_set_profile, set_profile_path
 from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
@@ -216,6 +227,260 @@ def test_replay_without_card_cache_returns_actionable_error(
     assert exit_code == 1
     assert captured.out == ""
     assert "Run refresh-data first" in captured.err
+
+
+def test_replay_uses_pre_pick_context_for_recommendation_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+    database = CardDatabase(
+        cards={
+            grp_id: replace(card, set_code="MSH")
+            if grp_id in {105003, 105097, 105134}
+            else card
+            for grp_id, card in database.cards.items()
+        }
+    )
+    profile = _replay_semantic_profile()
+    calls: list[tuple[dict[str, object], ScoredPack]] = []
+    score_pack = PickEngine.score_pack
+
+    def record_score_pack(self: PickEngine, **kwargs: object) -> ScoredPack:
+        scored_pack = score_pack(self, **kwargs)
+        calls.append((kwargs, scored_pack))
+        return scored_pack
+
+    monkeypatch.setattr(PickEngine, "score_pack", record_score_pack)
+    output = render_replay_events(
+        events=_replay_context_events(),
+        card_database=database,
+        set_profile=profile,
+        splash_enabled=False,
+    )
+
+    assert len(calls) == 1
+    kwargs, scored_pack = calls[0]
+    expected_global_pick_index = (
+        1 * EXPECTED_PICKS_PER_PACK + 2 + 1
+    )
+    expected_remaining_picks = EXPECTED_TOTAL_PICKS - expected_global_pick_index
+    assert kwargs["pool_grp_ids"] == (105097, 105134)
+    assert kwargs["pack_number"] == 1
+    assert kwargs["pick_number"] == 2
+    assert kwargs["pick_index"] == expected_global_pick_index
+    assert kwargs["global_pick_index"] == expected_global_pick_index
+    assert kwargs["estimated_remaining_picks"] == expected_remaining_picks
+    assert scored_pack.scoring_context is not None
+    assert scored_pack.scoring_context.stage.pack_number == 1
+    assert scored_pack.scoring_context.stage.pick_number == 2
+    assert (
+        scored_pack.scoring_context.stage.global_pick_index
+        == expected_global_pick_index
+    )
+    assert (
+        scored_pack.scoring_context.stage.estimated_remaining_picks
+        == expected_remaining_picks
+    )
+    assert scored_pack.scoring_context.role_ledger.profile_source == (
+        "profile:early"
+    )
+    assert scored_pack.scoring_context.set_profile is profile
+    recommended_card = scored_pack.cards[0]
+    assert recommended_card.contextual_profile_maturity == "early"
+    assert recommended_card.contextual_profile_confidence == pytest.approx(0.8)
+    assert recommended_card.contextual_breakdown.role > 0
+    assert any(
+        "fills draw deficit" in evidence
+        for evidence in recommended_card.contextual_evidence
+    )
+    assert "Recommendation: " in output
+    assert "early profile (80% confidence)" in output
+    assert "fills draw deficit" in output
+
+
+def test_replay_cli_loads_local_profile_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    app_dir = tmp_path / "app"
+    dump_set_profile(
+        _replay_semantic_profile(),
+        set_profile_path(
+            set_code="MSH",
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=app_dir,
+        ),
+    )
+
+    calls: list[tuple[str, str, Path]] = []
+    real_load = cli_module.load_scoring_profile
+
+    def record_load(
+        set_code: str,
+        event_format: str,
+        *,
+        app_dir: Path | None = None,
+        **kwargs: object,
+    ) -> SetProfile | None:
+        assert app_dir is not None
+        calls.append((set_code, event_format, app_dir))
+        return real_load(
+            set_code=set_code,
+            event_format=event_format,
+            app_dir=app_dir,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(cli_module, "load_scoring_profile", record_load)
+    exit_code = main(
+        argv=[
+            "replay",
+            str(FIXTURE_LOG_PATH),
+            "--bulk-file",
+            str(SCRYFALL_BULK_SAMPLE_PATH),
+            "--app-dir",
+            str(app_dir),
+            "--no-splash",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert calls == [("MSH", QUICK_DRAFT_FORMAT, app_dir)]
+    assert "Recommendation: " in captured.out
+    assert "early profile (80% confidence)" in captured.out
+    assert captured.err == ""
+
+
+def test_replay_explains_profile_context_without_material_terms() -> None:
+    database = build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+    database = CardDatabase(
+        cards={
+            grp_id: replace(card, set_code="MSH")
+            if grp_id in {105003, 105097, 105134}
+            else card
+            for grp_id, card in database.cards.items()
+        }
+    )
+    profile = replace(_replay_semantic_profile(), role_profile=None)
+
+    output = render_replay_events(
+        events=_replay_context_events(),
+        card_database=database,
+        set_profile=profile,
+        splash_enabled=False,
+    )
+
+    assert "Recommendation: " in output
+    assert "context UG, theme replay tempo; early profile (80% confidence)" in output
+    assert "material terms:" not in output
+
+
+def test_replay_profile_loader_is_skipped_for_explicit_profile() -> None:
+    database = build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+    calls: list[str] = []
+    profile = _replay_semantic_profile()
+
+    def fail_loader(set_code: str) -> SetProfile:
+        calls.append(set_code)
+        raise AssertionError("explicit profile must remain authoritative")
+
+    render_replay_events(
+        events=_replay_context_events(),
+        card_database=database,
+        set_profile=profile,
+        profile_loader=fail_loader,
+        splash_enabled=False,
+    )
+
+    assert calls == []
+
+
+def _replay_context_events() -> tuple[
+    DraftStartedEvent | PickMadeEvent | PackOfferedEvent, ...
+]:
+    event_name = "QuickDraft_MSH_replay-context"
+    account_id = "REPLAYACCOUNT"
+    return (
+        DraftStartedEvent(
+            event_name=event_name,
+            set_code="MSH",
+            course_id="REPLAYDRAFT",
+            account_id=account_id,
+        ),
+        PickMadeEvent(
+            event_name=event_name,
+            set_code="MSH",
+            pack_number=0,
+            pick_number=0,
+            chosen_grp_id=105097,
+            account_id=account_id,
+        ),
+        PickMadeEvent(
+            event_name=event_name,
+            set_code="MSH",
+            pack_number=0,
+            pick_number=1,
+            chosen_grp_id=105134,
+            account_id=account_id,
+        ),
+        PackOfferedEvent(
+            event_name=event_name,
+            set_code="MSH",
+            pack_number=1,
+            pick_number=2,
+            offered_grp_ids=(105003,),
+            pool_grp_ids=(105097, 105134),
+            account_id=account_id,
+        ),
+    )
+
+
+def _replay_semantic_profile() -> SetProfile:
+    return SetProfile.from_json(
+        {
+            "schema_version": 1,
+            "set_code": "MSH",
+            "format": "quickdraft",
+            "profile_version": "replay-test",
+            "generated_at": "2026-08-29T00:00:00+00:00",
+            "source": {"provider": "replay-test"},
+            "maturity": "early",
+            "confidence": 0.8,
+            "pair_profiles": [
+                {
+                    "pair": "UG",
+                    "theme": "replay tempo",
+                    "role_targets": [
+                        {"role": "draw", "value": 3},
+                    ],
+                }
+            ],
+            "role_profile": {
+                "schema_version": 2,
+                "set_code": "MSH",
+                "classifier_version": "1.1",
+                "role_schema_version": 2,
+                "profile_schema_version": 2,
+                "cards": [
+                    {
+                        "key": "arena_id:105003",
+                        "card_name": "Fixture Card 105003",
+                        "roles": [
+                            {
+                                "role": "draw",
+                                "confidence": 1.0,
+                                "provenance": ["replay-test"],
+                                "evidence": ["replay test role"],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    )
 
 
 def _fixture_ratings_data() -> SeventeenLandsData:

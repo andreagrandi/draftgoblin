@@ -11,9 +11,10 @@ from os import PathLike
 from typing import TypeAlias
 
 from draftomen.carddb import CardDatabase, CardInfo
-from draftomen.events import EXPECTED_PICKS_PER_PACK
+from draftomen.events import EXPECTED_PICKS_PER_PACK, EXPECTED_TOTAL_PICKS
 from draftomen.pickengine import PickEngine, ScoredCard
 from draftomen.ranking import rank_scored_cards, ranking_label
+from draftomen.set_profile import SetProfile
 from draftomen.seventeen import (
     SeventeenLandsData,
     iter_17lands_draft_data_rows,
@@ -147,6 +148,7 @@ def generate_pick_benchmark_report(
     draft_data_file: PathInput,
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData,
+    set_profile: SetProfile | None = None,
     max_drafts: int | None = None,
     trophy_only: bool = True,
 ) -> PickBenchmarkReport:
@@ -161,6 +163,7 @@ def generate_pick_benchmark_report(
         rows=rows,
         card_database=card_database,
         ratings_data=ratings_data,
+        set_profile=set_profile,
         source=str(draft_data_file),
         max_drafts=max_drafts,
         trophy_only=trophy_only,
@@ -174,6 +177,7 @@ def build_pick_benchmark_report_from_rows(
     rows: Iterable[Mapping[str, str]],
     card_database: CardDatabase,
     ratings_data: SeventeenLandsData,
+    set_profile: SetProfile | None = None,
     source: str = PUBLIC_DRAFT_SOURCE,
     max_drafts: int | None = None,
     trophy_only: bool = True,
@@ -200,7 +204,7 @@ def build_pick_benchmark_report_from_rows(
         max_drafts=max_drafts,
         trophy_only=trophy_only,
     )
-    engine = PickEngine(ratings_data=ratings_data)
+    engine = PickEngine(ratings_data=ratings_data, set_profile=set_profile)
     picks: list[PickBenchmarkPickResult] = []
     skipped: Counter[str] = Counter()
     for draft_id, draft_rows in rows_by_draft.items():
@@ -353,14 +357,19 @@ def _score_benchmark_row(
 
     pack_number = _public_pack_number(row=row)
     pick_number = _public_pick_number(row=row)
+    pick_index = _public_pick_index(
+        pack_number=pack_number,
+        pick_number=pick_number,
+    )
     scored_pack = pick_engine.score_pack(
         offered_grp_ids=offered_grp_ids,
         card_database=card_database,
         pool_grp_ids=pool_grp_ids,
-        pick_index=_public_pick_index(
-            pack_number=pack_number,
-            pick_number=pick_number,
-        ),
+        pick_index=pick_index,
+        pack_number=pack_number,
+        pick_number=pick_number - 1,
+        global_pick_index=pick_index,
+        estimated_remaining_picks=max(0, EXPECTED_TOTAL_PICKS - pick_index),
     )
     ranking_results = tuple(
         _rank_result_for_mode(
@@ -378,10 +387,7 @@ def _score_benchmark_row(
             draft_id=draft_id,
             pack_number=pack_number,
             pick_number=pick_number,
-            pick_index=_public_pick_index(
-                pack_number=pack_number,
-                pick_number=pick_number,
-            ),
+            pick_index=pick_index,
             phase=scored_pack.commitment.phase,
             actual=card_database.lookup(grp_id=actual_grp_id),
             offered_count=len(offered_grp_ids),

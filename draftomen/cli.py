@@ -31,6 +31,10 @@ from draftomen.carddb import (
     load_or_refresh_card_database,
     refresh_card_database,
 )
+from draftomen.set_profile import (
+    SetProfileError,
+    load_scoring_profile,
+)
 from draftomen.corpus import (
     CorpusError,
     DEFAULT_ARTIFACT_DIR,
@@ -649,6 +653,11 @@ def handle_replay(args: argparse.Namespace) -> int:
                 set_code=set_code,
                 app_dir=args.app_dir,
             ),
+            profile_loader=lambda set_code: load_scoring_profile(
+                set_code=set_code,
+                event_format=QUICK_DRAFT_FORMAT,
+                app_dir=args.app_dir,
+            ),
             splash_enabled=args.splash_enabled,
         )
     except (
@@ -658,6 +667,7 @@ def handle_replay(args: argparse.Namespace) -> int:
         DraftPoolError,
         ReplayError,
         SeventeenLandsError,
+        SetProfileError,
     ) as error:
         print(f"replay failed: {error}", file=sys.stderr)
         return 1
@@ -749,6 +759,11 @@ def handle_backtest(args: argparse.Namespace) -> int:
             account_id=args.account,
             draft_id=args.draft_id,
         )
+        set_profile = load_scoring_profile(
+            set_code=state.set_code,
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=args.app_dir,
+        )
         database = _load_backtest_card_database(args=args)
         ratings_data = _load_optional_backtest_ratings_data(
             args=args,
@@ -761,8 +776,14 @@ def handle_backtest(args: argparse.Namespace) -> int:
             ratings_data=ratings_data,
             ranking_mode=args.ranking,
             splash_enabled=args.splash_enabled,
+            set_profile=set_profile,
         )
-    except (BacktestError, CardDatabaseError, DraftPoolError) as error:
+    except (
+        BacktestError,
+        CardDatabaseError,
+        DraftPoolError,
+        SetProfileError,
+    ) as error:
         print(f"backtest failed: {error}", file=sys.stderr)
         return 1
 
@@ -811,12 +832,18 @@ def _load_optional_backtest_ratings_data(
 
 def handle_benchmark_picks(args: argparse.Namespace) -> int:
     """Handle public-data recommendation calibration benchmarks.
-    The benchmark reads local draft data and cached ratings by default.
+    The benchmark reads local draft data and cached ratings by default, with
+    a compatible local set profile used when one is available.
     """
 
     try:
         _print_benchmark_progress("loading 17Lands ratings")
         ratings_data = _load_benchmark_ratings_data(args=args)
+        set_profile = load_scoring_profile(
+            set_code=args.set_code,
+            event_format=args.format,
+            app_dir=args.app_dir,
+        )
         _print_benchmark_progress("loading optional cached card metadata")
         database = _load_benchmark_card_database(args=args)
         _print_benchmark_progress(
@@ -828,6 +855,7 @@ def handle_benchmark_picks(args: argparse.Namespace) -> int:
             draft_data_file=args.draft_data_file,
             card_database=database,
             ratings_data=ratings_data,
+            set_profile=set_profile,
             max_drafts=args.max_drafts,
             trophy_only=args.trophy_only,
         )
@@ -836,6 +864,7 @@ def handle_benchmark_picks(args: argparse.Namespace) -> int:
         OSError,
         PickBenchmarkError,
         SeventeenLandsError,
+        SetProfileError,
     ) as error:
         print(f"benchmark-picks failed: {error}", file=sys.stderr)
         return 1

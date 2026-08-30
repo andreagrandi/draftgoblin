@@ -55,6 +55,7 @@ from draftomen.pool import (
 from draftomen.pickengine import (
     ContextualScoreBreakdown,
     PickEngine,
+    PickScoringContext,
     ScoredCard,
     ScoredPack,
     recommendation_confidence_summary,
@@ -68,9 +69,10 @@ from draftomen.ranking import (
     rank_scored_cards,
     validate_ranking_mode,
 )
-from draftomen.set_profile import SetProfile
+from draftomen.set_profile import SetProfile, load_scoring_profile
 from draftomen.seventeen import (
     DownloadProgressCallback,
+    QUICK_DRAFT_FORMAT,
     SeventeenLandsData,
     SeventeenLandsDownloadProgress,
 )
@@ -462,6 +464,8 @@ class BacktestPickResult:
     recommended_score: int | None = None
     recommended_win_rate: float | None = None
     role_ledger: PoolRoleLedger | None = None
+    scoring_context: PickScoringContext | None = None
+    contextual_evidence: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -684,7 +688,9 @@ class LiveSession:
         self._splash_enabled = splash_enabled
         self._card_database = card_database
         self._card_database_loader = card_database_loader
+        self._configured_set_profile = set_profile
         self._set_profile = set_profile
+        self._set_profiles_by_set: dict[str, SetProfile | None] = {}
         self._ratings_loader = ratings_loader
         self._ratings_loader_factory = ratings_loader_factory
         self._ratings_progress_loader = ratings_progress_loader
@@ -2759,10 +2765,27 @@ class LiveSession:
             return self._active_set_code_value
 
     def _set_active_set_code(self, *, set_code: str | None) -> None:
+        normalized_set_code = None if set_code is None else set_code.upper()
         with self._state_lock:
-            self._active_set_code_value = (
-                None if set_code is None else set_code.upper()
-            )
+            if normalized_set_code is None:
+                self._active_set_code_value = None
+                self._set_profile = None
+                return
+            if normalized_set_code == self._active_set_code_value:
+                return
+
+            self._active_set_code_value = normalized_set_code
+            if self._configured_set_profile is not None:
+                self._set_profile = self._configured_set_profile
+                return
+
+            if normalized_set_code not in self._set_profiles_by_set:
+                self._set_profiles_by_set[normalized_set_code] = load_scoring_profile(
+                    normalized_set_code,
+                    QUICK_DRAFT_FORMAT,
+                    app_dir=self.store.root.parent,
+                )
+            self._set_profile = self._set_profiles_by_set[normalized_set_code]
 
     def _active_draft_state(self) -> DraftState | None:
         draft = self.snapshot.draft
@@ -3697,6 +3720,8 @@ def _backtest_result(*, report: DomainBacktestReport) -> BacktestResult:
                     else row.recommended.rating.gih_win_rate
                 ),
                 role_ledger=row.role_ledger,
+                scoring_context=row.scoring_context,
+                contextual_evidence=row.contextual_evidence,
             )
             for row in report.rows
         ),
