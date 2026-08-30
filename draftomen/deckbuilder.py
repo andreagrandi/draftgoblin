@@ -1481,7 +1481,6 @@ def _constraint_plans() -> tuple[_ConstraintPlan, ...]:
     )
 
 
-
 def _select_with_constraints(
     *,
     candidates: tuple[ScoredCard, ...],
@@ -1490,12 +1489,133 @@ def _select_with_constraints(
     constraints: SpellConstraints,
     config: DeckBuilderConfig,
 ) -> tuple[ScoredCard, ...] | None:
-    selected: list[ScoredCard] = []
-    remaining = list(candidates)
-    while len(selected) < constraints.spell_count and remaining:
-        counts = _spell_counts(cards=tuple(selected), pair=pair, config=config)
+    """Select one feasible package with bounded deterministic beam search.
+    Complete candidates receive bounded local improvement before tie-breaking.
+    """
+
+    if constraints.spell_count == 0:
+        return ()
+
+    beam: list[tuple[float, tuple[int, ...], tuple[ScoredCard, ...]]] = [
+        (0.0, (), ())
+    ]
+    node_count = 0
+    for _ in range(constraints.spell_count):
+        expansions: list[tuple[float, tuple[int, ...], tuple[ScoredCard, ...]]] = []
+        for _, indices, selected in beam:
+            start = indices[-1] + 1 if indices else 0
+            for candidate_index in range(start, len(candidates)):
+                if node_count >= config.optimizer_max_search_nodes:
+                    break
+                node_count += 1
+                candidate = candidates[candidate_index]
+                remaining_after = candidates[candidate_index + 1 :]
+                next_selected = (*selected, candidate)
+                if not _can_add_spell(
+                    candidate=candidate,
+                    selected=selected,
+                    remaining_after=remaining_after,
+                    available_quantities=available_quantities,
+                    constraints=constraints,
+                    pair=pair,
+                    config=config,
+                ):
+                    continue
+                expansions.append(
+                    (
+                        _optimizer_objective(
+                            cards=next_selected,
+                            pair=pair,
+                            constraints=constraints,
+                            config=config,
+                        ),
+                        (*indices, candidate_index),
+                        next_selected,
+                    )
+                )
+        if not expansions:
+            break
+        expansions.sort(key=lambda item: (-item[0], item[1]))
+        beam = expansions[: config.optimizer_beam_width]
+
+    complete: list[tuple[float | None, tuple[ScoredCard, ...]]] = [
+        (score, cards)
+        for score, _, cards in beam
+        if len(cards) == constraints.spell_count
+        and _counts_satisfy_constraints(
+            counts=_spell_counts(cards=cards, pair=pair, config=config),
+            constraints=constraints,
+        )
+        and not _exceeds_available_card_quantities(
+            cards=cards,
+            available_quantities=available_quantities,
+        )
+    ]
+    if not complete:
+        fallback = _greedy_feasible_package(
+            candidates=candidates,
+            available_quantities=available_quantities,
+            pair=pair,
+            constraints=constraints,
+            config=config,
+        )
+        if fallback is None:
+            return None
+        complete = [(None, fallback)]
+
+    evaluations = 0
+    improved: list[
+        tuple[float | None, tuple[int, ...], tuple[ScoredCard, ...]]
+    ] = []
+    for initial_score, package in complete:
+        package, used_evaluations, improved_score = _improve_complete_package(
+            cards=package,
+            candidates=candidates,
+            available_quantities=available_quantities,
+            pair=pair,
+            constraints=constraints,
+            config=config,
+            evaluation_budget=max(0, config.optimizer_max_evaluations - evaluations),
+        )
+        evaluations += used_evaluations
+        improved.append(
+            (
+                improved_score if improved_score is not None else initial_score,
+                tuple(card.original_index for card in package),
+                package,
+            )
+        )
+
+    improved.sort(
+        key=lambda item: (
+            -float("-inf") if item[0] is None else -item[0],
+            item[1],
+        )
+    )
+    return _ordered_selected_package(
+        cards=improved[0][2],
+        pair=pair,
+        constraints=constraints,
+        config=config,
+    )
+
+
+def _ordered_selected_package(
+    *,
+    cards: tuple[ScoredCard, ...],
+    pair: str,
+    constraints: SpellConstraints,
+    config: DeckBuilderConfig,
+) -> tuple[ScoredCard, ...]:
+    """Restore the deterministic selection order for a chosen package.
+    Package membership remains unchanged.
+    """
+    ordered: list[ScoredCard] = []
+    remaining = list(cards)
+    while remaining:
+        counts = _spell_counts(cards=tuple(ordered), pair=pair, config=config)
         floor_unmet = counts.creatures < constraints.creature_floor
-        ordered_indices = sorted(
+        next_index = min(
             range(len(remaining)),
             key=lambda index: _candidate_selection_sort_key(
                 card=remaining[index],
@@ -1503,8 +1623,39 @@ def _select_with_constraints(
                 config=config,
             ),
         )
+        ordered.append(remaining.pop(next_index))
+    return tuple(ordered)
+
+
+def _greedy_feasible_package(
+    *,
+    candidates: tuple[ScoredCard, ...],
+    available_quantities: Counter[CardQuantityKey],
+    pair: str,
+    constraints: SpellConstraints,
+    config: DeckBuilderConfig,
+) -> tuple[ScoredCard, ...] | None:
+    """Return a deterministic fallback when beam search finds no package.
+    The fallback preserves normal feasibility checks.
+    """
+
+    selected: list[ScoredCard] = []
+    remaining = list(candidates)
+    while len(selected) < constraints.spell_count and remaining:
+        counts = _spell_counts(cards=tuple(selected), pair=pair, config=config)
+        floor_unmet = counts.creatures < constraints.creature_floor
+        ordered_indices = tuple(
+            sorted(
+                range(len(remaining)),
+                key=lambda index: _candidate_selection_sort_key(
+                    card=remaining[index],
+                    floor_unmet=floor_unmet,
+                    config=config,
+                ),
+            )
+        )
         picked_index = _first_feasible_index(
-            ordered_indices=tuple(ordered_indices),
+            ordered_indices=ordered_indices,
             selected=tuple(selected),
             remaining=tuple(remaining),
             available_quantities=available_quantities,
@@ -1514,21 +1665,167 @@ def _select_with_constraints(
         )
         if picked_index is None:
             return None
-
         selected.append(remaining.pop(picked_index))
-
     result = tuple(selected)
-    if _counts_satisfy_constraints(
+    if not _counts_satisfy_constraints(
         counts=_spell_counts(cards=result, pair=pair, config=config),
         constraints=constraints,
-    ) and not _exceeds_available_card_quantities(
-        cards=result,
-        available_quantities=available_quantities,
     ):
-        return result
+        return None
+    return result
 
-    return None
 
+def _improve_complete_package(
+    *,
+    cards: tuple[ScoredCard, ...],
+    candidates: tuple[ScoredCard, ...],
+    available_quantities: Counter[CardQuantityKey],
+    pair: str,
+    constraints: SpellConstraints,
+    config: DeckBuilderConfig,
+    evaluation_budget: int,
+) -> tuple[tuple[ScoredCard, ...], int, float | None]:
+    """Improve a feasible package through bounded one-card substitutions.
+    Each accepted substitution is strictly better and remains constraint-safe.
+    """
+
+    current = tuple(sorted(cards, key=lambda card: card.original_index))
+    if evaluation_budget <= 0 or config.optimizer_local_improvement_rounds <= 0:
+        return current, 0, None
+
+    evaluations = 0
+    for _ in range(config.optimizer_local_improvement_rounds):
+        if evaluations >= evaluation_budget:
+            break
+        selected_indices = {card.original_index for card in current}
+        replacement_candidates = tuple(
+            card for card in candidates if card.original_index not in selected_indices
+        )[: config.optimizer_local_improvement_candidates]
+        baseline = _optimizer_objective(
+            cards=current,
+            pair=pair,
+            constraints=constraints,
+            config=config,
+        )
+        evaluations += 1
+        best = current
+        best_score = baseline
+        best_indices = tuple(card.original_index for card in current)
+        for replacement in replacement_candidates:
+            if evaluations >= evaluation_budget:
+                break
+            for position in range(len(current)):
+                if evaluations >= evaluation_budget:
+                    break
+                trial = tuple(
+                    sorted(
+                        (*current[:position], replacement, *current[position + 1 :]),
+                        key=lambda card: card.original_index,
+                    )
+                )
+                if (
+                    _exceeds_available_card_quantities(
+                        cards=trial,
+                        available_quantities=available_quantities,
+                    )
+                    or not _counts_satisfy_constraints(
+                        counts=_spell_counts(cards=trial, pair=pair, config=config),
+                        constraints=constraints,
+                    )
+                ):
+                    continue
+                score = _optimizer_objective(
+                    cards=trial,
+                    pair=pair,
+                    constraints=constraints,
+                    config=config,
+                )
+                evaluations += 1
+                if score > best_score + 1e-9:
+                    best = trial
+                    best_score = score
+                    best_indices = tuple(card.original_index for card in trial)
+                elif abs(score - best_score) <= 1e-9:
+                    trial_indices = tuple(card.original_index for card in trial)
+                    if trial_indices < best_indices:
+                        best = trial
+                        best_score = score
+                        best_indices = trial_indices
+        if best == current:
+            break
+        current = best
+    return current, evaluations, best_score
+
+
+def _optimizer_objective(
+    *,
+    cards: tuple[ScoredCard, ...],
+    pair: str,
+    constraints: SpellConstraints,
+    config: DeckBuilderConfig,
+) -> float:
+    """Score package quality, curve shape, and creature structure.
+    The same generic terms apply to every candidate package.
+    """
+
+    if not cards:
+        return 0.0
+
+    quality = sum(card.raw_score for card in cards) / len(cards)
+    counts = _spell_counts(cards=cards, pair=pair, config=config)
+    curve = _optimizer_curve_score(
+        counts=counts,
+        cards=cards,
+        constraints=constraints,
+        config=config,
+    )
+    creature = _optimizer_creature_score(
+        creature_count=counts.creatures,
+        constraints=constraints,
+    )
+    return (
+        config.optimizer_quality_weight * quality
+        + config.optimizer_curve_weight * curve
+        + config.optimizer_creature_structure_weight * creature
+    )
+
+
+def _optimizer_curve_score(
+    *,
+    counts: SpellCounts,
+    cards: tuple[ScoredCard, ...],
+    constraints: SpellConstraints,
+    config: DeckBuilderConfig,
+) -> float:
+    average = _average_mana_value(cards=cards)
+    two_drop_fit = min(1.0, counts.two_drops / max(1, constraints.minimum_two_drops))
+    expensive_fit = 1.0 - min(
+        1.0,
+        counts.expensive / max(1, constraints.maximum_expensive_spells + 1),
+    )
+    center = (
+        config.aggressive_average_mana_value_max
+        + config.top_heavy_average_mana_value_min
+    ) / 2.0
+    average_fit = max(
+        0.0,
+        1.0 - abs(average - center) / max(center, 1.0),
+    )
+    return 100.0 * (
+        0.45 * two_drop_fit
+        + 0.25 * expensive_fit
+        + 0.30 * average_fit
+    )
+
+
+def _optimizer_creature_score(
+    *,
+    creature_count: int,
+    constraints: SpellConstraints,
+) -> float:
+    target = (constraints.creature_floor + constraints.creature_ceiling) / 2.0
+    distance = abs(creature_count - target)
+    return 100.0 * max(0.0, 1.0 - distance / max(1.0, target))
 
 
 def _first_feasible_index(
@@ -1542,9 +1839,7 @@ def _first_feasible_index(
     config: DeckBuilderConfig,
 ) -> int | None:
     for index in ordered_indices:
-        remaining_after = tuple(
-            card for item_index, card in enumerate(remaining) if item_index != index
-        )
+        remaining_after = remaining[:index] + remaining[index + 1 :]
         if _can_add_spell(
             candidate=remaining[index],
             selected=selected,
@@ -1557,7 +1852,6 @@ def _first_feasible_index(
             return index
 
     return None
-
 
 
 def _can_add_spell(
@@ -1597,7 +1891,6 @@ def _can_add_spell(
         pair=pair,
         config=config,
     )
-
 
 
 def _can_complete_selection(
@@ -1667,7 +1960,6 @@ def _can_complete_selection(
     return False
 
 
-
 def _candidate_selection_sort_key(
     *,
     card: ScoredCard,
@@ -1691,7 +1983,6 @@ def _candidate_selection_sort_key(
     )
 
 
-
 def _pool_card_quantities(
     *,
     pool_grp_ids: tuple[int, ...],
@@ -1701,7 +1992,6 @@ def _pool_card_quantities(
         _card_quantity_key(card=card_database.lookup(grp_id=grp_id))
         for grp_id in pool_grp_ids
     )
-
 
 
 def _limit_cards_to_pool_quantities(
@@ -1722,7 +2012,6 @@ def _limit_cards_to_pool_quantities(
     return tuple(limited_cards)
 
 
-
 def _exceeds_available_card_quantities(
     *,
     cards: tuple[ScoredCard, ...],
@@ -1737,13 +2026,11 @@ def _exceeds_available_card_quantities(
     )
 
 
-
 def _card_quantity_key(*, card: CardInfo) -> CardQuantityKey:
     if card.unknown:
         return ("unknown", str(card.grp_id))
 
     return ("name", " ".join(card.name.casefold().split()))
-
 
 
 def _bench_cards(
@@ -2641,6 +2928,40 @@ def _validate_deck_builder_config(*, config: DeckBuilderConfig) -> None:
 
     if len(config.relaxation_order) < 5:
         raise DeckBuilderError("Deck-builder relaxation order must describe all stages.")
+
+    if config.optimizer_beam_width <= 0:
+        raise DeckBuilderError("Deck-builder optimizer beam width must be positive.")
+    if config.optimizer_local_improvement_rounds < 0:
+        raise DeckBuilderError("Deck-builder local-improvement rounds must be non-negative.")
+    if config.optimizer_local_improvement_candidates < 0:
+        raise DeckBuilderError("Deck-builder local-improvement candidates must be non-negative.")
+    if config.optimizer_max_evaluations < 0:
+        raise DeckBuilderError("Deck-builder optimizer evaluations must be non-negative.")
+    if config.optimizer_max_search_nodes <= 0:
+        raise DeckBuilderError("Deck-builder optimizer search nodes must be positive.")
+    _validate_optimizer_weights(config=config)
+
+
+def _validate_optimizer_weights(*, config: DeckBuilderConfig) -> None:
+    """Validate finite non-negative generic objective weights.
+    At least one quality or structure term must contribute to ranking.
+    """
+
+    weights = (
+        config.optimizer_quality_weight,
+        config.optimizer_curve_weight,
+        config.optimizer_creature_structure_weight,
+    )
+    if any(
+        isinstance(weight, bool)
+        or not isinstance(weight, (int, float))
+        or not math.isfinite(weight)
+        or weight < 0
+        for weight in weights
+    ):
+        raise DeckBuilderError("Deck-builder optimizer weights must be finite and non-negative.")
+    if sum(weights) <= 0:
+        raise DeckBuilderError("At least one deck-builder optimizer weight must be positive.")
 
 
 

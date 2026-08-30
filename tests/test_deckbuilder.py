@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,9 @@ from draftomen.deckbuilder import (
     BuildPool,
     DeckBuilderError,
     ManaBase,
+    SpellConstraints,
+    _card_quantity_key,
+    _select_with_constraints,
     build_deck_from_pool,
     format_build_result,
     load_persisted_pool,
@@ -22,7 +26,7 @@ from draftomen.deckbuilder import (
     select_deck_spells,
     select_mana_base,
 )
-from draftomen.pickengine import PickEngine, ScoredPack
+from draftomen.pickengine import PickEngine, ScoredCard, ScoredPack
 from draftomen.pool import DraftState, save_draft_state
 from draftomen.seventeen import (
     QUICK_DRAFT_FORMAT,
@@ -288,8 +292,216 @@ def test_spell_selection_allows_duplicate_cards_when_pool_has_multiple_copies() 
         ratings_data=_ratings_data(),
         config=config,
     )
-
     assert [spell.card.grp_id for spell in selection.spells] == [1, 1]
+
+
+def test_spell_optimizer_compares_complete_packages_not_individual_scores() -> None:
+    candidates = _optimizer_candidates()
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        optimizer_beam_width=64,
+        optimizer_max_search_nodes=10_000,
+        optimizer_max_evaluations=0,
+        optimizer_local_improvement_rounds=0,
+        optimizer_quality_weight=0.0,
+        optimizer_curve_weight=1.0,
+        optimizer_creature_structure_weight=0.0,
+    )
+    constraints = SpellConstraints(
+        spell_count=4,
+        creature_floor=2,
+        creature_ceiling=2,
+        minimum_two_drops=2,
+        maximum_expensive_spells=4,
+    )
+
+    selected = _select_with_constraints(
+        candidates=candidates,
+        available_quantities=Counter(
+            _card_quantity_key(card=card.card) for card in candidates
+        ),
+        pair="WU",
+        constraints=constraints,
+        config=config,
+    )
+
+    assert selected is not None
+    assert {card.card.grp_id for card in selected} == {803, 804, 805, 806}
+
+
+def test_spell_optimizer_is_deterministic_for_same_candidates_and_config() -> None:
+    candidates = _optimizer_candidates()
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        optimizer_beam_width=8,
+        optimizer_max_search_nodes=256,
+        optimizer_max_evaluations=32,
+        optimizer_local_improvement_rounds=1,
+        optimizer_local_improvement_candidates=2,
+    )
+    constraints = SpellConstraints(
+        spell_count=4,
+        creature_floor=1,
+        creature_ceiling=3,
+        minimum_two_drops=1,
+        maximum_expensive_spells=3,
+    )
+    available_quantities = Counter(
+        _card_quantity_key(card=card.card) for card in candidates
+    )
+
+    first = _select_with_constraints(
+        candidates=candidates,
+        available_quantities=available_quantities,
+        pair="WU",
+        constraints=constraints,
+        config=config,
+    )
+    second = _select_with_constraints(
+        candidates=candidates,
+        available_quantities=available_quantities,
+        pair="WU",
+        constraints=constraints,
+        config=config,
+    )
+
+    assert first == second
+
+
+def test_spell_optimizer_never_exceeds_available_card_quantities() -> None:
+    candidates = _optimizer_candidates()
+    duplicate = replace(candidates[0], original_index=100)
+    candidates = (candidates[0], duplicate, *candidates[1:])
+    available_quantities = Counter(
+        {
+            _card_quantity_key(card=candidates[0].card): 1,
+            _card_quantity_key(card=candidates[2].card): 1,
+        }
+    )
+    constraints = SpellConstraints(
+        spell_count=2,
+        creature_floor=0,
+        creature_ceiling=2,
+        minimum_two_drops=0,
+        maximum_expensive_spells=2,
+    )
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=2,
+        optimizer_beam_width=8,
+        optimizer_max_search_nodes=64,
+        optimizer_max_evaluations=0,
+        optimizer_local_improvement_rounds=0,
+    )
+
+    selected = _select_with_constraints(
+        candidates=candidates,
+        available_quantities=available_quantities,
+        pair="WU",
+        constraints=constraints,
+        config=config,
+    )
+
+    assert selected is not None
+    selected_quantities = Counter(
+        _card_quantity_key(card=card.card) for card in selected
+    )
+    assert all(
+        count <= available_quantities[quantity_key]
+        for quantity_key, count in selected_quantities.items()
+    )
+
+
+def test_spell_optimizer_uses_exact_spell_constraints() -> None:
+    selection = select_deck_spells(
+        pool_grp_ids=_constrained_pool_ids(),
+        card_database=_constrained_card_database(),
+        pair="WU",
+    )
+
+    assert selection.constraints == SpellConstraints(
+        spell_count=23,
+        creature_floor=14,
+        creature_ceiling=17,
+        minimum_two_drops=5,
+        maximum_expensive_spells=3,
+        maximum_splash_spells=0,
+    )
+    assert selection.counts.total == selection.constraints.spell_count
+
+
+def test_spell_optimizer_without_set_profile_uses_generic_fallback() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+        bench_card_count=0,
+    )
+
+    selection = select_deck_spells(
+        pool_grp_ids=(1, 2, 3, 4),
+        card_database=_card_database(),
+        pair="WU",
+        ratings_data=_ratings_data(),
+        config=config,
+    )
+
+    assert selection.counts.total == 4
+    assert selection.spells
+
+
+def test_spell_optimizer_respects_configured_bounds_and_falls_back_feasibly() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+        optimizer_beam_width=1,
+        optimizer_max_search_nodes=1,
+        optimizer_max_evaluations=0,
+        optimizer_local_improvement_rounds=0,
+        bench_card_count=0,
+    )
+
+    selection = select_deck_spells(
+        pool_grp_ids=(1, 2, 3, 4),
+        card_database=_card_database(),
+        pair="WU",
+        ratings_data=_ratings_data(),
+        config=config,
+    )
+
+    assert selection.counts.total == 4
+    assert selection.counts.total == selection.constraints.spell_count
+
+
+def test_bounded_optimizer_build_preserves_deck_size_lands_and_pips() -> None:
+    database = _pip_card_database(white_pips=20, blue_pips=3)
+    config = replace(DECK_BUILDER, optimizer_max_search_nodes=512)
+
+    build_sheet = select_build_sheet(
+        pool_grp_ids=tuple(range(501, 524)),
+        card_database=database,
+        pair="WU",
+        config=config,
+    )
+
+    assert build_sheet.mana_base.total_cards == config.deck_size
+    assert (
+        build_sheet.mana_base.spell_count + build_sheet.mana_base.land_count
+        == config.deck_size
+    )
+    assert build_sheet.mana_base.land_count == config.default_land_count
+    assert dict(build_sheet.mana_base.pip_counts) == {"W": 20, "U": 3}
+
+
 
 
 
@@ -1018,6 +1230,7 @@ def _ratings_data() -> SeventeenLandsData:
 
 
 
+
 def _ratings_data_from_entries(
     *,
     entries: tuple[tuple[int, str, str, float], ...],
@@ -1077,6 +1290,74 @@ def _card_database() -> CardDatabase:
         }
     )
 
+
+def _optimizer_candidates() -> tuple[ScoredCard, ...]:
+    database = CardDatabase(
+        cards={
+            801: _card(
+                grp_id=801,
+                name="High Mana Spell One",
+                colors=("W",),
+                mana_value=6.0,
+                types=("Instant",),
+            ),
+            802: _card(
+                grp_id=802,
+                name="High Mana Spell Two",
+                colors=("U",),
+                mana_value=6.0,
+                types=("Sorcery",),
+            ),
+            803: _card(
+                grp_id=803,
+                name="Two-Drop Creature One",
+                colors=("W",),
+                mana_value=2.0,
+            ),
+            804: _card(
+                grp_id=804,
+                name="Two-Drop Creature Two",
+                colors=("U",),
+                mana_value=2.0,
+            ),
+            805: _card(
+                grp_id=805,
+                name="Midrange Creature One",
+                colors=("W",),
+                mana_value=3.0,
+                types=("Instant",),
+            ),
+            806: _card(
+                grp_id=806,
+                name="Midrange Creature Two",
+                colors=("U",),
+                mana_value=3.0,
+                types=("Sorcery",),
+            ),
+        }
+    )
+    scored = PickEngine().score_pack(
+        offered_grp_ids=tuple(database.cards),
+        card_database=database,
+        pool_grp_ids=(),
+        pick_index=1,
+    ).cards
+    score_by_grp_id = {
+        801: 100.0,
+        802: 99.0,
+        803: 90.0,
+        804: 89.0,
+        805: 88.0,
+        806: 87.0,
+    }
+    return tuple(
+        replace(
+            card,
+            raw_score=score_by_grp_id[card.card.grp_id],
+            score=int(score_by_grp_id[card.card.grp_id]),
+        )
+        for card in scored
+    )
 
 
 def _constrained_pool_ids() -> tuple[int, ...]:

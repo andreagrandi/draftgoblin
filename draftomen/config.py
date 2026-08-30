@@ -33,8 +33,8 @@ class SplashConfig:
 
 @dataclass(frozen=True)
 class DeckBuilderConfig:
-    """Deck-builder structural defaults.
-    Keep values aligned with Limited consensus until data-backed tuning exists.
+    """Deck-builder structural and optimizer defaults.
+    Beam and local-improvement limits keep normal pools bounded.
     """
 
     deck_size: int = 40
@@ -59,6 +59,14 @@ class DeckBuilderConfig:
     splash_elite_score_minimum: float = 70.0
     bench_card_count: int = 5
     land_count_iteration_limit: int = 4
+    optimizer_beam_width: int = 24
+    optimizer_local_improvement_rounds: int = 2
+    optimizer_local_improvement_candidates: int = 8
+    optimizer_max_evaluations: int = 4096
+    optimizer_max_search_nodes: int = 32768
+    optimizer_quality_weight: float = 1.0
+    optimizer_curve_weight: float = 0.12
+    optimizer_creature_structure_weight: float = 0.12
     maximum_unresolved_metadata_ratio: float = 0.25
     relaxation_order: tuple[str, ...] = (
         "expensive-spell cap",
