@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Add a deterministic, provenance-preserving offline reader for public CSV dumps with checksum verification and privacy-safe reports. (#272)
 - Extend bounded whole-package deck ranking with profile-aware semantic and
   empirical package terms, confidence- and maturity-bounded evidence, generic
   no-profile fallback, and frozen HOB draw-second regressions and
