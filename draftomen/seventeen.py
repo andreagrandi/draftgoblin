@@ -1560,42 +1560,14 @@ def compute_17lands_structure_targets(
     Only trophy drafts are included, grouped by draft id.
     """
 
-    timestamp = datetime.now(tz=UTC) if computed_at is None else computed_at.astimezone(UTC)
-    decks = _trophy_decks_from_draft_data(
-        path=draft_data_file,
+    return build_17lands_structure_targets_from_draft_rows(
         set_code=set_code,
         event_format=event_format,
         card_database=card_database,
-        config=config,
-    )
-    metrics_by_pair: dict[str, list[_DeckStructureMetrics]] = {
-        pair: [] for pair in COLOR_PAIRS
-    }
-    for cards in decks.values():
-        metrics = _deck_structure_metrics(cards=tuple(cards), config=config)
-        if metrics is not None:
-            metrics_by_pair[metrics.pair].append(metrics)
-
-    targets = {
-        pair: _structural_targets_from_metrics(
-            set_code=set_code.upper(),
-            event_format=event_format,
-            pair=pair,
-            metrics=tuple(metrics),
-            source_url=source_url,
-            computed_at=timestamp,
-        )
-        for pair, metrics in metrics_by_pair.items()
-        if metrics
-    }
-    return SeventeenLandsStructureTargets(
-        set_code=set_code.upper(),
-        event_format=event_format,
-        computed_at=timestamp,
-        source=STRUCTURE_TARGET_SOURCE,
+        rows=iter_17lands_draft_data_rows(path=draft_data_file),
         source_url=source_url,
-        total_decks=sum(len(metrics) for metrics in metrics_by_pair.values()),
-        targets=targets,
+        computed_at=computed_at,
+        config=config,
     )
 
 
@@ -1947,23 +1919,6 @@ def _load_optional_structure_targets(
         )
     except SeventeenLandsCacheMissingError:
         return None
-
-
-def _trophy_decks_from_draft_data(
-    *,
-    path: PathInput,
-    set_code: str,
-    event_format: str,
-    card_database: CardDatabase,
-    config: DeckBuilderConfig,
-) -> dict[str, list[CardInfo]]:
-    return _trophy_decks_from_rows(
-        rows=iter_17lands_draft_data_rows(path=path),
-        set_code=set_code,
-        event_format=event_format,
-        card_database=card_database,
-        config=config,
-    )
 
 
 def _trophy_decks_from_rows(
