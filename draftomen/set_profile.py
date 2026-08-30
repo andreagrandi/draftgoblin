@@ -136,25 +136,229 @@ class SampleSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class RateEstimate:
+    """One bounded rate with its raw observation and shrinkage provenance."""
+
+    raw_value: float | None
+    value: float
+    samples: int
+    prior_value: float
+    source: str
+
+    def __post_init__(self) -> None:
+        raw_value = None
+        if self.raw_value is not None:
+            raw_value = _bounded_number(self.raw_value, "rate.raw_value")
+        value = _bounded_number(self.value, "rate.value")
+        samples = _non_negative_int(self.samples, "rate.samples")
+        prior_value = _bounded_number(self.prior_value, "rate.prior_value")
+        source = _non_empty_string(self.source, "rate.source")
+        if samples == 0 and raw_value is not None:
+            raise SetProfileSchemaError("rate.raw_value must be None when rate.samples is zero.")
+        if samples > 0 and raw_value is None:
+            raise SetProfileSchemaError("rate.raw_value is required when rate.samples is positive.")
+        object.__setattr__(self, "raw_value", raw_value)
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "samples", samples)
+        object.__setattr__(self, "prior_value", prior_value)
+        object.__setattr__(self, "source", source)
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "raw_value": self.raw_value,
+            "value": self.value,
+            "samples": self.samples,
+            "prior_value": self.prior_value,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> RateEstimate:
+        _object(value, "rate")
+        raw_value = value.get("raw_value")
+        if "raw_value" not in value:
+            raise SetProfileSchemaError("Missing required field rate.raw_value.")
+        if raw_value is not None:
+            raw_value = _bounded_number(raw_value, "rate.raw_value")
+        return cls(
+            raw_value=raw_value,
+            value=_required_number(value, "value", "rate.value"),
+            samples=_required_int(value, "samples", "rate.samples"),
+            prior_value=_required_number(value, "prior_value", "rate.prior_value"),
+            source=_required_string(value, "source", "rate.source"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CardRating:
+    """One card's shrunk games-in-hand win-rate estimate."""
+
+    card_key: str
+    gih_win_rate: RateEstimate
+    average_last_seen_at: float | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "card_key",
+            _non_empty_string(self.card_key, "card_rating.card_key").casefold(),
+        )
+        if not isinstance(self.gih_win_rate, RateEstimate):
+            raise SetProfileSchemaError("card_rating.gih_win_rate must be a RateEstimate.")
+        if self.average_last_seen_at is not None:
+            object.__setattr__(
+                self,
+                "average_last_seen_at",
+                _finite_non_negative(
+                    self.average_last_seen_at,
+                    "card_rating.average_last_seen_at",
+                ),
+            )
+
+    def to_json(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "card_key": self.card_key,
+            "gih_win_rate": self.gih_win_rate.to_json(),
+        }
+        if self.average_last_seen_at is not None:
+            result["average_last_seen_at"] = self.average_last_seen_at
+        return result
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> CardRating:
+        _object(value, "card rating")
+        gih_win_rate = value.get("gih_win_rate")
+        if not isinstance(gih_win_rate, Mapping):
+            raise SetProfileSchemaError("card_rating.gih_win_rate must be an object.")
+        average_last_seen_at = value.get("average_last_seen_at")
+        if average_last_seen_at is not None:
+            average_last_seen_at = _finite_non_negative(
+                average_last_seen_at,
+                "card_rating.average_last_seen_at",
+            )
+        return cls(
+            card_key=_required_string(value, "card_key", "card_rating.card_key"),
+            gih_win_rate=RateEstimate.from_json(gih_win_rate),
+            average_last_seen_at=average_last_seen_at,
+        )
+
+
+def _target_evidence_json(
+    *,
+    raw_value: float | None,
+    prior_value: float | None,
+    samples: int | None,
+    source: str | None,
+) -> dict[str, object]:
+    if all(value is None for value in (raw_value, prior_value, samples, source)):
+        return {}
+    if prior_value is None or samples is None or source is None:
+        raise SetProfileSchemaError(
+            "target evidence must include raw_value, prior_value, samples, and source."
+        )
+    return {
+        "raw_value": raw_value,
+        "prior_value": prior_value,
+        "samples": samples,
+        "source": source,
+    }
+
+
+def _parse_target_evidence(
+    value: Mapping[str, Any],
+    field_name: str,
+) -> tuple[float | None, float | None, int | None, str | None]:
+    keys = {"raw_value", "prior_value", "samples", "source"}
+    present = keys.intersection(value)
+    if present and present != keys:
+        raise SetProfileSchemaError(
+            f"{field_name} evidence must include raw_value, prior_value, samples, and source."
+        )
+    if not present:
+        return None, None, None, None
+    raw_value = value["raw_value"]
+    if raw_value is not None:
+        raw_value = _finite_non_negative(raw_value, f"{field_name}.raw_value")
+    prior_value = _finite_non_negative(value["prior_value"], f"{field_name}.prior_value")
+    samples = _non_negative_int(value["samples"], f"{field_name}.samples")
+    source = _non_empty_string(value["source"], f"{field_name}.source")
+    if samples == 0 and raw_value is not None:
+        raise SetProfileSchemaError(f"{field_name}.raw_value must be None when samples is zero.")
+    if samples > 0 and raw_value is None:
+        raise SetProfileSchemaError(f"{field_name}.raw_value is required when samples is positive.")
+    return raw_value, prior_value, samples, source
+
+
+def _normalize_target_evidence(
+    *,
+    raw_value: float | None,
+    prior_value: float | None,
+    samples: int | None,
+    source: str | None,
+    field_name: str,
+) -> tuple[float | None, float | None, int | None, str | None]:
+    if all(value is None for value in (raw_value, prior_value, samples, source)):
+        return None, None, None, None
+    return _parse_target_evidence(
+        {
+            "raw_value": raw_value,
+            "prior_value": prior_value,
+            "samples": samples,
+            "source": source,
+        },
+        field_name,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class NumericTarget:
     """One named non-negative structural target."""
 
     name: str
     value: float
+    raw_value: float | None = None
+    prior_value: float | None = None
+    samples: int | None = None
+    source: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _non_empty_string(self.name, "target.name").casefold())
         object.__setattr__(self, "value", _finite_non_negative(self.value, "target.value"))
+        evidence = _normalize_target_evidence(
+            raw_value=self.raw_value,
+            prior_value=self.prior_value,
+            samples=self.samples,
+            source=self.source,
+            field_name="target",
+        )
+        object.__setattr__(self, "raw_value", evidence[0])
+        object.__setattr__(self, "prior_value", evidence[1])
+        object.__setattr__(self, "samples", evidence[2])
+        object.__setattr__(self, "source", evidence[3])
 
     def to_json(self) -> dict[str, object]:
-        return {"name": self.name, "value": self.value}
+        result: dict[str, object] = {"name": self.name, "value": self.value}
+        result.update(
+            _target_evidence_json(
+                raw_value=self.raw_value,
+                prior_value=self.prior_value,
+                samples=self.samples,
+                source=self.source,
+            )
+        )
+        return result
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any], *, field_name: str = "target") -> NumericTarget:
         _object(value, field_name)
+        raw_value, prior_value, samples, source = _parse_target_evidence(value, field_name)
         return cls(
             name=_required_string(value, "name", f"{field_name}.name"),
             value=_required_number(value, "value", f"{field_name}.value"),
+            raw_value=raw_value,
+            prior_value=prior_value,
+            samples=samples,
+            source=source,
         )
 
 
@@ -164,6 +368,10 @@ class RoleTarget:
 
     role: Role
     value: float
+    raw_value: float | None = None
+    prior_value: float | None = None
+    samples: int | None = None
+    source: str | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -172,16 +380,41 @@ class RoleTarget:
             raise SetProfileSchemaError(f"Unsupported role target {self.role!r}.") from error
         object.__setattr__(self, "role", role)
         object.__setattr__(self, "value", _finite_non_negative(self.value, "role_target.value"))
+        evidence = _normalize_target_evidence(
+            raw_value=self.raw_value,
+            prior_value=self.prior_value,
+            samples=self.samples,
+            source=self.source,
+            field_name="role_target",
+        )
+        object.__setattr__(self, "raw_value", evidence[0])
+        object.__setattr__(self, "prior_value", evidence[1])
+        object.__setattr__(self, "samples", evidence[2])
+        object.__setattr__(self, "source", evidence[3])
 
     def to_json(self) -> dict[str, object]:
-        return {"role": self.role.value, "value": self.value}
+        result: dict[str, object] = {"role": self.role.value, "value": self.value}
+        result.update(
+            _target_evidence_json(
+                raw_value=self.raw_value,
+                prior_value=self.prior_value,
+                samples=self.samples,
+                source=self.source,
+            )
+        )
+        return result
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> RoleTarget:
         _object(value, "role target")
+        raw_value, prior_value, samples, source = _parse_target_evidence(value, "role_target")
         return cls(
             role=_required_string(value, "role", "role_target.role"),
             value=_required_number(value, "value", "role_target.value"),
+            raw_value=raw_value,
+            prior_value=prior_value,
+            samples=samples,
+            source=source,
         )
 
 
@@ -191,6 +424,10 @@ class RemovalTarget:
 
     kind: str
     value: float
+    raw_value: float | None = None
+    prior_value: float | None = None
+    samples: int | None = None
+    source: str | None = None
 
     def __post_init__(self) -> None:
         kind = _non_empty_string(self.kind, "removal_target.kind").casefold()
@@ -198,16 +435,41 @@ class RemovalTarget:
             raise SetProfileSchemaError(f"Unsupported removal target kind {kind!r}.")
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "value", _finite_non_negative(self.value, "removal_target.value"))
+        evidence = _normalize_target_evidence(
+            raw_value=self.raw_value,
+            prior_value=self.prior_value,
+            samples=self.samples,
+            source=self.source,
+            field_name="removal_target",
+        )
+        object.__setattr__(self, "raw_value", evidence[0])
+        object.__setattr__(self, "prior_value", evidence[1])
+        object.__setattr__(self, "samples", evidence[2])
+        object.__setattr__(self, "source", evidence[3])
 
     def to_json(self) -> dict[str, object]:
-        return {"kind": self.kind, "value": self.value}
+        result: dict[str, object] = {"kind": self.kind, "value": self.value}
+        result.update(
+            _target_evidence_json(
+                raw_value=self.raw_value,
+                prior_value=self.prior_value,
+                samples=self.samples,
+                source=self.source,
+            )
+        )
+        return result
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> RemovalTarget:
         _object(value, "removal target")
+        raw_value, prior_value, samples, source = _parse_target_evidence(value, "removal_target")
         return cls(
             kind=_required_string(value, "kind", "removal_target.kind"),
             value=_required_number(value, "value", "removal_target.value"),
+            raw_value=raw_value,
+            prior_value=prior_value,
+            samples=samples,
+            source=source,
         )
 
 
@@ -297,6 +559,7 @@ class PairProfile:
     synergy: tuple[CardPairSynergy, ...] = ()
     scarcity: tuple[ScarcityTarget, ...] = ()
     theme: str | None = None
+    performance: RateEstimate | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pair", _pair(self.pair))
@@ -306,6 +569,8 @@ class PairProfile:
                 "theme",
                 _non_empty_string(self.theme, "pair_profile.theme"),
             )
+        if self.performance is not None and not isinstance(self.performance, RateEstimate):
+            raise SetProfileSchemaError("pair_profile.performance must be a RateEstimate or None.")
         for field_name, values, expected_type in (
             ("structural_targets", self.structural_targets, NumericTarget),
             ("role_targets", self.role_targets, RoleTarget),
@@ -359,6 +624,8 @@ class PairProfile:
 
     def to_json(self) -> dict[str, object]:
         result: dict[str, object] = {"pair": self.pair}
+        if self.performance is not None:
+            result["performance"] = self.performance.to_json()
         for name, values in (
             ("removal_targets", self.removal_targets),
             ("role_targets", self.role_targets),
@@ -375,6 +642,10 @@ class PairProfile:
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> PairProfile:
         _object(value, "pair profile")
+        performance = value.get("performance")
+        if performance is not None:
+            _object(performance, "pair_profile.performance")
+            performance = RateEstimate.from_json(performance)
         return cls(
             pair=_required_string(value, "pair", "pair_profile.pair"),
             structural_targets=_array_of(
@@ -393,6 +664,7 @@ class PairProfile:
             synergy=_array_of(value, "synergy", CardPairSynergy.from_json, "pair_profile.synergy"),
             scarcity=_array_of(value, "scarcity", ScarcityTarget.from_json, "pair_profile.scarcity"),
             theme=_optional_string(value, "theme", "pair_profile.theme"),
+            performance=performance,
         )
 
 
@@ -426,6 +698,7 @@ class SetProfile:
     confidence: float
     pairs: tuple[PairProfile, ...]
     role_profile: CompiledRoleProfile | None = None
+    card_ratings: tuple[CardRating, ...] = ()
 
     def __post_init__(self) -> None:
         set_code = _non_empty_string(self.set_code, "set_code").casefold()
@@ -459,12 +732,26 @@ class SetProfile:
         if len({item.pair for item in normalized_pairs}) != len(normalized_pairs):
             raise SetProfileSchemaError("pairs contains duplicate color pairs.")
         object.__setattr__(self, "pairs", normalized_pairs)
+        if not isinstance(self.card_ratings, tuple) or any(
+            not isinstance(item, CardRating) for item in self.card_ratings
+        ):
+            raise SetProfileSchemaError("card_ratings must contain CardRating objects.")
+        normalized_card_ratings = _sorted_unique(
+            self.card_ratings,
+            key=lambda item: item.card_key,
+            field_name="card_ratings",
+        )
+        object.__setattr__(self, "card_ratings", normalized_card_ratings)
         if self.role_profile is not None:
             if not isinstance(self.role_profile, CompiledRoleProfile):
                 raise SetProfileSchemaError("role_profile must be a CompiledRoleProfile or None.")
             if self.role_profile.set_code != set_code:
                 raise SetProfileSchemaError("role_profile.set_code must match set_code.")
-        has_empirical_evidence = _has_empirical_evidence(self.samples, normalized_pairs)
+        has_empirical_evidence = _has_empirical_evidence(
+            self.samples,
+            normalized_pairs,
+            normalized_card_ratings,
+        )
         if maturity in {ProfileMaturity.MATURE, ProfileMaturity.EARLY} and not has_empirical_evidence:
             raise SetProfileSchemaError(f"{maturity.value} profiles must contain empirical evidence.")
         if maturity is ProfileMaturity.METADATA_ONLY and self.role_profile is not None:
@@ -516,6 +803,8 @@ class SetProfile:
             "set_code": self.set_code,
             "source": self.source.to_json(),
         }
+        if self.card_ratings:
+            result["card_ratings"] = [item.to_json() for item in self.card_ratings]
         if self.pairs:
             result["pair_profiles"] = [item.to_json() for item in self.pairs]
         if self.samples is not None:
@@ -551,6 +840,14 @@ class SetProfile:
         )
         if len({item.pair for item in pair_profiles}) != len(pair_profiles):
             raise SetProfileSchemaError("pair_profiles contains duplicate color pairs.")
+        card_rating_values = value.get("card_ratings", [])
+        if not isinstance(card_rating_values, list):
+            raise SetProfileSchemaError("card_ratings must be an array.")
+        card_ratings = tuple(
+            CardRating.from_json(item) for item in _mapping_items(card_rating_values, "card_ratings")
+        )
+        if len({item.card_key for item in card_ratings}) != len(card_ratings):
+            raise SetProfileSchemaError("card_ratings contains duplicate card identities.")
         role_profile = _parse_role_profile(value.get("role_profile"), set_code=value.get("set_code"))
         samples_value = value.get("samples")
         samples = None if samples_value is None else SampleSummary.from_json(samples_value)
@@ -565,6 +862,7 @@ class SetProfile:
             confidence=_required_number(value, "confidence", "confidence"),
             pairs=pair_profiles,
             role_profile=role_profile,
+            card_ratings=card_ratings,
         )
 
     @classmethod
@@ -749,7 +1047,6 @@ def load_scoring_profile(
     if result.source == "generic" or result.profile.maturity is ProfileMaturity.GENERIC:
         return None
     return result.profile
-...
 
 
 def _parse_role_profile(value: Any, *, set_code: Any) -> CompiledRoleProfile | None:
@@ -765,6 +1062,28 @@ def _parse_role_profile(value: Any, *, set_code: Any) -> CompiledRoleProfile | N
     if nested_set != normalized_set:
         raise SetProfileSchemaError("role_profile.set_code must match set_code.")
     return role_profile
+
+
+def _has_empirical_evidence(
+    samples: SampleSummary | None,
+    pairs: tuple[PairProfile, ...],
+    card_ratings: tuple[CardRating, ...] = (),
+) -> bool:
+    if samples is not None and (
+        samples.total > 0 or any(count > 0 for _, count in samples.by_pair)
+    ):
+        return True
+    if any(item.gih_win_rate.samples > 0 for item in card_ratings):
+        return True
+    return any(
+        pair.structural_targets
+        or pair.role_targets
+        or pair.removal_targets
+        or pair.synergy
+        or pair.scarcity
+        or (pair.performance is not None and pair.performance.samples > 0)
+        for pair in pairs
+    )
 
 
 def _candidate_paths(
@@ -960,22 +1279,6 @@ def _sorted_unique(values: Iterable[Any], *, key: Any, field_name: str) -> tuple
     return result
 
 
-def _has_empirical_evidence(
-    samples: SampleSummary | None,
-    pairs: tuple[PairProfile, ...],
-) -> bool:
-    if samples is not None and (
-        samples.total > 0 or any(count > 0 for _, count in samples.by_pair)
-    ):
-        return True
-    return any(
-        pair.structural_targets
-        or pair.role_targets
-        or pair.removal_targets
-        or pair.synergy
-        or pair.scarcity
-        for pair in pairs
-    )
 
 def _json_bytes(value: Mapping[str, Any]) -> bytes:
     serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

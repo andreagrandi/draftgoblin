@@ -84,6 +84,8 @@ files = [
     "draftomen/pool.py",
     "draftomen/pool_ledger.py",
     "draftomen/preferences.py",
+    "draftomen/profile_generation.py",
+    "draftomen/profile_statistics.py",
     "draftomen/public_dump.py",
     "draftomen/qt_adapter.py",
     "draftomen/qt_gui.py",
