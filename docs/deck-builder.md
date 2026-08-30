@@ -46,8 +46,17 @@ These are the fallback FR-5.6 structural defaults: established Limited consensus
 
 Empirical targets can be computed from 17Lands public draft-data dumps with `refresh-structure-targets`. The command groups trophy drafts by deck, computes average creature count, curve shape, and land count per two-color pair, and caches the small aggregate under the normal 17Lands cache directory. The builder loads those targets automatically in offline `build`, `replay`, and watch flows when the cache is present.
 
-The selector greedily walks score-ranked eligible spells. While the creature floor is unmet, creatures receive the near-tie preference so a creature can beat a noncreature that is within the configured score window.
+The spell selector uses a bounded whole-deck optimizer rather than a greedy walk. It first scores the filtered, quantity-limited candidate tuple, then keeps the best `optimizer_beam_width` partial decks at each selection depth. Complete feasible decks are ranked by one generic objective (higher is better):
 
+- individual card quality (`optimizer_quality_weight = 1.0`);
+- curve shape, including the two-drop quota, expensive-spell cap, and average mana value (`optimizer_curve_weight = 0.12`);
+- creature-count structure (`optimizer_creature_structure_weight = 0.12`).
+
+After the beam completes, deterministic local improvement tries up to `optimizer_local_improvement_rounds = 2` rounds, considering at most `optimizer_local_improvement_candidates = 8` replacement candidates per round. `optimizer_max_search_nodes = 32768` caps expanded search nodes and `optimizer_max_evaluations = 4096` caps complete-package objective evaluations. Together with the beam width of `24`, these explicit limits bound ordinary 40–50-card pools: the selector does not enumerate every deck.
+
+Candidate order is the existing score order. Beam states, replacements, and final ties preserve stable candidate order and card identity, so repeated runs with the same pool, ratings, and configuration return the same package.
+
+The optimizer changes only package ranking. It still enforces pool quantity limits, the requested spell count, creature floor and ceiling, two-drop minimum, expensive-spell cap, and splash eligibility/limits. If a pool is infeasible, the existing relaxation order remains: expensive-spell cap, minimum two-drop quota, creature ceiling, creature floor, then eligible-card shortage.
 When the curve calls for 16 or 18 lands, the builder reselects the spell count to keep the final deck exactly 40 cards.
 
 Before pair selection, the builder validates that enough picked cards have card metadata to identify playable spells reliably. If too much metadata is missing, or unresolved cards make the playable count fall below the spell target, the builder refuses to print a deck and asks the user to refresh card data or pass a current bulk file.

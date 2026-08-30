@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Add bounded deterministic whole-package beam search and local improvement to
+  deck spell selection, while preserving deck, splash, mana, pip, and
+  constraint-relaxation invariants. (#268)
 
 - Route validated pre-pick scoring context through live, recovery, accountless, replay, backtest, benchmark, and audit workflows with recommendation/audit evidence parity. (#250)
 - Define immutable pre-pick scoring context with deterministic profile provenance and pair-theme annotations. (#251)
