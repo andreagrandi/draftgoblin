@@ -8,9 +8,11 @@ import json
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from os import PathLike
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, TypeAlias
 
 from draftomen.carddb import CardDatabase, CardInfo
@@ -18,10 +20,20 @@ from draftomen.config import COLOR_PAIRS, DECK_BUILDER, SPLASH, DeckBuilderConfi
 from draftomen.pickengine import PickEngine, ScoredCard
 from draftomen.pool import DraftState, list_draft_states
 from draftomen.pool_ledger import (
+    PACKAGE_ROLES,
+    REMOVAL_ROLE_KINDS,
+    REMOVAL_ROLES,
+    REMOVAL_WEIGHTS,
     PoolRoleLedger,
     evaluate_completed_pool_role_ledger,
 )
-from draftomen.set_profile import SetProfile
+from draftomen.semantic_roles import (
+    CompiledRoleProfile,
+    Role,
+    RoleAssignment,
+    resolve_card_roles,
+)
+from draftomen.set_profile import PairProfile, ProfileMaturity, SetProfile
 from draftomen.seventeen import (
     SEVENTEEN_LANDS_ATTRIBUTION,
     SeventeenLandsData,
@@ -253,6 +265,81 @@ class _ConstraintPlan:
     enforce_creature_ceiling: bool
     enforce_creature_floor: bool
 
+_PROFILE_MATURITY_WEIGHTS = {
+    ProfileMaturity.MATURE: 1.0,
+    ProfileMaturity.EARLY: 0.65,
+    ProfileMaturity.SEMANTIC_ONLY: 0.8,
+    ProfileMaturity.METADATA_ONLY: 0.35,
+    ProfileMaturity.GENERIC: 0.0,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _OptimizerCardEvidence:
+    """Prepared semantic and empirical evidence for one candidate card.
+    Search expansions reuse this immutable evidence without reclassification.
+    """
+
+    original_index: int
+    card_keys: tuple[str, ...]
+    role_values: tuple[tuple[str, float], ...]
+    removal_values: tuple[tuple[str, float], ...]
+    package_enablers: tuple[tuple[str, float], ...]
+    package_payoffs: tuple[tuple[str, float], ...]
+    scarcity: float
+    mana_strain: float
+
+
+@dataclass(frozen=True, slots=True)
+class _OptimizerAggregate:
+    """Incremental package evidence used by bounded search and local improvement."""
+
+    card_keys: tuple[tuple[str, ...], ...] = ()
+    role_values: tuple[tuple[str, float], ...] = ()
+    removal_values: tuple[tuple[str, float], ...] = ()
+    package_enablers: tuple[tuple[str, float], ...] = ()
+    package_payoffs: tuple[tuple[str, float], ...] = ()
+    synergy_value: float = 0.0
+    scarcity: float = 0.0
+    mana_strain: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class _OptimizerContext:
+    """Bounded profile evidence prepared once per spell-selection attempt."""
+
+    pair: str = ""
+    influence: float = 0.0
+    pair_profile: PairProfile | None = None
+    synergy_lookup: Mapping[tuple[str, str], float] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    scarcity_lookup: Mapping[str, float] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    card_evidence: tuple[_OptimizerCardEvidence, ...] = ()
+
+    @property
+    def active(self) -> bool:
+        """Return whether profile evidence can affect package ranking."""
+
+        pair_evidence = self.pair_profile is not None and any(
+            (
+                self.pair_profile.role_targets,
+                self.pair_profile.removal_targets,
+                self.synergy_lookup,
+                self.scarcity_lookup,
+            )
+        )
+        return self.influence > 0.0 and (
+            pair_evidence
+            or any(
+                evidence.role_values
+                or evidence.removal_values
+                or evidence.scarcity
+                for evidence in self.card_evidence
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -540,6 +627,7 @@ def select_deck_spells(
             pair=resolved_pair,
             constraints=constraints,
             config=effective_config,
+            set_profile=set_profile,
         )
         if selected is None:
             continue
@@ -1656,6 +1744,7 @@ def _select_with_constraints(
     pair: str,
     constraints: SpellConstraints,
     config: DeckBuilderConfig,
+    set_profile: SetProfile | None = None,
 ) -> tuple[ScoredCard, ...] | None:
     """Select one feasible package with bounded deterministic beam search.
     The best complete candidate receives bounded local improvement.
@@ -1667,6 +1756,11 @@ def _select_with_constraints(
     candidates = _limit_cards_to_pool_quantities(
         cards=candidates,
         available_quantities=available_quantities,
+    )
+    objective_context = _build_optimizer_context(
+        candidates=candidates,
+        pair=pair,
+        set_profile=set_profile,
     )
     suffix_feasibility = _build_suffix_feasibility(
         candidates=candidates,
@@ -1682,6 +1776,9 @@ def _select_with_constraints(
         splashes=0,
         instants=0,
     )
+    initial_aggregate: _OptimizerAggregate | None = (
+        _OptimizerAggregate() if objective_context.active else None
+    )
     beam: list[
         tuple[
             float,
@@ -1690,8 +1787,9 @@ def _select_with_constraints(
             SpellCounts,
             float,
             float,
+            _OptimizerAggregate | None,
         ]
-    ] = [(0.0, (), (), empty_counts, 0.0, 0.0)]
+    ] = [(0.0, (), (), empty_counts, 0.0, 0.0, initial_aggregate)]
     node_count = 0
     for _ in range(constraints.spell_count):
         expansions: list[
@@ -1702,9 +1800,10 @@ def _select_with_constraints(
                 SpellCounts,
                 float,
                 float,
+                _OptimizerAggregate | None,
             ]
         ] = []
-        for _, indices, selected, counts, raw_score_sum, mana_value_sum in beam:
+        for _, indices, selected, counts, raw_score_sum, mana_value_sum, aggregate in beam:
             start = indices[-1] + 1 if indices else 0
             for candidate_index in range(start, len(candidates)):
                 if node_count >= config.optimizer_max_search_nodes:
@@ -1728,6 +1827,14 @@ def _select_with_constraints(
                 next_mana_value_sum = mana_value_sum + (
                     candidate.card.mana_value or 0.0
                 )
+                if aggregate is None:
+                    next_aggregate = None
+                else:
+                    next_aggregate = _optimizer_add_card(
+                        aggregate=aggregate,
+                        evidence=objective_context.card_evidence[candidate_index],
+                        context=objective_context,
+                    )
                 expansions.append(
                     (
                         _optimizer_objective_from_aggregates(
@@ -1736,12 +1843,15 @@ def _select_with_constraints(
                             mana_value_sum=next_mana_value_sum,
                             constraints=constraints,
                             config=config,
+                            aggregate=next_aggregate,
+                            objective_context=objective_context,
                         ),
                         (*indices, candidate_index),
                         next_selected,
                         next_counts,
                         next_raw_score_sum,
                         next_mana_value_sum,
+                        next_aggregate,
                     )
                 )
         if not expansions:
@@ -1751,12 +1861,9 @@ def _select_with_constraints(
 
     complete: list[tuple[float | None, tuple[ScoredCard, ...]]] = [
         (score, cards)
-        for score, _, cards, _, _, _ in beam
+        for score, _, cards, counts, _, _, _ in beam
         if len(cards) == constraints.spell_count
-        and _counts_satisfy_constraints(
-            counts=_spell_counts(cards=cards, pair=pair, config=config),
-            constraints=constraints,
-        )
+        and _counts_satisfy_constraints(counts=counts, constraints=constraints)
         and not _exceeds_available_card_quantities(
             cards=cards,
             available_quantities=available_quantities,
@@ -1789,6 +1896,7 @@ def _select_with_constraints(
         constraints=constraints,
         config=config,
         evaluation_budget=max(0, config.optimizer_max_evaluations),
+        objective_context=objective_context,
     )
     return _ordered_selected_package(
         cards=package,
@@ -1884,6 +1992,7 @@ def _improve_complete_package(
     constraints: SpellConstraints,
     config: DeckBuilderConfig,
     evaluation_budget: int,
+    objective_context: _OptimizerContext | None = None,
 ) -> tuple[tuple[ScoredCard, ...], int, float | None]:
     """Improve a feasible package through bounded one-card substitutions.
     Each accepted substitution is strictly better and remains constraint-safe.
@@ -1906,6 +2015,7 @@ def _improve_complete_package(
             pair=pair,
             constraints=constraints,
             config=config,
+            objective_context=objective_context,
         )
         evaluations += 1
         best = current
@@ -1939,6 +2049,7 @@ def _improve_complete_package(
                     pair=pair,
                     constraints=constraints,
                     config=config,
+                    objective_context=objective_context,
                 )
                 evaluations += 1
                 if score > best_score + 1e-9:
@@ -1963,9 +2074,11 @@ def _optimizer_objective(
     pair: str,
     constraints: SpellConstraints,
     config: DeckBuilderConfig,
+    set_profile: SetProfile | None = None,
+    objective_context: _OptimizerContext | None = None,
 ) -> float:
-    """Score package quality, curve shape, and creature structure.
-    The same generic terms apply to every candidate package.
+    """Score one complete package with generic and profile-backed terms.
+    Profile evidence is bounded and absent from the generic fallback.
     """
 
     if not cards:
@@ -1974,12 +2087,25 @@ def _optimizer_objective(
     raw_score_sum = sum(card.raw_score for card in cards)
     counts = _spell_counts(cards=cards, pair=pair, config=config)
     mana_value_sum = sum(card.card.mana_value or 0.0 for card in cards)
+    context = objective_context
+    if context is None:
+        context = _build_optimizer_context(
+            candidates=cards,
+            pair=pair,
+            set_profile=set_profile,
+        )
+    if context.active:
+        aggregate = _optimizer_aggregate_for_cards(cards=cards, context=context)
+    else:
+        aggregate = None
     return _optimizer_objective_from_aggregates(
         counts=counts,
         raw_score_sum=raw_score_sum,
         mana_value_sum=mana_value_sum,
         constraints=constraints,
         config=config,
+        aggregate=aggregate,
+        objective_context=context,
     )
 
 
@@ -1990,8 +2116,10 @@ def _optimizer_objective_from_aggregates(
     mana_value_sum: float,
     constraints: SpellConstraints,
     config: DeckBuilderConfig,
+    aggregate: _OptimizerAggregate | None = None,
+    objective_context: _OptimizerContext | None = None,
 ) -> float:
-    """Score a package from its exact structural and numeric aggregates."""
+    """Score a package from exact structural, numeric, and role aggregates."""
 
     if counts.total == 0:
         return 0.0
@@ -2007,10 +2135,494 @@ def _optimizer_objective_from_aggregates(
         creature_count=counts.creatures,
         constraints=constraints,
     )
-    return (
+    score = (
         config.optimizer_quality_weight * quality
         + config.optimizer_curve_weight * curve
         + config.optimizer_creature_structure_weight * creature
+    )
+    if objective_context is None or not objective_context.active:
+        return score
+    evidence = aggregate or _OptimizerAggregate()
+    role_fit = _optimizer_role_target_score(
+        aggregate=evidence,
+        pair_profile=objective_context.pair_profile,
+    )
+    removal = _optimizer_removal_score(
+        aggregate=evidence,
+        pair_profile=objective_context.pair_profile,
+    )
+    package = _optimizer_package_balance(aggregate=evidence, counts=counts)
+    synergy = _optimizer_semantic_synergy(
+        aggregate=evidence,
+        counts=counts,
+    )
+    empirical = _optimizer_empirical_context(
+        aggregate=evidence,
+        counts=counts,
+    )
+    redundancy = _optimizer_redundancy(
+        aggregate=evidence,
+        pair_profile=objective_context.pair_profile,
+        counts=counts,
+    )
+    unsupported = _optimizer_unsupported_payoffs(aggregate=evidence, counts=counts)
+    mana_strain = _optimizer_mana_strain(aggregate=evidence, counts=counts)
+    influence = objective_context.influence
+    return score + influence * (
+        config.optimizer_role_target_weight * role_fit
+        + config.optimizer_effective_removal_weight * removal
+        + config.optimizer_enabler_payoff_weight * package
+        + config.optimizer_semantic_synergy_weight * synergy
+        + config.optimizer_empirical_context_weight * empirical
+        - config.optimizer_redundancy_weight * redundancy
+        - config.optimizer_unsupported_payoff_weight * unsupported
+        - config.optimizer_mana_strain_weight * mana_strain
+    )
+
+
+def _build_optimizer_context(
+    *,
+    candidates: tuple[ScoredCard, ...],
+    pair: str,
+    set_profile: SetProfile | None,
+) -> _OptimizerContext:
+    """Prepare bounded profile evidence once for one canonical pair."""
+    if set_profile is None or set_profile.maturity is ProfileMaturity.GENERIC:
+        return _OptimizerContext(pair=pair)
+    maturity_weight = _PROFILE_MATURITY_WEIGHTS[set_profile.maturity]
+    influence = _clamp(value=set_profile.confidence * maturity_weight, lower=0.0, upper=1.0)
+    if influence <= 0.0:
+        return _OptimizerContext(pair=pair)
+    pair_profile = set_profile.pair(pair)
+    role_profile = set_profile.role_profile
+    pair_sample_count = None if set_profile.samples is None else set_profile.samples.count_for(pair)
+    synergy_values: dict[tuple[str, str], float] = {}
+    scarcity_values: dict[str, float] = {}
+    if pair_profile is not None:
+        for entry in pair_profile.synergy:
+            sample_weight = _optimizer_sample_weight(
+                entry_samples=entry.samples,
+                pair_samples=pair_sample_count,
+            )
+            weighted_value = entry.value * sample_weight
+            if weighted_value != 0.0:
+                synergy_values[(entry.first_card, entry.second_card)] = weighted_value
+        for entry in pair_profile.scarcity:
+            sample_weight = _optimizer_sample_weight(
+                entry_samples=entry.samples,
+                pair_samples=pair_sample_count,
+            )
+            weighted_value = entry.value * sample_weight
+            if weighted_value != 0.0:
+                scarcity_values[entry.card_key] = weighted_value
+    synergy_lookup = MappingProxyType(synergy_values)
+    scarcity_lookup = MappingProxyType(scarcity_values)
+    card_evidence = tuple(
+        _optimizer_card_evidence(
+            card=card,
+            pair=pair,
+            role_profile=role_profile,
+            scarcity_lookup=scarcity_lookup,
+        )
+        for card in candidates
+    )
+    if pair_profile is None and not any(item.role_values for item in card_evidence):
+        return _OptimizerContext(pair=pair)
+    context = _OptimizerContext(
+        pair=pair,
+        influence=influence,
+        pair_profile=pair_profile,
+        synergy_lookup=synergy_lookup,
+        scarcity_lookup=scarcity_lookup,
+        card_evidence=card_evidence,
+    )
+    if not context.active:
+        return _OptimizerContext(pair=pair)
+    return context
+
+
+def _optimizer_sample_weight(*, entry_samples: int | None, pair_samples: int | None) -> float:
+    """Return deterministic bounded strength for one empirical entry."""
+
+    sample_count = entry_samples if entry_samples is not None else pair_samples
+    if sample_count is None or sample_count <= 0:
+        return 0.0
+    return _clamp(
+        value=sample_count / (sample_count + 100.0),
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+
+def _optimizer_card_evidence(
+    *,
+    card: ScoredCard,
+    pair: str,
+    role_profile: CompiledRoleProfile | None,
+    scarcity_lookup: Mapping[str, float],
+) -> _OptimizerCardEvidence:
+    card_keys = _optimizer_card_keys(card=card.card)
+    assignments: tuple[RoleAssignment, ...] = ()
+    if role_profile is not None and role_profile.is_compatible():
+        resolution = resolve_card_roles(card.card, profile=role_profile)
+        if resolution.source == "compiled_profile":
+            assignments = resolution.assignments
+
+    role_values_counter: Counter[str] = Counter()
+    removal_values_counter: Counter[str] = Counter()
+    for assignment in assignments:
+        role_values_counter[assignment.role.value] += assignment.confidence
+        removal = _optimizer_removal_contribution(assignment=assignment)
+        if removal is not None:
+            kind, value = removal
+            removal_values_counter[kind] += value
+    package_enablers: Counter[str] = Counter()
+    package_payoffs: Counter[str] = Counter()
+    for package, (enabler_roles, payoff_roles) in PACKAGE_ROLES.items():
+        package_enablers[package] = sum(
+            role_values_counter[role.value] for role in enabler_roles
+        )
+        package_payoffs[package] = sum(
+            role_values_counter[role.value] for role in payoff_roles
+        )
+    scarcity = _optimizer_profile_card_signal(
+        card_keys=card_keys,
+        scarcity_lookup=scarcity_lookup,
+    )
+    return _OptimizerCardEvidence(
+        original_index=card.original_index,
+        card_keys=card_keys,
+        role_values=tuple(sorted(role_values_counter.items())),
+        removal_values=tuple(sorted(removal_values_counter.items())),
+        package_enablers=tuple(sorted(package_enablers.items())),
+        package_payoffs=tuple(sorted(package_payoffs.items())),
+        scarcity=scarcity,
+        mana_strain=_optimizer_card_mana_strain(card=card.card, pair=pair),
+    )
+
+def _optimizer_card_keys(*, card: CardInfo) -> tuple[str, ...]:
+    arena_id = card.arena_id if card.arena_id is not None else card.grp_id
+    keys = [f"arena_id:{arena_id}", f"grp_id:{card.grp_id}"]
+    if card.set_code and card.collector_number:
+        keys.append(f"set:{card.set_code.casefold()}:{card.collector_number.casefold()}")
+    oracle_id = card.oracle_id
+    if oracle_id and oracle_id.strip():
+        keys.append(f"oracle_id:{oracle_id.strip().casefold()}")
+    if card.name.strip():
+        keys.append(f"name:{card.name.casefold()}")
+    return tuple(dict.fromkeys(keys))
+
+
+def _optimizer_profile_card_signal(
+    *,
+    card_keys: tuple[str, ...],
+    scarcity_lookup: Mapping[str, float],
+) -> float:
+    for key in card_keys:
+        value = scarcity_lookup.get(key)
+        if value is not None:
+            return value
+    return 0.0
+
+
+def _optimizer_removal_contribution(
+    *,
+    assignment: RoleAssignment,
+) -> tuple[str, float] | None:
+    removal = assignment.removal
+    if removal is None and assignment.role not in REMOVAL_ROLES:
+        return None
+    if assignment.role is Role.CONDITIONAL_REMOVAL:
+        kind = "conditional"
+    elif removal is not None:
+        kind = "temporary" if removal.kind == "tap" else removal.kind
+    elif assignment.role is Role.TEMPORARY_TAP:
+        kind = "temporary"
+    else:
+        kind = REMOVAL_ROLE_KINDS.get(assignment.role)
+    if kind is None or kind not in REMOVAL_WEIGHTS:
+        return None
+    value = 1.0 if removal is None else removal.effective_score
+    if removal is not None and removal.conditional:
+        value *= 0.75
+    return kind, assignment.confidence * value * REMOVAL_WEIGHTS[kind]
+
+
+def _optimizer_add_card(
+    *,
+    aggregate: _OptimizerAggregate,
+    evidence: _OptimizerCardEvidence,
+    context: _OptimizerContext,
+) -> _OptimizerAggregate:
+    synergy_value = aggregate.synergy_value
+    for previous_keys in aggregate.card_keys:
+        synergy_value += _optimizer_synergy_between(
+            first_keys=previous_keys,
+            second_keys=evidence.card_keys,
+            context=context,
+        )
+    return _OptimizerAggregate(
+        card_keys=(*aggregate.card_keys, evidence.card_keys),
+        role_values=_optimizer_merge_values(aggregate.role_values, evidence.role_values),
+        removal_values=_optimizer_merge_values(
+            aggregate.removal_values,
+            evidence.removal_values,
+        ),
+        package_enablers=_optimizer_merge_values(
+            aggregate.package_enablers,
+            evidence.package_enablers,
+        ),
+        package_payoffs=_optimizer_merge_values(
+            aggregate.package_payoffs,
+            evidence.package_payoffs,
+        ),
+        synergy_value=synergy_value,
+        scarcity=aggregate.scarcity + evidence.scarcity,
+        mana_strain=aggregate.mana_strain + evidence.mana_strain,
+    )
+
+
+def _optimizer_aggregate_for_cards(
+    *,
+    cards: tuple[ScoredCard, ...],
+    context: _OptimizerContext,
+) -> _OptimizerAggregate:
+    aggregate = _OptimizerAggregate()
+    for card in cards:
+        evidence = next(
+            (
+                evidence
+                for evidence in context.card_evidence
+                if evidence.original_index == card.original_index
+            ),
+            None,
+        )
+        if evidence is None:
+            evidence = _optimizer_card_evidence(
+                card=card,
+                pair=context.pair,
+                role_profile=None,
+                scarcity_lookup=context.scarcity_lookup,
+            )
+        aggregate = _optimizer_add_card(
+            aggregate=aggregate,
+            evidence=evidence,
+            context=context,
+        )
+    return aggregate
+
+
+def _optimizer_merge_values(
+    first: tuple[tuple[str, float], ...],
+    second: tuple[tuple[str, float], ...],
+) -> tuple[tuple[str, float], ...]:
+    values: Counter[str] = Counter(dict(first))
+    values.update(dict(second))
+    return tuple(sorted(values.items()))
+
+
+def _optimizer_synergy_between(
+    *,
+    first_keys: tuple[str, ...],
+    second_keys: tuple[str, ...],
+    context: _OptimizerContext,
+) -> float:
+    for first in first_keys:
+        for second in second_keys:
+            if first == second:
+                continue
+            pair = tuple(sorted((first, second)))
+            value = context.synergy_lookup.get(pair)
+            if value is not None:
+                return value
+    return 0.0
+
+
+def _optimizer_role_target_score(
+    *,
+    aggregate: _OptimizerAggregate,
+    pair_profile: PairProfile | None,
+) -> float:
+    if pair_profile is None or not pair_profile.role_targets:
+        return 0.0
+    values = dict(aggregate.role_values)
+    fits = tuple(
+        min(values.get(target.role.value, 0.0), target.value) / target.value
+        for target in pair_profile.role_targets
+        if target.value > 0
+    )
+    return 100.0 * (sum(fits) / len(fits) if fits else 0.0)
+
+
+def _optimizer_removal_score(
+    *,
+    aggregate: _OptimizerAggregate,
+    pair_profile: PairProfile | None,
+) -> float:
+    values = dict(aggregate.removal_values)
+    if pair_profile is not None and pair_profile.removal_targets:
+        fits = tuple(
+            min(values.get("temporary" if target.kind == "tap" else target.kind, 0.0), target.value)
+            / target.value
+            for target in pair_profile.removal_targets
+            if target.value > 0
+        )
+        return 100.0 * (sum(fits) / len(fits) if fits else 0.0)
+    return 100.0 * _clamp(
+        value=sum(values.values()) / 2.0,
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+def _optimizer_diminishing_signal(value: float) -> float:
+    """Map non-negative role evidence to a bounded diminishing-return signal."""
+    return _clamp(
+        value=1.0 - math.exp(-max(0.0, value)),
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+def _optimizer_package_balance(
+    *,
+    aggregate: _OptimizerAggregate,
+    counts: SpellCounts,
+) -> float:
+    enablers = dict(aggregate.package_enablers)
+    payoffs = dict(aggregate.package_payoffs)
+    fits = tuple(
+        _optimizer_diminishing_signal(enablers.get(package, 0.0))
+        * _optimizer_diminishing_signal(payoffs.get(package, 0.0))
+        for package in PACKAGE_ROLES
+        if enablers.get(package, 0.0) + payoffs.get(package, 0.0) > 0
+    )
+    return 100.0 * (sum(fits) / len(fits) if fits else 0.0)
+
+
+def _optimizer_semantic_synergy(
+    *,
+    aggregate: _OptimizerAggregate,
+    counts: SpellCounts,
+) -> float:
+    """Score selected-package semantic enabler/payoff support only."""
+
+    enablers = dict(aggregate.package_enablers)
+    payoffs = dict(aggregate.package_payoffs)
+    supported = sum(
+        _optimizer_diminishing_signal(enablers.get(package, 0.0))
+        * _optimizer_diminishing_signal(payoffs.get(package, 0.0))
+        for package in PACKAGE_ROLES
+    )
+    package_signal = _clamp(value=supported / max(1, counts.total), lower=0.0, upper=1.0)
+    return 100.0 * package_signal
+
+
+def _optimizer_empirical_context(
+    *,
+    aggregate: _OptimizerAggregate,
+    counts: SpellCounts,
+) -> float:
+    """Score weighted empirical scarcity and signed pair synergy; negative evidence
+    lowers the bounded package-ranking contribution."""
+
+    scarcity = _clamp(
+        value=aggregate.scarcity / max(1, counts.total),
+        lower=0.0,
+        upper=1.0,
+    )
+    direct_synergy = _clamp(
+        value=aggregate.synergy_value / max(1.0, counts.total - 1),
+        lower=-1.0,
+        upper=1.0,
+    )
+    return 100.0 * _clamp(
+        value=0.5 * scarcity + 0.5 * direct_synergy,
+        lower=-1.0,
+        upper=1.0,
+    )
+
+
+def _optimizer_redundancy(
+    *,
+    aggregate: _OptimizerAggregate,
+    pair_profile: PairProfile | None,
+    counts: SpellCounts,
+) -> float:
+    duplicate_excess = sum(
+        max(0, count - 1)
+        for count in Counter(keys[0] for keys in aggregate.card_keys).values()
+    )
+    role_excess = 0.0
+    if pair_profile is not None:
+        role_values = dict(aggregate.role_values)
+        role_excess = sum(
+            max(0.0, role_values.get(target.role.value, 0.0) - target.value * 1.5)
+            for target in pair_profile.role_targets
+        )
+    enablers = dict(aggregate.package_enablers)
+    payoffs = dict(aggregate.package_payoffs)
+    package_excess = sum(
+        max(0.0, enablers.get(package, 0.0) - payoffs.get(package, 0.0))
+        for package in PACKAGE_ROLES
+    )
+    return 100.0 * _clamp(
+        value=(duplicate_excess + role_excess + 0.25 * package_excess)
+        / max(1, counts.total),
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+def _optimizer_unsupported_payoffs(
+    *,
+    aggregate: _OptimizerAggregate,
+    counts: SpellCounts,
+) -> float:
+    enablers = dict(aggregate.package_enablers)
+    payoffs = dict(aggregate.package_payoffs)
+    unsupported = sum(
+        max(0.0, payoffs.get(package, 0.0) - enablers.get(package, 0.0))
+        for package in PACKAGE_ROLES
+    )
+    return 100.0 * _clamp(
+        value=unsupported / max(1, counts.total),
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+def _optimizer_mana_strain(
+    *,
+    aggregate: _OptimizerAggregate,
+    counts: SpellCounts,
+) -> float:
+    return 100.0 * _clamp(
+        value=aggregate.mana_strain / max(1, counts.total),
+        lower=0.0,
+        upper=1.0,
+    )
+
+
+def _optimizer_card_mana_strain(*, card: CardInfo, pair: str) -> float:
+    symbols = MANA_SYMBOL_PATTERN.findall(card.mana_cost or "")
+    colored_symbols = tuple(
+        symbol
+        for symbol in symbols
+        if any(color in symbol.upper() for color in BASIC_LANDS_BY_COLOR)
+    )
+    off_color = sum(
+        1
+        for symbol in colored_symbols
+        if not any(color in symbol.upper() for color in pair)
+    )
+    pip_pressure = max(0, len(colored_symbols) - 1) * 0.25
+    strain = off_color * 1.25 + pip_pressure
+    return _clamp(
+        value=strain / max(1.0, card.mana_value or 1.0),
+        lower=0.0,
+        upper=1.0,
     )
 
 
@@ -3167,15 +3779,26 @@ def _validate_deck_builder_config(*, config: DeckBuilderConfig) -> None:
 
 
 def _validate_optimizer_weights(*, config: DeckBuilderConfig) -> None:
-    """Validate finite non-negative generic objective weights.
-    At least one quality or structure term must contribute to ranking.
+    """Validate finite non-negative optimizer weights.
+    Generic quality, curve, or creature structure must always participate.
     """
 
-    weights = (
+    generic_weights = (
         config.optimizer_quality_weight,
         config.optimizer_curve_weight,
         config.optimizer_creature_structure_weight,
     )
+    profile_weights = (
+        config.optimizer_role_target_weight,
+        config.optimizer_effective_removal_weight,
+        config.optimizer_enabler_payoff_weight,
+        config.optimizer_semantic_synergy_weight,
+        config.optimizer_empirical_context_weight,
+        config.optimizer_redundancy_weight,
+        config.optimizer_unsupported_payoff_weight,
+        config.optimizer_mana_strain_weight,
+    )
+    weights = (*generic_weights, *profile_weights)
     if any(
         isinstance(weight, bool)
         or not isinstance(weight, (int, float))
@@ -3184,8 +3807,11 @@ def _validate_optimizer_weights(*, config: DeckBuilderConfig) -> None:
         for weight in weights
     ):
         raise DeckBuilderError("Deck-builder optimizer weights must be finite and non-negative.")
-    if sum(weights) <= 0:
-        raise DeckBuilderError("At least one deck-builder optimizer weight must be positive.")
+    if sum(generic_weights) <= 0:
+        raise DeckBuilderError(
+            "At least one generic quality, curve, or creature-structure optimizer weight "
+            "must be positive."
+        )
 
 
 
@@ -3252,7 +3878,6 @@ def _format_pair_score(
 def _format_win_rate(*, score: PairScore) -> str:
     if score.pair_win_rate is None:
         return f"neutral {score.pair_win_rate_score:.1f}%"
-
     return f"{score.pair_win_rate * 100.0:.1f}%"
 
 

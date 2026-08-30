@@ -703,6 +703,11 @@ def handle_build(args: argparse.Namespace) -> int:
                 draft_id=args.draft_id,
             )
         )
+        set_profile = load_scoring_profile(
+            set_code=pool.set_code,
+            event_format=QUICK_DRAFT_FORMAT,
+            app_dir=args.app_dir,
+        )
         ratings_data = load_cached_17lands_data(
             set_code=pool.set_code,
             app_dir=args.app_dir,
@@ -720,8 +725,15 @@ def handle_build(args: argparse.Namespace) -> int:
             ratings_data=ratings_data,
             forced_pair=args.pair,
             allow_splash=args.allow_splash,
+            set_profile=set_profile,
         )
-    except (CardDatabaseError, DeckBuilderError, DraftPoolError, SeventeenLandsError) as error:
+    except (
+        CardDatabaseError,
+        DeckBuilderError,
+        DraftPoolError,
+        SeventeenLandsError,
+        SetProfileError,
+    ) as error:
         print(f"build failed: {error}", file=sys.stderr)
         return 1
 

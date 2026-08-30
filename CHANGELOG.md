@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+- Extend bounded whole-package deck ranking with profile-aware semantic and
+  empirical package terms, confidence- and maturity-bounded evidence, generic
+  no-profile fallback, and frozen HOB draw-second regressions and
+  counterfactuals. (#269)
+
 - Add bounded deterministic whole-package beam search and local improvement to
   deck spell selection, while preserving deck, splash, mana, pip, and
   constraint-relaxation invariants. (#268)

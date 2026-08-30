@@ -46,13 +46,26 @@ These are the fallback FR-5.6 structural defaults: established Limited consensus
 
 Empirical targets can be computed from 17Lands public draft-data dumps with `refresh-structure-targets`. The command groups trophy drafts by deck, computes average creature count, curve shape, and land count per two-color pair, and caches the small aggregate under the normal 17Lands cache directory. The builder loads those targets automatically in offline `build`, `replay`, and watch flows when the cache is present.
 
-The spell selector uses a bounded whole-deck optimizer rather than a greedy walk. It first scores the filtered, quantity-limited candidate tuple, then keeps the best `optimizer_beam_width` partial decks at each selection depth. Complete feasible decks are ranked by one generic objective (higher is better):
+The spell selector uses a bounded whole-deck optimizer rather than a greedy walk. It first scores the filtered, quantity-limited candidate tuple, then keeps the best `optimizer_beam_width` partial decks at each selection depth. Complete feasible decks are ranked by one deterministic objective (higher is better):
 
 - individual card quality (`optimizer_quality_weight = 1.0`);
 - curve shape, including the two-drop quota, expensive-spell cap, and average mana value (`optimizer_curve_weight = 0.12`);
 - creature-count structure (`optimizer_creature_structure_weight = 0.12`).
 
+When the existing `SetProfile` and canonical pair from pair selection provide usable evidence, complete-package ranking adds bounded terms for:
+
+- profile role-target fit and effective-removal coverage;
+- enabler/payoff balance, including draw-second packages;
+- semantic package synergy, evaluated from selected package membership rather than the entire drafted pool;
+- empirical pair/card context;
+- redundancy and unsupported-payoff penalties; and
+- mana strain.
+
+Semantic package evidence is separate from empirical pair evidence. Pair synergy and scarcity values are multiplied by a deterministic bounded sample-strength factor: an entry's `samples` value when present, otherwise the canonical pair sample count. Missing or zero samples contribute no empirical effect; the pair sample count itself is not a standalone ranking signal. Signed pair synergy is retained, so negative evidence lowers a package's bounded objective contribution. Profile confidence and maturity still bound the overall influence as confidence × maturity. They never replace the hard feasibility checks below.
+
 After the beam completes, deterministic local improvement tries up to `optimizer_local_improvement_rounds = 2` rounds, considering at most `optimizer_local_improvement_candidates = 8` replacement candidates per round. `optimizer_max_search_nodes = 32768` caps expanded search nodes and `optimizer_max_evaluations = 4096` caps complete-package objective evaluations. Together with the beam width of `24`, these explicit limits bound ordinary 40–50-card pools: the selector does not enumerate every deck.
+
+The frozen HOB draw-second regression compares the optimized package with the prior greedy baseline. Multiple `Master's Councillor` copies must bring at least one baseline-omitted `Patient Instructor` into the package. Removing the draw-second payoffs removes that advantage; adding another weak enabler does not force every related copy into the deck. A no-profile replay must preserve the generic fallback.
 
 Candidate order is the existing score order. Beam states, replacements, and final ties preserve stable candidate order and card identity, so repeated runs with the same pool, ratings, and configuration return the same package.
 

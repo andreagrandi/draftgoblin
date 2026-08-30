@@ -1,0 +1,58 @@
+{
+  "confidence": 0.9,
+  "format": "quickdraft",
+  "generated_at": "2026-08-30T00:00:00+00:00",
+  "maturity": "semantic-only",
+  "pair_profiles": [
+    {"pair": "UR", "theme": "draw two"}
+  ],
+  "profile_version": "hob-test-1",
+  "role_profile": {
+    "cards": [
+      {
+        "card_name": "Master's Councillor",
+        "key": "name:master's councillor",
+        "roles": [
+          {
+            "confidence": 1.0,
+            "evidence": ["oracle_text"],
+            "provenance": ["fixture"],
+            "role": "extra_draw_enabler"
+          }
+        ]
+      },
+      {
+        "card_name": "Weak Master's Councillor",
+        "key": "name:weak master's councillor",
+        "roles": [
+          {
+            "confidence": 0.6,
+            "evidence": ["oracle_text"],
+            "provenance": ["fixture"],
+            "role": "extra_draw_enabler"
+          }
+        ]
+      },
+      {
+        "card_name": "Patient Instructor",
+        "key": "name:patient instructor",
+        "roles": [
+          {
+            "confidence": 1.0,
+            "evidence": ["oracle_text"],
+            "provenance": ["fixture"],
+            "role": "draw_second_payoff"
+          }
+        ]
+      }
+    ],
+    "classifier_version": "1.1",
+    "profile_schema_version": 2,
+    "role_schema_version": 2,
+    "schema_version": 2,
+    "set_code": "HOB"
+  },
+  "schema_version": 1,
+  "set_code": "HOB",
+  "source": {"artifact": "deckbuilder-hob-test", "provider": "fixture", "revision": "1"}
+}

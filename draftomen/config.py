@@ -67,6 +67,14 @@ class DeckBuilderConfig:
     optimizer_quality_weight: float = 1.0
     optimizer_curve_weight: float = 0.12
     optimizer_creature_structure_weight: float = 0.12
+    optimizer_role_target_weight: float = 0.12
+    optimizer_effective_removal_weight: float = 0.12
+    optimizer_enabler_payoff_weight: float = 0.22
+    optimizer_semantic_synergy_weight: float = 0.20
+    optimizer_empirical_context_weight: float = 0.10
+    optimizer_redundancy_weight: float = 0.12
+    optimizer_unsupported_payoff_weight: float = 0.18
+    optimizer_mana_strain_weight: float = 0.10
     maximum_unresolved_metadata_ratio: float = 0.25
     relaxation_order: tuple[str, ...] = (
         "expensive-spell cap",

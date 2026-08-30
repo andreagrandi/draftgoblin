@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -9,13 +10,20 @@ from typing import Any
 import pytest
 
 from draftomen.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
-from draftomen.config import DECK_BUILDER
+from draftomen.config import DECK_BUILDER, DeckBuilderConfig
 from draftomen.deckbuilder import (
     BuildPool,
     DeckBuilderError,
     ManaBase,
     SpellConstraints,
+    SpellCounts,
+    _build_optimizer_context,
     _card_quantity_key,
+    _greedy_feasible_package,
+    _optimizer_card_keys,
+    _optimizer_creature_score,
+    _optimizer_curve_score,
+    _optimizer_objective,
     _select_with_constraints,
     build_deck_from_pool,
     format_build_result,
@@ -36,6 +44,15 @@ from draftomen.seventeen import (
     SeventeenLandsData,
     SeventeenLandsFormatData,
     StructuralTargets,
+)
+from draftomen.set_profile import (
+    CardPairSynergy,
+    PairProfile,
+    ProfileMaturity,
+    SampleSummary,
+    ScarcityTarget,
+    SetProfile,
+    load_set_profile,
 )
 
 FIXTURE_NOW = datetime(2026, 7, 3, 12, 0, tzinfo=UTC).isoformat()
@@ -370,6 +387,443 @@ def test_spell_optimizer_is_deterministic_for_same_candidates_and_config() -> No
     assert first == second
 
 
+def test_hob_profile_brings_patient_instructor_into_complete_package() -> None:
+    candidates, config, constraints, available_quantities, profile = _hob_optimizer_setup(
+        spell_count=4
+    )
+    baseline = _greedy_feasible_package(
+        candidates=candidates,
+        available_quantities=available_quantities,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+    )
+    selected = _select_with_constraints(
+        candidates=candidates,
+        available_quantities=available_quantities,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+        set_profile=profile,
+    )
+
+    assert baseline is not None
+    assert selected is not None
+    baseline_names = {card.card.name for card in baseline}
+    selected_names = {card.card.name for card in selected}
+    assert "Patient Instructor" not in baseline_names
+    assert "Patient Instructor" in selected_names
+    assert sum(card.card.name == "Master's Councillor" for card in selected) >= 2
+
+
+def test_hob_profile_payoff_counterfactual_removes_package_advantage() -> None:
+    candidates, config, constraints, available_quantities, profile = _hob_optimizer_setup(
+        spell_count=4,
+        redundancy_weight=0.1,
+    )
+    assert any(card.card.name == "Patient Instructor" for card in candidates)
+    assert profile.role_profile is not None
+    counterfactual_role_profile = replace(
+        profile.role_profile,
+        cards=tuple(
+            card
+            for card in profile.role_profile.cards
+            if card.card_name != "Patient Instructor"
+        ),
+    )
+    counterfactual_profile = replace(
+        profile,
+        role_profile=counterfactual_role_profile,
+    )
+    assert all(
+        card.card_name != "Patient Instructor"
+        for card in counterfactual_profile.card_roles
+    )
+    baseline = _greedy_feasible_package(
+        candidates=candidates,
+        available_quantities=available_quantities,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+    )
+    selected = _select_with_constraints(
+        candidates=candidates,
+        available_quantities=available_quantities,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+        set_profile=counterfactual_profile,
+    )
+
+    assert baseline is not None
+    assert selected is not None
+    assert {card.original_index for card in selected} == {
+        card.original_index for card in baseline
+    }
+    assert "Patient Instructor" not in {card.card.name for card in selected}
+
+
+def test_hob_profile_does_not_force_weak_redundant_enabler() -> None:
+    candidates, config, constraints, available_quantities, profile = _hob_optimizer_setup(
+        spell_count=5
+    )
+    assert any(card.card.name == "Weak Master's Councillor" for card in candidates)
+    selected = _select_with_constraints(
+        candidates=candidates,
+        available_quantities=available_quantities,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+        set_profile=profile,
+    )
+
+    assert selected is not None
+    selected_names = {card.card.name for card in selected}
+    assert "Weak Master's Councillor" not in selected_names
+    assert "Patient Instructor" in selected_names
+
+
+def test_empirical_pair_and_scarcity_evidence_reorders_complete_packages() -> None:
+    candidates = _hob_optimizer_candidates()
+    masters = tuple(
+        card for card in candidates if card.card.name == "Master's Councillor"
+    )
+    patient = next(card for card in candidates if card.card.name == "Patient Instructor")
+    filler_one = next(card for card in candidates if card.card.name == "Generic Filler One")
+    filler_two = next(card for card in candidates if card.card.name == "Generic Filler Two")
+    generic_package = (masters[0], masters[1], filler_one, filler_two)
+    empirical_package = (masters[0], masters[1], patient, filler_one)
+    constraints = SpellConstraints(
+        spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+    )
+    config = replace(
+        DECK_BUILDER,
+        optimizer_quality_weight=1.0,
+        optimizer_curve_weight=0.0,
+        optimizer_creature_structure_weight=0.0,
+        optimizer_role_target_weight=0.0,
+        optimizer_effective_removal_weight=0.0,
+        optimizer_enabler_payoff_weight=0.0,
+        optimizer_semantic_synergy_weight=0.1,
+        optimizer_empirical_context_weight=0.2,
+        optimizer_redundancy_weight=0.0,
+        optimizer_unsupported_payoff_weight=0.0,
+        optimizer_mana_strain_weight=0.0,
+    )
+    fixture_profile = load_set_profile(FIXTURES_DIR / "deckbuilder-hob-profile.json")
+    empirical_profile = replace(
+        fixture_profile,
+        profile_version="hob-empirical-test",
+        maturity=ProfileMaturity.MATURE,
+        samples=SampleSummary(total=100, by_pair=(("UR", 100),)),
+        confidence=1.0,
+        pairs=(
+            PairProfile(
+                pair="UR",
+                synergy=(
+                    CardPairSynergy(
+                        first_card="arena_id:1901",
+                        second_card="arena_id:1902",
+                        value=2.0,
+                    ),
+                ),
+                scarcity=(
+                    ScarcityTarget(card_key="arena_id:1902", value=1.0),
+                ),
+            ),
+        ),
+        role_profile=None,
+    )
+    generic_score = _optimizer_objective(
+        cards=generic_package,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+    )
+    generic_empirical_score = _optimizer_objective(
+        cards=empirical_package,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+    )
+    profile_score = _optimizer_objective(
+        cards=generic_package,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+        set_profile=empirical_profile,
+    )
+    profile_empirical_score = _optimizer_objective(
+        cards=empirical_package,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+        set_profile=empirical_profile,
+    )
+
+    assert generic_score > generic_empirical_score
+    assert profile_empirical_score > profile_score
+
+
+def test_optimizer_negative_pair_synergy_lowers_bounded_objective() -> None:
+    candidates = _hob_optimizer_candidates()
+    masters = tuple(
+        card for card in candidates if card.card.name == "Master's Councillor"
+    )
+    patient = next(card for card in candidates if card.card.name == "Patient Instructor")
+    filler_one = next(card for card in candidates if card.card.name == "Generic Filler One")
+    filler_two = next(card for card in candidates if card.card.name == "Generic Filler Two")
+    filler_three = next(card for card in candidates if card.card.name == "Generic Filler Three")
+    penalized_package = (masters[0], patient, filler_one, filler_two)
+    neutral_package = (masters[0], filler_one, filler_two, filler_three)
+    profile = _empirical_pair_profile(
+        synergy=CardPairSynergy(
+            first_card="arena_id:1901",
+            second_card="arena_id:1902",
+            value=-2.0,
+            samples=100,
+        ),
+    )
+
+    penalized_score = _optimizer_objective(
+        cards=penalized_package,
+        pair="UR",
+        constraints=_unconstrained_four_spell_constraints(),
+        config=_empirical_only_optimizer_config(),
+        set_profile=profile,
+    )
+    neutral_score = _optimizer_objective(
+        cards=neutral_package,
+        pair="UR",
+        constraints=_unconstrained_four_spell_constraints(),
+        config=_empirical_only_optimizer_config(),
+        set_profile=profile,
+    )
+
+    assert penalized_score < neutral_score
+
+
+def test_optimizer_zero_samples_have_no_empirical_effect() -> None:
+    candidates = _hob_optimizer_candidates()
+    masters = tuple(
+        card for card in candidates if card.card.name == "Master's Councillor"
+    )
+    patient = next(card for card in candidates if card.card.name == "Patient Instructor")
+    filler_one = next(card for card in candidates if card.card.name == "Generic Filler One")
+    filler_two = next(card for card in candidates if card.card.name == "Generic Filler Two")
+    package = (masters[0], patient, filler_one, filler_two)
+    zero_profile = _empirical_pair_profile(
+        synergy=CardPairSynergy(
+            first_card="arena_id:1901",
+            second_card="arena_id:1902",
+            value=2.0,
+            samples=0,
+        ),
+        scarcity=ScarcityTarget(
+            card_key="arena_id:1902",
+            value=1.0,
+            samples=0,
+        ),
+    )
+    supported_profile = _empirical_pair_profile(
+        synergy=CardPairSynergy(
+            first_card="arena_id:1901",
+            second_card="arena_id:1902",
+            value=2.0,
+        ),
+        scarcity=ScarcityTarget(card_key="arena_id:1902", value=1.0),
+    )
+    constraints = _unconstrained_four_spell_constraints()
+    config = _empirical_only_optimizer_config()
+
+    generic_score = _optimizer_objective(
+        cards=package,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+    )
+    zero_score = _optimizer_objective(
+        cards=package,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+        set_profile=zero_profile,
+    )
+    supported_score = _optimizer_objective(
+        cards=package,
+        pair="UR",
+        constraints=constraints,
+        config=config,
+        set_profile=supported_profile,
+    )
+
+    assert zero_score == generic_score
+    assert supported_score > generic_score
+
+
+def test_optimizer_resolves_oracle_id_for_empirical_card_evidence() -> None:
+    candidates = _hob_optimizer_candidates()
+    master = next(card for card in candidates if card.card.name == "Master's Councillor")
+    patient = next(card for card in candidates if card.card.name == "Patient Instructor")
+    oracle_master = replace(
+        master,
+        card=replace(master.card, oracle_id="Oracle-Master"),
+    )
+    oracle_patient = replace(
+        patient,
+        card=replace(patient.card, oracle_id="Oracle-Patient"),
+    )
+    profile = _empirical_pair_profile(
+        synergy=CardPairSynergy(
+            first_card="oracle_id:oracle-master",
+            second_card="oracle_id:oracle-patient",
+            value=1.0,
+            samples=100,
+        ),
+        scarcity=ScarcityTarget(
+            card_key="oracle_id:oracle-patient",
+            value=1.0,
+            samples=100,
+        ),
+    )
+
+    context = _build_optimizer_context(
+        candidates=(oracle_master, oracle_patient),
+        pair="UR",
+        set_profile=profile,
+    )
+
+    assert "oracle_id:oracle-master" in _optimizer_card_keys(card=oracle_master.card)
+    assert "oracle_id:oracle-patient" in _optimizer_card_keys(card=oracle_patient.card)
+    assert context.synergy_lookup[
+        ("oracle_id:oracle-master", "oracle_id:oracle-patient")
+    ] == pytest.approx(0.5)
+    assert context.card_evidence[1].scarcity == pytest.approx(0.5)
+
+
+def _empirical_only_optimizer_config() -> DeckBuilderConfig:
+    return replace(
+        DECK_BUILDER,
+        optimizer_quality_weight=0.0,
+        optimizer_curve_weight=0.0,
+        optimizer_creature_structure_weight=0.0,
+        optimizer_role_target_weight=0.0,
+        optimizer_effective_removal_weight=0.0,
+        optimizer_enabler_payoff_weight=0.0,
+        optimizer_semantic_synergy_weight=0.0,
+        optimizer_empirical_context_weight=1.0,
+        optimizer_redundancy_weight=0.0,
+        optimizer_unsupported_payoff_weight=0.0,
+        optimizer_mana_strain_weight=0.0,
+    )
+
+
+def _unconstrained_four_spell_constraints() -> SpellConstraints:
+    return SpellConstraints(
+        spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+    )
+
+
+def _empirical_pair_profile(
+    *,
+    synergy: CardPairSynergy | None = None,
+    scarcity: ScarcityTarget | None = None,
+) -> SetProfile:
+    fixture_profile = load_set_profile(FIXTURES_DIR / "deckbuilder-hob-profile.json")
+    return replace(
+        fixture_profile,
+        profile_version="hob-empirical-behavior-test",
+        maturity=ProfileMaturity.MATURE,
+        samples=SampleSummary(total=100, by_pair=(("UR", 100),)),
+        confidence=1.0,
+        pairs=(
+            PairProfile(
+                pair="UR",
+                synergy=() if synergy is None else (synergy,),
+                scarcity=() if scarcity is None else (scarcity,),
+            ),
+        ),
+        role_profile=None,
+    )
+
+
+
+
+def test_optimizer_requires_generic_term_even_when_profile_weights_are_nonzero() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        optimizer_quality_weight=0.0,
+        optimizer_curve_weight=0.0,
+        optimizer_creature_structure_weight=0.0,
+    )
+
+    with pytest.raises(DeckBuilderError, match="generic quality"):
+        select_deck_spells(
+            pool_grp_ids=(1, 2, 3, 4),
+            card_database=_card_database(),
+            pair="WU",
+            config=config,
+        )
+
+
+def test_optimizer_no_profile_is_exactly_generic_quality_curve_and_structure() -> None:
+    cards = _optimizer_candidates()[:4]
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+    )
+    constraints = SpellConstraints(
+        spell_count=4,
+        creature_floor=0,
+        creature_ceiling=4,
+        minimum_two_drops=0,
+        maximum_expensive_spells=4,
+    )
+    counts = SpellCounts(
+        total=4,
+        creatures=sum("Creature" in card.card.types[0] for card in cards),
+        two_drops=sum(card.card.mana_value == 2.0 for card in cards),
+        expensive=sum((card.card.mana_value or 0.0) >= 6.0 for card in cards),
+    )
+    raw_score_sum = sum(card.raw_score for card in cards)
+    mana_value_sum = sum(card.card.mana_value or 0.0 for card in cards)
+    expected = (
+        config.optimizer_quality_weight * (raw_score_sum / counts.total)
+        + config.optimizer_curve_weight
+        * _optimizer_curve_score(
+            counts=counts,
+            mana_value_sum=mana_value_sum,
+            constraints=constraints,
+            config=config,
+        )
+        + config.optimizer_creature_structure_weight
+        * _optimizer_creature_score(
+            creature_count=counts.creatures,
+            constraints=constraints,
+        )
+    )
+
+    assert _optimizer_objective(
+        cards=cards,
+        pair="WU",
+        constraints=constraints,
+        config=config,
+    ) == expected
+
+
 def test_spell_optimizer_never_exceeds_available_card_quantities() -> None:
     candidates = _optimizer_candidates()
     duplicate = replace(candidates[0], original_index=100)
@@ -412,6 +866,22 @@ def test_spell_optimizer_never_exceeds_available_card_quantities() -> None:
         count <= available_quantities[quantity_key]
         for quantity_key, count in selected_quantities.items()
     )
+
+
+def test_optimizer_profile_weights_require_finite_non_negative_values() -> None:
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=4,
+        optimizer_semantic_synergy_weight=float("nan"),
+    )
+
+    with pytest.raises(DeckBuilderError, match="finite and non-negative"):
+        select_deck_spells(
+            pool_grp_ids=(1, 2, 3, 4),
+            card_database=_card_database(),
+            pair="WU",
+            config=config,
+        )
 
 
 def test_spell_optimizer_uses_exact_spell_constraints() -> None:
@@ -1358,6 +1828,78 @@ def _optimizer_candidates() -> tuple[ScoredCard, ...]:
         )
         for card in scored
     )
+
+
+def _hob_optimizer_candidates() -> tuple[ScoredCard, ...]:
+    fixture = json.loads(
+        (FIXTURES_DIR / "deckbuilder-hob-pool.json").read_text(encoding="utf-8")
+    )
+    cards = fixture["cards"]
+    database = CardDatabase(
+        cards={item["grp_id"]: CardInfo.from_json(item) for item in cards}
+    )
+    scored = PickEngine().score_pack(
+        offered_grp_ids=tuple(fixture["offered_grp_ids"]),
+        card_database=database,
+        pool_grp_ids=(),
+        pick_index=1,
+    ).cards
+    score_by_grp_id = {
+        item["grp_id"]: item["raw_score"]
+        for item in cards
+    }
+    return tuple(
+        replace(
+            card,
+            raw_score=score_by_grp_id[card.card.grp_id],
+            score=int(score_by_grp_id[card.card.grp_id]),
+        )
+        for card in scored
+    )
+
+
+def _hob_optimizer_setup(
+    *,
+    spell_count: int,
+    redundancy_weight: float | None = None,
+) -> tuple[
+    tuple[ScoredCard, ...],
+    DeckBuilderConfig,
+    SpellConstraints,
+    Counter[tuple[str, str]],
+    SetProfile,
+]:
+    candidates = _hob_optimizer_candidates()
+    config = replace(
+        DECK_BUILDER,
+        target_spell_count=spell_count,
+        creature_floor=0,
+        creature_ceiling=spell_count,
+        minimum_two_drops=0,
+        maximum_expensive_spells=spell_count,
+        optimizer_beam_width=64,
+        optimizer_max_search_nodes=10_000,
+        optimizer_local_improvement_rounds=0,
+        optimizer_max_evaluations=0,
+        optimizer_redundancy_weight=(
+            DECK_BUILDER.optimizer_redundancy_weight
+            if redundancy_weight is None
+            else redundancy_weight
+        ),
+        bench_card_count=0,
+    )
+    constraints = SpellConstraints(
+        spell_count=spell_count,
+        creature_floor=0,
+        creature_ceiling=spell_count,
+        minimum_two_drops=0,
+        maximum_expensive_spells=spell_count,
+    )
+    available_quantities = Counter(
+        _card_quantity_key(card=card.card) for card in candidates
+    )
+    profile = load_set_profile(FIXTURES_DIR / "deckbuilder-hob-profile.json")
+    return candidates, config, constraints, available_quantities, profile
 
 
 def _constrained_pool_ids() -> tuple[int, ...]:
