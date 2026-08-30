@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 - Add a deterministic, provenance-preserving offline reader for public CSV dumps with checksum verification and privacy-safe reports. (#272)
+- Route shared 17Lands draft-row ingestion through the provenance-preserving structure-target builder. (#272)
 - Extend bounded whole-package deck ranking with profile-aware semantic and
   empirical package terms, confidence- and maturity-bounded evidence, generic
   no-profile fallback, and frozen HOB draw-second regressions and
