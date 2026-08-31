@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+- Expand the GitHub issue workflow with implementation size and orchestration-risk
+  classification plus approval-gated epic decomposition and dependency linking.
 - Add issue-226's remote set-profile manifest/client workflow with
   offline-first cached loading, explicit live/manual refresh, validation,
   last-good recovery, and compact maturity/outcome status; hosting and
