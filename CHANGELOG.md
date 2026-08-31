@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+- Add deterministic `plan-profile-refresh` dry runs with explicit Arena
+  lifecycle metadata, 17Lands expansion discovery, bounded selections,
+  canonical plans, diagnostics, and atomic plan output. (#283)
+- Reduce GitHub issue and project API usage with centralized authenticated I/O,
+  explicit call budgets, batched ProjectV2 mutations, and single-pass
+  verification.
+- Expand the GitHub issue workflow with implementation size and orchestration-risk
+  classification plus approval-gated epic decomposition and dependency linking.
 - Add issue-226's remote set-profile manifest/client workflow with
   offline-first cached loading, explicit live/manual refresh, validation,
   last-good recovery, and compact maturity/outcome status; hosting and

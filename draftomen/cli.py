@@ -67,6 +67,16 @@ from draftomen.logfollow import LogFollowError
 from draftomen.paths import UnsupportedPlatformError, resolve_player_log_path
 from draftomen.pool import DraftPoolError
 from draftomen.ranking import DEFAULT_RANKING_MODE, RANKING_MODES
+from draftomen.refresh_plan import (
+    LifecycleMetadata,
+    RefreshPlanError,
+    build_refresh_plan,
+    discover_17lands_inventory,
+    fetch_lifecycle_metadata,
+    load_17lands_inventory_file,
+    load_lifecycle_file,
+    write_refresh_plan,
+)
 from draftomen.replay import ReplayError, replay_log_file
 from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
@@ -641,6 +651,70 @@ def build_parser() -> argparse.ArgumentParser:
         help="Profile schema version to embed (default: 1.0).",
     )
     profile_parser.set_defaults(handler=handle_generate_profile)
+    plan_parser = subparsers.add_parser(
+        name="plan-profile-refresh",
+        help="Plan profile refreshes without generating profiles.",
+        description=(
+            "Build a deterministic dry-run refresh plan from the 17Lands "
+            "expansion inventory and explicit Arena lifecycle metadata."
+        ),
+    )
+    plan_selection = plan_parser.add_mutually_exclusive_group(required=True)
+    plan_selection.add_argument(
+        "--set-code",
+        help="Plan one known 17Lands expansion (manual selection).",
+    )
+    plan_selection.add_argument(
+        "--active",
+        action="store_true",
+        help="Plan all inventory expansions explicitly classified as active.",
+    )
+    plan_selection.add_argument(
+        "--max-environments",
+        type=int,
+        help="Plan at most this many explicitly historical expansions.",
+    )
+    plan_parser.add_argument(
+        "--history",
+        action="store_true",
+        help="Select historical environments (requires --max-environments).",
+    )
+    plan_parser.add_argument(
+        "--event-format",
+        required=True,
+        help="Explicit event format paired with every selected set code.",
+    )
+    plan_parser.add_argument(
+        "--inventory-file",
+        type=Path,
+        default=None,
+        help="Local JSON list with the exact 17Lands /data/expansions shape.",
+    )
+    lifecycle_source = plan_parser.add_mutually_exclusive_group()
+    lifecycle_source.add_argument(
+        "--lifecycle-file",
+        type=Path,
+        default=None,
+        help="Local operator-supplied Arena lifecycle JSON document.",
+    )
+    lifecycle_source.add_argument(
+        "--lifecycle-url",
+        default=None,
+        help="URL for operator-supplied Arena lifecycle JSON metadata.",
+    )
+    plan_output = plan_parser.add_mutually_exclusive_group(required=True)
+    plan_output.add_argument(
+        "--output-plan",
+        type=Path,
+        default=None,
+        help="Atomically write the canonical plan JSON to this path.",
+    )
+    plan_output.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the canonical plan JSON; this command never generates profiles.",
+    )
+    plan_parser.set_defaults(handler=handle_plan_profile_refresh)
     return parser
 
 
@@ -699,6 +773,8 @@ def handle_generate_profile(args: argparse.Namespace) -> int:
     print(f"artifact={result.artifact_path}")
     print(f"generation_manifest={result.manifest_path}")
     return 0
+
+
 def handle_refresh_profile(args: argparse.Namespace) -> int:
     """Refresh one published profile while retaining any usable cache."""
 
@@ -728,6 +804,62 @@ def handle_refresh_profile(args: argparse.Namespace) -> int:
     )
     return 0 if result.maturity.value != "generic" else 1
 
+
+def handle_plan_profile_refresh(args: argparse.Namespace) -> int:
+    """Print or persist a refresh plan; never generate profiles."""
+
+    try:
+        output_plan = getattr(args, "output_plan", None)
+        dry_run = bool(getattr(args, "dry_run", False))
+        if (output_plan is not None) == dry_run:
+            raise RefreshPlanError("exactly one of --dry-run or --output-plan is required")
+
+        if args.inventory_file is None:
+            inventory = discover_17lands_inventory()
+        else:
+            inventory = load_17lands_inventory_file(args.inventory_file)
+
+        if args.lifecycle_file is not None:
+            lifecycle = load_lifecycle_file(args.lifecycle_file)
+        elif args.lifecycle_url is not None:
+            lifecycle = fetch_lifecycle_metadata(args.lifecycle_url)
+        else:
+            lifecycle = LifecycleMetadata(
+                provider="",
+                source_url="",
+                version="",
+                diagnostics=("lifecycle-input-missing",),
+            )
+
+        history_requested = bool(getattr(args, "history", False))
+        if history_requested and args.max_environments is None:
+            raise RefreshPlanError("--history requires --max-environments")
+        if history_requested and (args.set_code is not None or args.active):
+            raise RefreshPlanError("--history cannot be combined with another selection")
+        if args.set_code is not None:
+            selection_mode = "manual"
+        elif args.active:
+            selection_mode = "active"
+        else:
+            selection_mode = "history"
+
+        plan = build_refresh_plan(
+            inventory,
+            lifecycle,
+            event_format=args.event_format,
+            selection_mode=selection_mode,
+            set_code=args.set_code,
+            max_environments=args.max_environments,
+        )
+        if output_plan is not None:
+            write_refresh_plan(output_plan, plan)
+            return 0
+    except (RefreshPlanError, SeventeenLandsError, OSError) as error:
+        print(f"plan-profile-refresh: {error}", file=sys.stderr)
+        return 1
+
+    sys.stdout.write(plan.to_bytes().decode("utf-8"))
+    return 0
 
 
 def format_version() -> str:

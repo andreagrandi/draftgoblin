@@ -250,6 +250,76 @@ Historical-pick modeling, benchmark calibration, promotion gates, and other
 runtime-integration signals proposed in #88 remain outside this profile
 contract.
 
+## Plan profile refreshes
+
+`plan-profile-refresh` is a dry-run producer command. It selects environment
+identities (`set_code` plus the explicitly supplied `--event-format`) from the
+current 17Lands expansion inventory, but it never generates or publishes a
+profile. The inventory is the sole eligibility source; there is no application
+set whitelist.
+
+The command uses the network-backed
+`https://www.17lands.com/data/expansions` inventory by default. For reproducible
+offline runs, `--inventory-file` accepts that endpoint's exact JSON list shape:
+
+```json
+["TST", "NEW"]
+```
+
+Lifecycle is a separate, explicit operator input. 17Lands does not publish
+Arena rotation windows, so Draft Omen does not infer dates, order, or
+availability from the inventory. Operators must derive lifecycle assignments
+from an authoritative Arena schedule and record the provider, source URL, and
+version in a local or URL-supplied document:
+
+```json
+{
+  "provider": "Arena schedule",
+  "source_url": "https://schedule.example.test/arena.json",
+  "version": "2026-08-30",
+  "active": ["NEW"],
+  "mature": ["TST"],
+  "historical": ["OLD"]
+}
+```
+
+The stage lists may instead be represented by `environments` (or `records`)
+objects with `set_code` and `lifecycle` fields. Missing, malformed, duplicate,
+conflicting, or inventory-unknown lifecycle entries are retained as stable
+diagnostics. They do not discard valid 17Lands inventory entries.
+
+Select exactly one planning mode and always provide an event format:
+
+```sh
+# One known inventory environment.
+uv run draftomen-tui plan-profile-refresh \
+  --set-code NEW --event-format PremierDraft \
+  --inventory-file "$PWD/inputs/expansions.json" \
+  --lifecycle-file "$PWD/inputs/arena-lifecycle.json" \
+  --dry-run
+
+# Every environment explicitly classified active.
+uv run draftomen-tui plan-profile-refresh \
+  --active --event-format PremierDraft \
+  --lifecycle-url https://schedule.example.test/arena.json \
+  --dry-run
+
+# At most two explicitly historical environments.
+uv run draftomen-tui plan-profile-refresh \
+  --max-environments 2 --event-format PremierDraft \
+  --inventory-file "$PWD/inputs/expansions.json" \
+  --lifecycle-file "$PWD/inputs/arena-lifecycle.json" \
+  --output-plan "$PWD/refresh-plan.json"
+```
+
+The command prints canonical compact JSON with sorted keys, deterministic
+environment order and reasons, and one trailing newline. `--output-plan` writes
+the same bytes atomically. A history selection includes only entries classified
+`historical` and applies the explicit bound; an active selection includes only
+entries classified `active`. A manual selection requires the set code to be in
+the 17Lands inventory, while its lifecycle classification remains explicit
+metadata (and may be reported as unknown). No mode infers a lifecycle stage.
+
 ## Schema version 1
 
 A profile is a JSON object with these required fields:

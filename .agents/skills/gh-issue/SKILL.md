@@ -1,178 +1,100 @@
 ---
 name: gh-issue
 description: >-
-  Create a GitHub issue/ticket for the Draft Omen repo. Use whenever the user
-  wants to file a bug, create a ticket, open an issue, report a problem, or
-  request a feature/enhancement/documentation change for andreagrandi/draftomen.
+  Create, classify, split, and organize GitHub issues for andreagrandi/draftomen.
+  Use when filing issues, reviewing ticket metadata, creating epics or native
+  sub-issues, linking dependencies, or updating the Draft Omen project.
 ---
 
-# Create a GitHub issue for draftomen
+# Manage Draft Omen issues
 
-Use this workflow to file issues on `andreagrandi/draftomen` and add them
-to the **Draft Omen** project board:
-`https://github.com/users/andreagrandi/projects/3`.
+Repository: `andreagrandi/draftomen` · Project: `https://github.com/users/andreagrandi/projects/3`
 
-Draft first. Issue creation is outward-facing: show the title, body, labels,
-priority, and area, let the user edit, and only run `gh issue create` after the
-user approves. If the description is too thin for a clear Problem and at least
-one Acceptance Criterion, ask 1-2 concise questions first. If priority or area
-is not stated, ask before creating the issue.
+See [REFERENCE.md](REFERENCE.md) for classifications, templates, IDs, and API patterns.
 
-## Classify
+## Non-negotiable rules
 
-Apply exactly two labels:
+- Draft outward-facing issue content first. Show title, body, labels, Priority,
+  Area, Size, and risk; mutate GitHub only after explicit approval.
+- One agent owns all authenticated GitHub I/O. Every `gh`, `issue://`, `pr://`,
+  and GitHub-backed read in every subagent shares the user's API budget.
+- Delegated repository research receives already-fetched issue data through a
+  `local://` artifact and MUST NOT call GitHub.
+- Never parallelize GitHub mutations. Batch independent ProjectV2 mutations
+  into one GraphQL request.
+- Never run GraphQL schema introspection during routine work. Use the stable
+  IDs and patterns in [REFERENCE.md](REFERENCE.md).
+- Never repeat a project or issue query merely to apply a different `jq`
+  projection. Retain the first response and parse it locally.
+- Never loop over `gh project item-edit --url ... --field ... --value ...`.
+  Friendly-name resolution can issue extra lookups; use node and field IDs.
 
-- Repo label: always `draftomen`.
-- Type label: exactly one of `bug`, `enhancement`, or `documentation`.
+## Call budget
 
-Do not invent labels. Area belongs in the project Area field, not labels. Other
-repo labels such as `duplicate`, `question`, `help wanted`, or `wontfix` are not
-used for new work-item creation unless the user explicitly requests them.
+- Budgets count tool invocations; prefer explicit one-request APIs because high-level `gh` may fan out.
+- Single issue: at most 6 calls after approval: create, add to the project, and set four fields by ID.
+- Multi-issue or epic: write the API call graph before execution. Target no
+  more than `2N + D + 8` calls for `N` issues and `D` dependency links.
+- A duplicate search, native parent link, or dependency link may add a call.
+  Any other budget increase requires a concrete reason before execution.
+- Above 10 calls, include `rateLimit { cost remaining resetAt }` in an existing
+  query; never poll or use REST `/rate_limit` as a GraphQL authority.
+- If quota is low, stop nonessential reads and switch to targeted node-ID
+  queries plus batched mutations. Do not retry before `resetAt`.
 
-Verified label IDs are reference-only; pass label names to `gh issue create`.
+## Gather once
 
-| Label | REST ID | Node ID |
-|-------|---------|---------|
-| `draftomen` | `11407200945` | `LA_kwDOTMcZ0s8AAAACp-wSsQ` |
-| `bug` | `11407101817` | `LA_kwDOTMcZ0s8AAAACp-qPeQ` |
-| `documentation` | `11407101837` | `LA_kwDOTMcZ0s8AAAACp-qPjQ` |
-| `enhancement` | `11407101867` | `LA_kwDOTMcZ0s8AAAACp-qPqw` |
+1. Single issue: fetch its body, labels, project fields, native parent/children,
+   and requested dependencies once.
+2. Project batch: fetch the project JSON once with the narrowest useful limit.
+   Preserve the response in memory or `/tmp/agents`; derive every view locally.
+3. Existing issue split: perform the required `pr-scope-guidance` assessment.
+   Fetch GitHub metadata centrally; delegate only genuinely independent
+   repository/code boundaries.
+4. Ask only for Priority or Area when neither is stated nor safely inferable.
+   Do not query GitHub for information already present in the issue or project
+   response.
 
-Priority defaults are not allowed in this repo workflow. Ask the user if they
-did not state priority.
+## Draft and classify
 
-- High: app crashes, data loss or corruption, draft pick recommendations are
-  completely broken, Arena integration cannot read draft state, or `master` CI
-  is red.
-- Medium: important user-facing bug or feature with a workaround, degraded
-  recommendations in a single flow, or release-blocking polish that does not
-  stop core use.
-- Low: cosmetic polish, docs, refactor/tech debt, minor developer experience,
-  or nice-to-have enhancement.
+- Every issue gets exactly three labels: `draftomen`, one of `bug`,
+  `enhancement`, or `documentation`, and `size: <S|M|L|XL>`.
+- Project fields are required: Priority, Area, Status `Todo`, and Size matching
+  the size label.
+- Use the body and epic templates in [REFERENCE.md](REFERENCE.md).
+- For an epic or split, prefer one independently reviewable outcome per child,
+  make dependencies explicit, classify every child independently, and preserve
+  the native parent-child relationship.
+- Never recommend a model in issue content.
 
-Area is a required project field. Ask the user if it is not stated or inferable.
+## Execute after approval
 
-- Draft Engine: pick recommendations, card ratings/scoring, draft strategy
-  logic.
-- Card Data: card and set databases, data ingestion, ratings sources, data
-  updates.
-- Arena Integration: MTG Arena log parsing, client detection, reading draft
-  state from Arena.
-- UX: user-facing copy, visual layout, accessibility, flows, forms, empty/error
-  states.
-- Operations: CI, build settings, release config, project tooling.
-- Testing: unit/UI tests, fixtures, mocks, test infrastructure.
+### One issue
 
-## Body Template
+1. Create it with `gh issue create`, passing label names.
+2. Add it with `gh project item-add` and capture the returned project item ID.
+3. Set all four project fields with ID-based `gh project item-edit` commands.
+4. Add explicitly requested native parent or dependency links.
 
-Use this template unless the user provides a better structure:
+### Two or more issues
 
-```markdown
-## Problem
-<What's wrong or missing, and where in the app>
+1. Create each approved issue; retain every URL and number.
+2. Resolve all issue node/database IDs in one targeted GraphQL query.
+3. Add every issue to the project in one aliased
+   `addProjectV2ItemById` mutation; retain returned item IDs.
+4. Set Priority, Area, Status, and Size for every item in one aliased
+   `updateProjectV2ItemFieldValue` mutation.
+5. Attach native sub-issues and dependency links with the REST patterns in
+   [REFERENCE.md](REFERENCE.md). Do not add redundant transitive dependencies.
 
-## Proposed change
-<What should happen instead>
+## Verify once
 
-## Acceptance Criteria
-- [ ] <Done condition 1>
-- [ ] <Done condition 2>
-```
-
-Title: short, imperative or problem-focused, with no component prefix.
-
-## File It After Approval
-
-Optional duplicate check:
-
-```sh
-gh issue list --repo andreagrandi/draftomen --search "<keywords>" --state open
-```
-
-Create the issue:
-
-```sh
-URL=$(gh issue create --repo andreagrandi/draftomen \
-  --title "<title>" \
-  --body "<body>" \
-  --label "draftomen" \
-  --label "<bug|enhancement|documentation>")
-```
-
-Add it to the Draft Omen project and capture the item ID:
-
-```sh
-ITEM_ID=$(gh project item-add 3 --owner andreagrandi \
-  --url "$URL" --format json --jq .id)
-```
-
-Project ID: `PVT_kwHOAAm1584BcXPu`
-
-Set Priority:
-
-- High: `9253744f`
-- Medium: `9664f46f`
-- Low: `46883d66`
-
-```sh
-gh project item-edit --id "$ITEM_ID" --project-id PVT_kwHOAAm1584BcXPu \
-  --field-id PVTSSF_lAHOAAm1584BcXPuzhXAwaU \
-  --single-select-option-id <priority-option-id>
-```
-
-Set Area:
-
-- Draft Engine: `9a9b1e4b`
-- Card Data: `36a55847`
-- Arena Integration: `8773e939`
-- UX: `72d9c16b`
-- Operations: `cd7eec9b`
-- Testing: `8a3248da`
-
-```sh
-gh project item-edit --id "$ITEM_ID" --project-id PVT_kwHOAAm1584BcXPu \
-  --field-id PVTSSF_lAHOAAm1584BcXPuzhXAwaY \
-  --single-select-option-id <area-option-id>
-```
-
-Set Status to Todo:
-
-```sh
-gh project item-edit --id "$ITEM_ID" --project-id PVT_kwHOAAm1584BcXPu \
-  --field-id PVTSSF_lAHOAAm1584BcXPuzhXApdY \
-  --single-select-option-id f75ad846
-```
-
-Report the issue URL and the selected type, priority, and area.
-
-## Link Dependencies
-
-Only do this when the user explicitly says the issue is blocked by or blocking
-another issue. `gh` has no native issue-dependency command, so use the REST API.
-The body uses the other issue's database `id`, not its `#number`.
-
-```sh
-# This issue <N> is blocked by <BLOCKER>.
-BLOCKER_ID=$(gh api repos/andreagrandi/draftomen/issues/<BLOCKER> --jq .id)
-gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" \
-  repos/andreagrandi/draftomen/issues/<N>/dependencies/blocked_by \
-  -F issue_id="$BLOCKER_ID"
-```
-
-List or remove blocked-by relationships:
-
-```sh
-gh api repos/andreagrandi/draftomen/issues/<N>/dependencies/blocked_by \
-  -H "X-GitHub-Api-Version: 2026-03-10" --jq '.[] | "#\(.number) \(.title)"'
-
-gh api --method DELETE -H "X-GitHub-Api-Version: 2026-03-10" \
-  repos/andreagrandi/draftomen/issues/<N>/dependencies/blocked_by/<BLOCKER_ID>
-```
-
-## Notes
-
-- Project fields were verified with `gh project field-list 3 --owner andreagrandi`.
-- If project commands fail because of missing scopes, run `gh auth refresh -s project`.
-- Never create the GitHub issue without adding it to the Draft Omen project and
-  setting Priority, Area, and Status.
-
+- One targeted GraphQL query must return all affected project items and their
+  Priority, Area, Status, and Size; compare locally with the approved values.
+- One parent sub-issues query verifies all native children.
+- Query blocked-by endpoints only for children that should have direct
+  dependencies.
+- Verify labels from the same issue/sub-issue response when present.
+- Do not re-run successful mutations as verification.
+- Report URLs, type, Priority, Area, Size, risk, parent links, dependencies,
+  verification result, and actual authenticated-call count.

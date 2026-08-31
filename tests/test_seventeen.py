@@ -22,8 +22,11 @@ from draftomen.seventeen import (
     PREMIER_DRAFT_FORMAT,
     QUICK_DRAFT_FORMAT,
     SEVENTEEN_LANDS_ATTRIBUTION,
+    SEVENTEEN_LANDS_EXPANSIONS_ENDPOINT,
     SeventeenLandsDownloadProgress,
     SeventeenLandsError,
+    fetch_17lands_expansion_inventory,
+    parse_17lands_expansion_inventory,
     build_17lands_structure_targets_from_draft_rows,
     augment_card_database_from_ratings,
     has_cached_17lands_data,
@@ -81,6 +84,57 @@ class RecordingFetcher:
             return self.color_ratings
 
         raise AssertionError(f"unexpected URL {url}")
+
+
+def test_17lands_expansion_inventory_normalizes_and_keeps_valid_neighbors() -> None:
+    result = parse_17lands_expansion_inventory(
+        [" tst ", "NEW", "", None, "TST", {"code": "BAD"}],
+        source_url="https://fixture.invalid/expansions",
+    )
+
+    assert result.expansion_codes == ("NEW", "TST")
+    assert result.source_url == "https://fixture.invalid/expansions"
+    assert [(item.reason, item.entry) for item in result.diagnostics] == [
+        ("duplicate-entry", "TST"),
+        ("malformed-entry", ""),
+        ("malformed-entry", None),
+        ("malformed-entry", None),
+    ]
+
+
+def test_17lands_expansion_inventory_is_stable_when_payload_order_changes() -> None:
+    payload = ["Y26ECL", " ecl ", "", None, "Y26ECL"]
+
+    first = parse_17lands_expansion_inventory(payload)
+    second = parse_17lands_expansion_inventory(list(reversed(payload)))
+
+    assert second == first
+
+
+def test_17lands_expansion_inventory_digest_changes_with_source_payload() -> None:
+    first = parse_17lands_expansion_inventory(["TST"])
+    changed = parse_17lands_expansion_inventory(["TST", "NEW"])
+
+    assert changed.source_payload_digest != first.source_payload_digest
+
+
+def test_fetch_17lands_expansion_inventory_uses_injected_fetcher() -> None:
+    calls: list[tuple[str, int]] = []
+
+    def fetcher(url: str, timeout_seconds: int) -> list[str]:
+        calls.append((url, timeout_seconds))
+        return [" tst ", "NEW"]
+
+    result = fetch_17lands_expansion_inventory(fetch_json=fetcher, timeout_seconds=7)
+
+    assert calls == [(SEVENTEEN_LANDS_EXPANSIONS_ENDPOINT, 7)]
+    assert result.expansion_codes == ("NEW", "TST")
+    assert result.source_url == SEVENTEEN_LANDS_EXPANSIONS_ENDPOINT
+
+
+def test_parse_17lands_expansion_inventory_rejects_non_list_payload() -> None:
+    with pytest.raises(SeventeenLandsError, match="expected a JSON list"):
+        parse_17lands_expansion_inventory({"expansions": ["TST"]})
 
 
 def test_17lands_format_data_is_cached_and_not_refetched_within_24h(
