@@ -365,7 +365,7 @@ change the runtime card database.
 ## Optional 17Lands ratings profile inputs
 
 `acquire_profile_build_bundle` composes the required metadata acquisition with
-an optional format-scoped `SeventeenLandsRatingsAdapter`. The default adapter
+an optional format-scoped `SeventeenLandsRatingsAdapter`. The ratings adapter
 uses the existing normalized `SeventeenLandsFormatData` contract, validates it
 for the planned set and event format, and stores canonical JSON through the
 same bounded profile-input cache.
@@ -391,9 +391,40 @@ names, local paths, credentials, exception text, or secrets.
 Fresh ratings are reused without network access. `offline=True` reuses the
 newest verified entry, and a verified stale entry remains usable if its online
 refresh fails. Missing, corrupt, unavailable, or uncacheable ratings produce a
-bounded source outcome while preserving the valid metadata-only bundle. Public
-draft acquisition and three-source partial-failure orchestration remain in
-#296.
+bounded source outcome while preserving the valid metadata-only bundle.
+
+## Optional 17Lands public-draft inputs
+
+The same `acquire_profile_build_bundle` call also invokes a format-scoped
+`SeventeenLandsPublicDraftAdapter`. The default adapter downloads the preferred
+17Lands public draft dump for the requested set and event format, verifies that
+every yielded row uses the supported generator schema and requested
+environment, and streams the exact dump bytes through `ProfileInputCache`.
+The resulting bundle supplies a pinned one-source `PublicDumpManifest` to the
+existing profile generator; the source path points only to the verified cache
+object and is never serialized in the acquisition report.
+
+Public-draft reports record the logical source, adapter version, acquisition
+timestamp, digest, byte count, cache lookup/store outcomes, stable diagnostics,
+and available draft-row count. They do not contain URLs, cache or staging
+paths, raw rows, draft identifiers, card names, credentials, exception text, or
+secrets. The reader recognizes gzip content in the cache's content-addressed
+`.bin` objects, so the same verified bytes can be consumed by profile
+generation without renaming or copying them.
+
+Metadata remains required, while ratings and public drafts have independent
+bounded outcomes. A ratings failure can therefore retain public-draft evidence,
+and a public-draft failure can retain ratings. If neither empirical source is
+available, the valid metadata-only bundle remains usable. `offline=True`
+reuses each source's newest verified cache entry without invoking its adapter;
+a verified stale public dump remains usable when refresh fails, while missing,
+corrupt, mismatched, unavailable, or uncacheable dumps produce source-specific
+skip reasons without suppressing other valid inputs.
+
+Acquisition records evidence availability but does not infer an early or mature
+stage, run generation, publish artifacts, or retain source rows in memory after
+validation. Callers make lifecycle decisions from the deterministic rating and
+draft-row availability reports.
 
 ## Plan profile refreshes
 

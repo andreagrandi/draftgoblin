@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Protocol
 
 from draftomen.carddb import (
@@ -26,11 +28,19 @@ from draftomen.profile_input_cache import (
     ProfileInputCacheResult,
     ProfileInputSource,
 )
+from draftomen.public_dump import (
+    PublicDumpError,
+    PublicDumpManifest,
+    PublicDumpReader,
+    PublicDumpSource,
+)
 from draftomen.refresh_plan import PlannedEnvironment
 from draftomen.seventeen import (
     SeventeenLandsError,
     SeventeenLandsFormatData,
+    download_public_draft_data,
     fetch_17lands_format_data,
+    public_draft_data_url,
 )
 
 PROFILE_INPUT_ACQUISITION_SCHEMA_VERSION = 1
@@ -38,7 +48,21 @@ CARD_METADATA_ADAPTER_VERSION = 1
 CARD_METADATA_SOURCE_NAME = "card-metadata"
 RATINGS_ADAPTER_VERSION = 1
 RATINGS_SOURCE_NAME = "17lands-ratings"
+PUBLIC_DRAFT_ADAPTER_VERSION = 1
+PUBLIC_DRAFT_SOURCE_NAME = "17lands-public-drafts"
+PUBLIC_DRAFT_ATTRIBUTION = "Public draft data: 17Lands"
+PUBLIC_DRAFT_LICENSE = "CC BY 4.0"
 Clock = Callable[[], datetime]
+_PUBLIC_DRAFT_REQUIRED_FIELDS = frozenset(
+    {
+        "draft_id",
+        "event_match_wins",
+        "event_type",
+        "expansion",
+        "pick",
+        "pick_maindeck_rate",
+    }
+)
 
 
 class ProfileInputAcquisitionError(ValueError):
@@ -86,6 +110,22 @@ class RatingsFetcher(Protocol):
         ...
 
 
+class PublicDraftFetcher(Protocol):
+    """Fetch one format-scoped public-draft dump to a local staging path.
+    Implementations never return raw rows through the acquisition report.
+    """
+
+    def __call__(
+        self,
+        *,
+        set_code: str,
+        event_format: str,
+        path: Path,
+        timeout_seconds: int,
+    ) -> None:
+        ...
+
+
 def _fetch_default_card_database(*, set_code: str, timeout_seconds: int) -> CardDatabase:
     del set_code
     return download_scryfall_card_database(timeout_seconds=timeout_seconds)
@@ -102,6 +142,23 @@ def _fetch_default_ratings(
         set_code=set_code,
         event_format=event_format,
         fetched_at=fetched_at,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _fetch_default_public_drafts(
+    *,
+    set_code: str,
+    event_format: str,
+    path: Path,
+    timeout_seconds: int,
+) -> None:
+    download_public_draft_data(
+        url=public_draft_data_url(
+            set_code=set_code,
+            event_format=event_format,
+        ),
+        path=path,
         timeout_seconds=timeout_seconds,
     )
 
@@ -123,10 +180,11 @@ class ProfileInputSourceReport:
     card_count: int = 0
     rating_rows: int | None = None
     rating_samples: int | None = None
+    draft_rows: int | None = None
     diagnostics: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        for name in ("card_count", "rating_rows", "rating_samples"):
+        for name in ("card_count", "rating_rows", "rating_samples", "draft_rows"):
             count = getattr(self, name)
             if count is not None and (
                 isinstance(count, bool) or not isinstance(count, int) or count < 0
@@ -136,6 +194,10 @@ class ProfileInputSourceReport:
             raise ProfileInputAcquisitionError(
                 "Rating row and sample availability must be recorded together."
             )
+        if self.draft_rows is not None and self.rating_rows is not None:
+            raise ProfileInputAcquisitionError(
+                "Draft and rating availability must use separate source reports."
+            )
         object.__setattr__(self, "diagnostics", tuple(dict.fromkeys(self.diagnostics)))
 
     def to_json(self) -> dict[str, Any]:
@@ -143,14 +205,15 @@ class ProfileInputSourceReport:
         Optional cache-record fields appear only for verified inputs.
         """
 
-        sample_availability = (
-            {"card_count": self.card_count}
-            if self.rating_rows is None
-            else {
+        if self.draft_rows is not None:
+            sample_availability = {"draft_rows": self.draft_rows}
+        elif self.rating_rows is not None:
+            sample_availability = {
                 "rating_rows": self.rating_rows,
                 "rating_samples": self.rating_samples,
             }
-        )
+        else:
+            sample_availability = {"card_count": self.card_count}
         value: dict[str, Any] = {
             "cache_lookup_outcome": (
                 None if self.cache_lookup_outcome is None else self.cache_lookup_outcome.value
@@ -177,7 +240,7 @@ class ProfileInputSourceReport:
 @dataclass(frozen=True, slots=True)
 class ProfileBuildBundle:
     """Carry normalized inputs required by the existing profile generator.
-    Raw metadata and ratings stay in memory and out of reports.
+    Raw source contents remain outside serialized acquisition reports.
     """
 
     environment: PlannedEnvironment
@@ -185,6 +248,8 @@ class ProfileBuildBundle:
     card_metadata: ProfileInputSourceReport
     ratings: SeventeenLandsFormatData | None = field(default=None, repr=False)
     ratings_source: ProfileInputSourceReport | None = None
+    public_drafts: PublicDumpManifest | None = field(default=None, repr=False)
+    public_draft_source: ProfileInputSourceReport | None = None
 
     def __post_init__(self) -> None:
         if self.card_metadata.source.set_code != self.environment.set_code:
@@ -207,6 +272,20 @@ class ProfileBuildBundle:
                 environment=self.environment,
                 acquired_at=self.ratings_source.acquired_at,
             )
+        if self.public_draft_source is not None and (
+            self.public_draft_source.source.set_code != self.environment.set_code
+            or self.public_draft_source.source.event_format != self.environment.event_format
+        ):
+            raise ProfileInputAcquisitionError("Public-draft source does not match the bundle.")
+        if self.public_drafts is not None:
+            if self.public_draft_source is None:
+                raise ProfileInputAcquisitionError(
+                    "Public-draft provenance is missing from the bundle."
+                )
+            _validate_public_draft_manifest(
+                manifest=self.public_drafts,
+                report=self.public_draft_source,
+            )
 
     def generator_inputs(self) -> dict[str, object]:
         """Return the values accepted by the existing profile generator.
@@ -220,6 +299,8 @@ class ProfileBuildBundle:
         }
         if self.ratings is not None:
             values["ratings"] = self.ratings
+        if self.public_drafts is not None:
+            values["source_manifest"] = self.public_drafts
         return values
 
 
@@ -233,6 +314,7 @@ class ProfileInputAcquisitionResult:
     source: ProfileInputSourceReport
     bundle: ProfileBuildBundle | None = field(default=None, repr=False)
     ratings_source: ProfileInputSourceReport | None = None
+    public_draft_source: ProfileInputSourceReport | None = None
     skip_reasons: tuple[str, ...] = ()
     schema_version: int = PROFILE_INPUT_ACQUISITION_SCHEMA_VERSION
 
@@ -255,9 +337,12 @@ class ProfileInputAcquisitionResult:
         Required card metadata precedes optional empirical inputs.
         """
 
-        if self.ratings_source is None:
-            return (self.source,)
-        return (self.source, self.ratings_source)
+        optional = tuple(
+            report
+            for report in (self.ratings_source, self.public_draft_source)
+            if report is not None
+        )
+        return (self.source, *optional)
 
     def to_json(self) -> dict[str, Any]:
         """Return a deterministic path-free acquisition report.
@@ -305,6 +390,21 @@ class _RatingsSnapshot:
 class _RatingsAcquisition:
     report: ProfileInputSourceReport
     ratings: SeventeenLandsFormatData | None = field(default=None, repr=False)
+    skip_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicDraftSnapshot:
+    source_version: str
+    acquired_at: datetime
+    sha256: str
+    draft_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicDraftAcquisition:
+    report: ProfileInputSourceReport
+    manifest: PublicDumpManifest | None = field(default=None, repr=False)
     skip_reason: str | None = None
 
 
@@ -446,6 +546,83 @@ class SeventeenLandsRatingsAdapter:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SeventeenLandsPublicDraftAdapter:
+    """Fetch and validate format-scoped 17Lands public draft evidence.
+    Cache bytes remain the generator's pinned local source.
+    """
+
+    fetch_public_drafts: PublicDraftFetcher = field(default=_fetch_default_public_drafts)
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS
+    source_name: str = PUBLIC_DRAFT_SOURCE_NAME
+
+    def __post_init__(self) -> None:
+        if not callable(self.fetch_public_drafts):
+            raise ProfileInputAcquisitionError("fetch_public_drafts must be callable.")
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, int)
+            or self.timeout_seconds <= 0
+        ):
+            raise ProfileInputAcquisitionError("timeout_seconds must be positive.")
+        normalized = ProfileInputSource(
+            name=self.source_name,
+            set_code="TST",
+            event_format="QuickDraft",
+        )
+        object.__setattr__(self, "source_name", normalized.name)
+
+    def source_for(self, *, environment: PlannedEnvironment) -> ProfileInputSource:
+        """Return the set-and-format cache identity for public drafts.
+        Quick Draft and Premier Draft evidence remain independent.
+        """
+
+        return ProfileInputSource(
+            name=self.source_name,
+            set_code=environment.set_code,
+            event_format=environment.event_format,
+        )
+
+    def acquire(
+        self,
+        *,
+        environment: PlannedEnvironment,
+        acquired_at: datetime,
+        path: Path,
+    ) -> _PublicDraftSnapshot:
+        """Fetch and validate one public-draft dump without retaining rows.
+        Only matching supported rows can reach the input cache.
+        """
+
+        timestamp = _timestamp(acquired_at)
+        self.fetch_public_drafts(
+            set_code=environment.set_code,
+            event_format=environment.event_format,
+            path=path,
+            timeout_seconds=self.timeout_seconds,
+        )
+        sha256 = _file_sha256(path=path)
+        draft_rows = _validated_public_draft_rows(
+            source=PublicDumpSource(
+                name=self.source_name,
+                path=path,
+                sha256=sha256,
+            ),
+            environment=environment,
+        )
+        if draft_rows == 0:
+            raise ProfileInputAcquisitionError(
+                "Public-draft data did not contain any supported rows."
+            )
+        version_time = timestamp.strftime("%Y%m%dT%H%M%S%fZ")
+        return _PublicDraftSnapshot(
+            source_version=f"v{PUBLIC_DRAFT_ADAPTER_VERSION}-{version_time}-{sha256}",
+            acquired_at=timestamp,
+            sha256=sha256,
+            draft_rows=draft_rows,
+        )
+
+
 def acquire_card_metadata_bundle(
     *,
     environment: PlannedEnvironment,
@@ -581,11 +758,12 @@ def acquire_profile_build_bundle(
     cache: ProfileInputCache,
     card_metadata_adapter: CardMetadataAdapter | None = None,
     ratings_adapter: SeventeenLandsRatingsAdapter | None = None,
+    public_draft_adapter: SeventeenLandsPublicDraftAdapter | None = None,
     offline: bool = False,
     clock: Clock | None = None,
 ) -> ProfileInputAcquisitionResult:
-    """Acquire required metadata and optional ratings for one build.
-    Ratings failures preserve the valid metadata-only bundle.
+    """Acquire required metadata and independent empirical sources.
+    Optional failures preserve every successfully acquired input.
     """
 
     metadata_result = acquire_card_metadata_bundle(
@@ -605,9 +783,18 @@ def acquire_profile_build_bundle(
         offline=offline,
         clock=clock,
     )
+    public_draft_result = _acquire_public_drafts(
+        environment=environment,
+        cache=cache,
+        adapter=public_draft_adapter or SeventeenLandsPublicDraftAdapter(),
+        offline=offline,
+        clock=clock,
+    )
     skip_reasons = list(metadata_result.skip_reasons)
     if ratings_result.skip_reason is not None:
         skip_reasons.append(ratings_result.skip_reason)
+    if public_draft_result.skip_reason is not None:
+        skip_reasons.append(public_draft_result.skip_reason)
     return ProfileInputAcquisitionResult(
         environment=environment,
         source=metadata_result.source,
@@ -617,8 +804,11 @@ def acquire_profile_build_bundle(
             card_metadata=metadata_result.source,
             ratings=ratings_result.ratings,
             ratings_source=ratings_result.report,
+            public_drafts=public_draft_result.manifest,
+            public_draft_source=public_draft_result.report,
         ),
         ratings_source=ratings_result.report,
+        public_draft_source=public_draft_result.report,
         skip_reasons=tuple(skip_reasons),
     )
 
@@ -730,6 +920,145 @@ def _acquire_ratings(
             result=stored,
             outcome=ProfileInputAcquisitionOutcome.ACQUIRED,
             ratings=snapshot.ratings,
+            cache_lookup_outcome=ProfileInputCacheOutcome(lookup.outcome),
+            cache_store_outcome=ProfileInputCacheOutcome(stored.outcome),
+            diagnostics=content_diagnostics,
+        ),
+    )
+
+
+def _acquire_public_drafts(
+    *,
+    environment: PlannedEnvironment,
+    cache: ProfileInputCache,
+    adapter: SeventeenLandsPublicDraftAdapter,
+    offline: bool,
+    clock: Clock | None,
+) -> _PublicDraftAcquisition:
+    source = adapter.source_for(environment=environment)
+    try:
+        lookup = cache.lookup(source=source, offline=offline)
+    except ProfileInputCacheError:
+        return _PublicDraftAcquisition(
+            report=ProfileInputSourceReport(
+                source=source,
+                outcome=ProfileInputAcquisitionOutcome.UNAVAILABLE,
+                cache_lookup_outcome=None,
+                draft_rows=0,
+                diagnostics=("17lands-public-drafts-cache-lookup-failed",),
+            ),
+            skip_reason="17lands-public-drafts-cache-unavailable",
+        )
+
+    cached, draft_rows, content_diagnostics = _load_cached_public_drafts(
+        result=lookup,
+        environment=environment,
+    )
+    cache_is_corrupt = lookup.record is not None and cached is None
+    if cached is not None and lookup.outcome in {
+        ProfileInputCacheOutcome.FRESH,
+        ProfileInputCacheOutcome.OFFLINE_REUSED,
+    }:
+        outcome = (
+            ProfileInputAcquisitionOutcome.CACHED
+            if lookup.outcome is ProfileInputCacheOutcome.FRESH
+            else ProfileInputAcquisitionOutcome.OFFLINE_REUSED
+        )
+        return _PublicDraftAcquisition(
+            manifest=cached,
+            report=_public_draft_report_from_cache(
+                result=lookup,
+                outcome=outcome,
+                draft_rows=draft_rows,
+                diagnostics=content_diagnostics,
+            ),
+        )
+
+    if offline:
+        corrupt = cache_is_corrupt or lookup.outcome is ProfileInputCacheOutcome.CORRUPT
+        return _PublicDraftAcquisition(
+            report=_public_draft_report_from_cache(
+                result=lookup,
+                outcome=(
+                    ProfileInputAcquisitionOutcome.CORRUPT
+                    if corrupt
+                    else ProfileInputAcquisitionOutcome.MISSING
+                ),
+                diagnostics=content_diagnostics,
+            ),
+            skip_reason=(
+                "17lands-public-drafts-cache-corrupt"
+                if corrupt
+                else "17lands-public-drafts-cache-missing"
+            ),
+        )
+
+    acquired_at = _now(clock)
+    try:
+        with tempfile.TemporaryDirectory(prefix="draftomen-profile-input-") as directory:
+            path = Path(directory) / "public-drafts.bin"
+            try:
+                snapshot = adapter.acquire(
+                    environment=environment,
+                    acquired_at=acquired_at,
+                    path=path,
+                )
+            except Exception:  # noqa: BLE001 - source failures become bounded outcomes.
+                return _public_draft_refresh_failure(
+                    lookup=lookup,
+                    cached=cached,
+                    draft_rows=draft_rows,
+                    cache_is_corrupt=cache_is_corrupt,
+                    diagnostics=(
+                        *content_diagnostics,
+                        "17lands-public-drafts-acquisition-failed",
+                    ),
+                    stale_reason="17lands-public-drafts-refresh-failed",
+                    unavailable_reason="17lands-public-drafts-unavailable",
+                )
+            try:
+                with path.open(mode="rb") as input_stream:
+                    stored = cache.store(
+                        source=source,
+                        source_version=snapshot.source_version,
+                        input_stream=input_stream,
+                        expected_sha256=snapshot.sha256,
+                        acquired_at=snapshot.acquired_at,
+                    )
+            except (OSError, ProfileInputCacheError):
+                return _public_draft_refresh_failure(
+                    lookup=lookup,
+                    cached=cached,
+                    draft_rows=draft_rows,
+                    cache_is_corrupt=cache_is_corrupt,
+                    diagnostics=(
+                        *content_diagnostics,
+                        "17lands-public-drafts-cache-store-failed",
+                    ),
+                    stale_reason="17lands-public-drafts-cache-store-failed",
+                    unavailable_reason="17lands-public-drafts-cache-store-failed",
+                )
+    except OSError:
+        return _public_draft_refresh_failure(
+            lookup=lookup,
+            cached=cached,
+            draft_rows=draft_rows,
+            cache_is_corrupt=cache_is_corrupt,
+            diagnostics=(
+                *content_diagnostics,
+                "17lands-public-drafts-acquisition-failed",
+            ),
+            stale_reason="17lands-public-drafts-refresh-failed",
+            unavailable_reason="17lands-public-drafts-unavailable",
+        )
+
+    manifest = _public_draft_manifest(result=stored)
+    return _PublicDraftAcquisition(
+        manifest=manifest,
+        report=_public_draft_report_from_cache(
+            result=stored,
+            outcome=ProfileInputAcquisitionOutcome.ACQUIRED,
+            draft_rows=snapshot.draft_rows,
             cache_lookup_outcome=ProfileInputCacheOutcome(lookup.outcome),
             cache_store_outcome=ProfileInputCacheOutcome(stored.outcome),
             diagnostics=content_diagnostics,
@@ -890,6 +1219,102 @@ def _load_cached_ratings(
     return ratings, result.diagnostics
 
 
+def _file_sha256(*, path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open(mode="rb") as input_file:
+        for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validated_public_draft_rows(
+    *,
+    source: PublicDumpSource,
+    environment: PlannedEnvironment,
+) -> int:
+    rows = 0
+    reader = PublicDumpReader(source=source)
+    for row in reader.iter_rows():
+        if not _PUBLIC_DRAFT_REQUIRED_FIELDS.issubset(row):
+            raise ProfileInputAcquisitionError(
+                "Public-draft data does not use the supported row schema."
+            )
+        if row["expansion"].strip().casefold() != environment.set_code.casefold():
+            raise ProfileInputAcquisitionError(
+                "Public-draft data contains an unexpected set."
+            )
+        if row["event_type"].strip().casefold() != environment.event_format.casefold():
+            raise ProfileInputAcquisitionError(
+                "Public-draft data contains an unexpected event format."
+            )
+        rows += 1
+    return rows
+
+
+def _public_draft_manifest(*, result: ProfileInputCacheResult) -> PublicDumpManifest:
+    if result.record is None or result.content_path is None:
+        raise ProfileInputAcquisitionError("Verified public-draft cache data is missing.")
+    return PublicDumpManifest(
+        sources=(
+            PublicDumpSource(
+                name=result.source.name,
+                path=result.content_path,
+                sha256=result.record.sha256,
+                retrieved_at=result.record.acquired_at.astimezone(UTC).isoformat(),
+                attribution=PUBLIC_DRAFT_ATTRIBUTION,
+                license=PUBLIC_DRAFT_LICENSE,
+            ),
+        )
+    )
+
+
+def _validate_public_draft_manifest(
+    *,
+    manifest: PublicDumpManifest,
+    report: ProfileInputSourceReport,
+) -> None:
+    if len(manifest.sources) != 1:
+        raise ProfileInputAcquisitionError(
+            "Profile bundles require exactly one public-draft source."
+        )
+    source = manifest.sources[0]
+    if (
+        source.name != report.source.name
+        or source.sha256 != report.sha256
+        or source.path is None
+        or report.draft_rows is None
+        or report.draft_rows == 0
+    ):
+        raise ProfileInputAcquisitionError(
+            "Public-draft manifest does not match its acquisition report."
+        )
+
+
+def _load_cached_public_drafts(
+    *,
+    result: ProfileInputCacheResult,
+    environment: PlannedEnvironment,
+) -> tuple[PublicDumpManifest | None, int, tuple[str, ...]]:
+    if result.record is None or result.content_path is None:
+        return None, 0, result.diagnostics
+    try:
+        manifest = _public_draft_manifest(result=result)
+        draft_rows = _validated_public_draft_rows(
+            source=manifest.sources[0],
+            environment=environment,
+        )
+        if draft_rows == 0:
+            raise ProfileInputAcquisitionError(
+                "Public-draft cache did not contain supported rows."
+            )
+    except (OSError, ProfileInputAcquisitionError, PublicDumpError):
+        return None, 0, (
+            *result.diagnostics,
+            "17lands-public-drafts-content-invalid",
+        )
+    return manifest, draft_rows, result.diagnostics
+
+
 def _refresh_failure(
     *,
     environment: PlannedEnvironment,
@@ -963,6 +1388,44 @@ def _ratings_refresh_failure(
     )
 
 
+def _public_draft_refresh_failure(
+    *,
+    lookup: ProfileInputCacheResult,
+    cached: PublicDumpManifest | None,
+    draft_rows: int,
+    cache_is_corrupt: bool,
+    diagnostics: tuple[str, ...],
+    stale_reason: str,
+    unavailable_reason: str,
+) -> _PublicDraftAcquisition:
+    if cached is not None and lookup.outcome is ProfileInputCacheOutcome.STALE:
+        return _PublicDraftAcquisition(
+            manifest=cached,
+            report=_public_draft_report_from_cache(
+                result=lookup,
+                outcome=ProfileInputAcquisitionOutcome.STALE,
+                draft_rows=draft_rows,
+                diagnostics=diagnostics,
+            ),
+            skip_reason=stale_reason,
+        )
+    corrupt = cache_is_corrupt or lookup.outcome is ProfileInputCacheOutcome.CORRUPT
+    return _PublicDraftAcquisition(
+        report=_public_draft_report_from_cache(
+            result=lookup,
+            outcome=(
+                ProfileInputAcquisitionOutcome.CORRUPT
+                if corrupt
+                else ProfileInputAcquisitionOutcome.UNAVAILABLE
+            ),
+            diagnostics=diagnostics,
+        ),
+        skip_reason=(
+            "17lands-public-drafts-cache-corrupt" if corrupt else unavailable_reason
+        ),
+    )
+
+
 def _report_from_cache(
     *,
     result: ProfileInputCacheResult,
@@ -1018,6 +1481,33 @@ def _ratings_report_from_cache(
     )
 
 
+def _public_draft_report_from_cache(
+    *,
+    result: ProfileInputCacheResult,
+    outcome: ProfileInputAcquisitionOutcome,
+    draft_rows: int = 0,
+    cache_lookup_outcome: ProfileInputCacheOutcome | None = None,
+    cache_store_outcome: ProfileInputCacheOutcome | None = None,
+    diagnostics: tuple[str, ...] = (),
+) -> ProfileInputSourceReport:
+    record = result.record
+    lookup_outcome = ProfileInputCacheOutcome(result.outcome)
+    return ProfileInputSourceReport(
+        source=result.source,
+        outcome=outcome,
+        cache_lookup_outcome=(
+            lookup_outcome if cache_lookup_outcome is None else cache_lookup_outcome
+        ),
+        cache_store_outcome=cache_store_outcome,
+        source_version=None if record is None else record.source_version,
+        acquired_at=None if record is None else record.acquired_at,
+        sha256=None if record is None else record.sha256,
+        content_bytes=None if record is None else record.content_bytes,
+        draft_rows=draft_rows,
+        diagnostics=diagnostics,
+    )
+
+
 def _success(
     *,
     environment: PlannedEnvironment,
@@ -1066,6 +1556,10 @@ __all__ = [
     "CARD_METADATA_ADAPTER_VERSION",
     "CARD_METADATA_SOURCE_NAME",
     "PROFILE_INPUT_ACQUISITION_SCHEMA_VERSION",
+    "PUBLIC_DRAFT_ADAPTER_VERSION",
+    "PUBLIC_DRAFT_ATTRIBUTION",
+    "PUBLIC_DRAFT_LICENSE",
+    "PUBLIC_DRAFT_SOURCE_NAME",
     "RATINGS_ADAPTER_VERSION",
     "RATINGS_SOURCE_NAME",
     "CardDatabaseFetcher",
@@ -1075,7 +1569,9 @@ __all__ = [
     "ProfileInputAcquisitionOutcome",
     "ProfileInputAcquisitionResult",
     "ProfileInputSourceReport",
+    "PublicDraftFetcher",
     "RatingsFetcher",
+    "SeventeenLandsPublicDraftAdapter",
     "SeventeenLandsRatingsAdapter",
     "acquire_card_metadata_bundle",
     "acquire_profile_build_bundle",

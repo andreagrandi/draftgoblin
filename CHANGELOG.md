@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Add format-scoped public-draft acquisition with deterministic row reporting,
+  verified cache and offline reuse, stale fallback, and independent three-source
+  failure handling for profile-build bundles. (#296)
 - Add optional format-scoped 17Lands ratings acquisition with deterministic
   sample reporting, bounded cache reuse, offline support, stale fallback, and
   metadata-only failure recovery. (#295)
