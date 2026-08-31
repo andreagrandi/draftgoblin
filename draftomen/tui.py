@@ -68,6 +68,7 @@ from draftomen.ranking import (
     rank_scored_cards,
     ranking_label,
 )
+from draftomen.profile_client import ProfileClient, ProfileRefreshResult
 from draftomen.session import (
     ApplicationPhase,
     BacktestPickResult,
@@ -84,6 +85,7 @@ from draftomen.session import (
     LiveSessionSnapshot,
     OperationKind,
     PoolState,
+    ProfileRefreshRequest,
     RatingsProgressLoader,
     RequestBacktest,
     RequestBuild,
@@ -591,6 +593,7 @@ class DraftomenTuiApp(App[None]):
         card_database: CardDatabase | None = None,
         card_database_loader: CardDatabaseLoader | None = None,
         app_dir: PathInput | None = None,
+        profile_client: ProfileClient | None = None,
         poll_interval: float = POLL_INTERVAL_SECONDS,
         previous_log_path: PathInput | None = None,
         ratings_loader: RatingsLoader | None = None,
@@ -645,6 +648,8 @@ class DraftomenTuiApp(App[None]):
         self._log_processing_started = False
         self._ingestion_lock = Lock()
         self._textual_thread_id: int | None = None
+        self._profile_refresh_in_flight: ProfileRefreshRequest | None = None
+        self._profile_client = profile_client
         self.session = LiveSession(
             log_path=self.log_path,
             card_database=card_database,
@@ -660,6 +665,7 @@ class DraftomenTuiApp(App[None]):
             ratings_progress_loader_factory=ratings_progress_loader_factory,
             ratings_cache_checker=ratings_cache_checker,
             splash_enabled=self.visibility_preferences.splash_enabled,
+            profile_client=profile_client,
         )
         self.startup_scan = startup_scan
         self.once = once
@@ -761,6 +767,12 @@ class DraftomenTuiApp(App[None]):
             return frozenset()
 
         return frozenset((ratings.set_code,))
+    @property
+    def profile_refresh_in_flight(self) -> ProfileRefreshRequest | None:
+        """Return the adapter-owned profile refresh currently running."""
+
+        return self._profile_refresh_in_flight
+
 
     @property
     def build_view_text(self) -> str:
@@ -1252,6 +1264,60 @@ class DraftomenTuiApp(App[None]):
             self.session.dispatch(command=command)
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.call_from_thread(self._record_error, str(error))
+    def _schedule_profile_refresh(self) -> None:
+        """Start the one pending profile refresh without blocking Textual."""
+
+        if self._profile_client is None or not self.is_running:
+            return
+        request = self.session.profile_refresh_request()
+        if request is None or self._profile_refresh_in_flight is not None:
+            return
+
+        self._profile_refresh_in_flight = request
+        self._refresh_profile_worker(request=request)
+
+    @work(thread=True, group="profile-refresh")
+    def _refresh_profile_worker(self, *, request: ProfileRefreshRequest) -> None:
+        """Fetch one profile in a worker and publish it through LiveSession."""
+
+        worker = get_current_worker()
+        try:
+            if worker.is_cancelled or self._profile_client is None:
+                return
+            if self.session.profile_refresh_request() != request:
+                return
+            result = self._profile_client.refresh(
+                request.set_code,
+                request.event_format,
+            )
+            if worker.is_cancelled:
+                return
+            if not isinstance(result, ProfileRefreshResult):
+                raise TypeError("ProfileClient.refresh returned an invalid result.")
+            self.session.complete_profile_refresh(request=request, result=result)
+        except Exception as error:  # pragma: no cover - defensive UI boundary.
+            if not worker.is_cancelled:
+                self.session.fail_profile_refresh(
+                    request=request,
+                    error_message=str(error),
+                )
+        finally:
+            if self.is_running:
+                try:
+                    self.call_from_thread(self._profile_refresh_finished, request)
+                except Exception:  # pragma: no cover - app may be shutting down.
+                    self._profile_refresh_in_flight = None
+            else:
+                self._profile_refresh_in_flight = None
+
+    def _profile_refresh_finished(self, request: ProfileRefreshRequest) -> None:
+        """Release the in-flight guard and pick up a newer active-set request."""
+
+        if self._profile_refresh_in_flight != request:
+            return
+        self._profile_refresh_in_flight = None
+        self._schedule_profile_refresh()
+
 
     def _session_publication_is_allowed(self) -> bool:
         """Allow presentation updates only while Textual is running."""
@@ -1354,6 +1420,7 @@ class DraftomenTuiApp(App[None]):
         if snapshot.card_data.phase == DataLoadPhase.READY:
             self._start_log_processing()
 
+        self._schedule_profile_refresh()
         self._render_all()
 
     def _apply_session_event(self, published: LiveSessionEvent) -> None:
@@ -2355,6 +2422,14 @@ class DraftomenTuiApp(App[None]):
         segments: list[str] = []
         if self.visibility_preferences.account_identifier:
             segments.append(f"Account: {self._active_account_label}")
+        profile_state = self.session.snapshot.set_profile
+        profile_label = (
+            "Profile: unavailable"
+            if profile_state.maturity is None
+            else f"Profile: {profile_state.maturity}"
+        )
+        if profile_state.refresh_outcome is not None:
+            profile_label += f" ({profile_state.refresh_outcome})"
         segments.extend(
             (
                 f"View: {self._view_mode}",
@@ -2362,6 +2437,7 @@ class DraftomenTuiApp(App[None]):
                 f"Pick: {self._pick_label}",
                 f"Pool: {self._pool_size}",
                 f"Data: {self._data_source}",
+                profile_label,
                 sort_label,
             )
         )
@@ -3667,6 +3743,7 @@ def run_tui_watch(
     card_database: CardDatabase | None = None,
     card_database_loader: CardDatabaseLoader | None = None,
     app_dir: PathInput | None = None,
+    profile_client: ProfileClient | None = None,
     poll_interval: float = POLL_INTERVAL_SECONDS,
     once: bool = False,
     startup_scan: bool = False,
@@ -3687,6 +3764,7 @@ def run_tui_watch(
         card_database=card_database,
         card_database_loader=card_database_loader,
         app_dir=app_dir,
+        profile_client=profile_client,
         poll_interval=poll_interval,
         ratings_loader=ratings_loader,
         ratings_loader_factory=ratings_loader_factory,

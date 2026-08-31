@@ -52,6 +52,24 @@ Rectangle {
         }
 
         Label {
+            objectName: "statusProfileMessage"
+            Layout.fillWidth: true
+            text: {
+                const profile = root.sessionState.set_profile
+                if (!profile || !profile.maturity)
+                    return "Profile unavailable"
+                const outcome = profile.refresh_outcome
+                return "Profile · " + profile.maturity
+                    + (outcome ? " · " + outcome : "")
+            }
+            color: Theme.textMuted
+            font.pixelSize: Theme.textPixelSize(11)
+            elide: Text.ElideRight
+            Accessible.name: text
+            Accessible.description: "Current set-profile maturity and refresh outcome."
+        }
+
+        Label {
             text: root.sessionState.ratings ? root.sessionState.ratings.message : "Ratings unavailable"
             color: Theme.textMuted
             font.pixelSize: Theme.textPixelSize(11)

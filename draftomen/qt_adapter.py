@@ -34,6 +34,7 @@ from draftomen.preferences import (
     load_gui_preferences,
     save_gui_preferences,
 )
+from draftomen.profile_client import ProfileClient
 from draftomen.ranking import RankingMode
 from draftomen.session import (
     CardImageFetchResult,
@@ -47,6 +48,7 @@ from draftomen.session import (
     LiveSession,
     LiveSessionCommand,
     LiveSessionSnapshot,
+    ProfileRefreshRequest,
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
@@ -617,9 +619,34 @@ class _CardImageFetchWorker(QObject):
             self.resultReady.emit(request, result, "")
 
 
+class _ProfileRefreshWorker(QObject):
+    """Execute one blocking profile refresh outside the live-session thread."""
+
+    resultReady = Signal(object, object, str)
+
+    def __init__(self, *, profile_client: ProfileClient) -> None:
+        super().__init__()
+        self._profile_client = profile_client
+
+    @Slot(object)
+    def refresh(self, request: object) -> None:
+        try:
+            if not hasattr(request, "set_code") or not hasattr(request, "event_format"):
+                raise TypeError("Profile refresh worker received an invalid request.")
+            result = self._profile_client.refresh(
+                request.set_code,
+                request.event_format,
+            )
+        except Exception as error:  # pragma: no cover - network boundary.
+            self.resultReady.emit(request, None, str(error))
+        else:
+            self.resultReady.emit(request, result, "")
+
+
 class _LiveSessionWorker(QObject):
     _imageFetchRequested = Signal(object)
     _imageScheduleRequested = Signal()
+    _profileRefreshRequested = Signal(object)
     snapshotReady = Signal(object)
     failed = Signal(str)
     finished = Signal()
@@ -630,11 +657,13 @@ class _LiveSessionWorker(QObject):
         session_factory: SessionFactory,
         poll_interval_ms: int,
         startup_scan: bool,
+        profile_client: ProfileClient | None = None,
     ) -> None:
         super().__init__()
         self._session_factory = session_factory
         self._poll_interval_ms = poll_interval_ms
         self._startup_scan = startup_scan
+        self._profile_client = profile_client
         self._session: LiveSession | None = None
         self._timer: QTimer | None = None
         self._stop_requested = False
@@ -645,6 +674,9 @@ class _LiveSessionWorker(QObject):
         self._image_worker: _CardImageFetchWorker | None = None
         self._image_request_in_flight: CardImageRequest | None = None
         self._image_request_kind: _ImageRequestKind | None = None
+        self._profile_thread: QThread | None = None
+        self._profile_worker: _ProfileRefreshWorker | None = None
+        self._profile_request_in_flight: ProfileRefreshRequest | None = None
 
     def _publish_snapshot(self, snapshot: LiveSessionSnapshot) -> None:
         if self._stop_requested:
@@ -688,6 +720,28 @@ class _LiveSessionWorker(QObject):
         self._image_worker = image_worker
         thread.start()
 
+    def _start_profile_worker(self) -> None:
+        """Start the dedicated worker used for blocking profile refreshes."""
+
+        profile_client = self._profile_client
+        if profile_client is None or self._profile_thread is not None:
+            return
+        thread = QThread(parent=self)
+        profile_worker = _ProfileRefreshWorker(profile_client=profile_client)
+        profile_worker.moveToThread(thread)
+        self._profileRefreshRequested.connect(
+            profile_worker.refresh,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        profile_worker.resultReady.connect(
+            self._profile_refresh_finished,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        thread.finished.connect(profile_worker.deleteLater)
+        self._profile_thread = thread
+        self._profile_worker = profile_worker
+        thread.start()
+
 
     def request_stop(self) -> None:
         """Request cooperative stop without queuing behind busy session work."""
@@ -700,6 +754,7 @@ class _LiveSessionWorker(QObject):
         try:
             self._session = self._session_factory(self._publish_snapshot)
             self._start_image_worker()
+            self._start_profile_worker()
             self._publish_snapshot(self._session.snapshot)
             if self._stop_requested:
                 self.stop()
@@ -743,6 +798,8 @@ class _LiveSessionWorker(QObject):
         try:
             self._session.dispatch(command=command)
             self._request_one_card_image()
+            if self._profile_client is not None:
+                self._request_profile_refresh()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.failed.emit(str(error))
 
@@ -757,6 +814,8 @@ class _LiveSessionWorker(QObject):
             snapshot = self._session.poll_once()
             self._publish_snapshot(snapshot)
             self._request_one_card_image()
+            if self._profile_client is not None:
+                self._request_profile_refresh()
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.failed.emit(str(error))
             return False
@@ -797,6 +856,27 @@ class _LiveSessionWorker(QObject):
         self._image_request_in_flight = request
         self._image_request_kind = request_kind
         self._imageFetchRequested.emit(request)
+
+    def _request_profile_refresh(self) -> None:
+        """Schedule the one pending profile refresh without blocking polling."""
+
+        session = self._session
+        if (
+            session is None
+            or self._profile_client is None
+            or self._stop_requested
+            or self._profile_request_in_flight is not None
+            or self._profile_thread is None
+        ):
+            return
+        get_request = getattr(session, "profile_refresh_request", None)
+        if not callable(get_request):
+            return
+        request = get_request()
+        if request is None:
+            return
+        self._profile_request_in_flight = request
+        self._profileRefreshRequested.emit(request)
 
     @Slot(object, object, str)
     def _image_fetch_finished(
@@ -858,6 +938,38 @@ class _LiveSessionWorker(QObject):
         finally:
             self._imageScheduleRequested.emit()
 
+    @Slot(object, object, str)
+    def _profile_refresh_finished(
+        self,
+        request: ProfileRefreshRequest,
+        result: object,
+        error_message: str,
+    ) -> None:
+        """Apply refresh results on the live-session thread."""
+
+        if request != self._profile_request_in_flight:
+            return
+        self._profile_request_in_flight = None
+        session = self._session
+        if session is None or self._stop_requested:
+            return
+
+        try:
+            if error_message:
+                session.fail_profile_refresh(
+                    request=request,
+                    error_message=error_message,
+                )
+            else:
+                session.complete_profile_refresh(
+                    request=request,
+                    result=result,
+                )
+        except Exception as error:  # pragma: no cover - defensive UI boundary.
+            self.failed.emit(str(error))
+        finally:
+            self._request_profile_refresh()
+
     @Slot()
     def stop(self) -> None:
         self._stop_requested = True
@@ -878,6 +990,13 @@ class _LiveSessionWorker(QObject):
             image_thread.wait()
             self._image_thread = None
             self._image_worker = None
+        profile_thread = self._profile_thread
+        if profile_thread is not None:
+            profile_thread.quit()
+            profile_thread.wait()
+            self._profile_thread = None
+            self._profile_worker = None
+        self._profile_request_in_flight = None
         self._stopped = True
         self.finished.emit()
 
@@ -895,6 +1014,7 @@ class LiveSessionAdapter(SessionAdapter):
         session_factory: SessionFactory,
         poll_interval_ms: int,
         startup_scan: bool = True,
+        profile_client: ProfileClient | None = None,
         parent: QObject | None = None,
     ) -> None:
         if poll_interval_ms <= 0:
@@ -903,6 +1023,7 @@ class LiveSessionAdapter(SessionAdapter):
         self._session_factory = session_factory
         self._poll_interval_ms = poll_interval_ms
         self._startup_scan = startup_scan
+        self._profile_client = profile_client
         self.thread: QThread | None = None
         self._worker: _LiveSessionWorker | None = None
 
@@ -915,6 +1036,7 @@ class LiveSessionAdapter(SessionAdapter):
             session_factory=self._session_factory,
             poll_interval_ms=self._poll_interval_ms,
             startup_scan=self._startup_scan,
+            profile_client=self._profile_client,
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.start)

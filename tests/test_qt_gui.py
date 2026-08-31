@@ -18,6 +18,7 @@ from draftomen.qt_gui import (
     APPLICATION_NAME,
     _configure_application_metadata,
     _live_session_factory,
+    _parser,
 )
 
 
@@ -117,8 +118,38 @@ def test_live_gui_uses_shared_metadata_augmenting_factory(
     session = session_factory(lambda snapshot: None)
 
     session.load_card_data()
-
     assert factory_calls == [(database, app_dir, True)]
+
+
+
+def test_live_gui_profile_manifest_flag_injects_configured_client(
+    tmp_path: Path,
+) -> None:
+    manifest_url = "https://profiles.example.test/v1/manifest.json"
+    args = _parser().parse_args(["--profile-manifest-url", manifest_url])
+    assert args.profile_manifest_url == manifest_url
+
+    factory = _live_session_factory(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        bulk_file=None,
+        poll_interval=0.01,
+        profile_manifest_url=args.profile_manifest_url,
+    )
+    session = factory(lambda snapshot: None)
+
+    profile_client = getattr(session, "_profile_client")
+    assert profile_client is not None
+    assert profile_client.manifest_url == manifest_url
+
+    offline_factory = _live_session_factory(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "offline-app",
+        bulk_file=None,
+        poll_interval=0.01,
+    )
+    offline_session = offline_factory(lambda snapshot: None)
+    assert getattr(offline_session, "_profile_client") is None
 
 
 def test_qml_settings_renders_card_and_ratings_update_fallback_and_value() -> None:
@@ -184,6 +215,86 @@ with TemporaryDirectory() as preferences_dir:
     assert str(ratings_update_label.property("text")).startswith("17Lands ratings updated · ")
     assert "2026" in ratings_update_label.property("text")
     assert "Never updated" not in ratings_update_label.property("text")
+
+    preferences.shutdown()
+    del engine
+"""
+    completed = _run_qml_probe(probe)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Binding loop detected" not in completed.stderr
+    assert "Unable to assign" not in completed.stderr
+    assert "TypeError" not in completed.stderr
+
+
+def test_qml_renders_profile_maturity_and_refresh_outcome_on_compact_surfaces() -> None:
+    probe = """
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PySide6.QtCore import QObject, QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+
+from draftomen import __version__
+from draftomen.mock_session import MockLiveSession
+from draftomen.qt_adapter import GuiPreferencesAdapter, SessionAdapter
+from draftomen.qt_gui import _fixed_font_family
+from draftomen.session import DataLoadPhase, SetProfileState
+
+
+QQuickStyle.setStyle("Fusion")
+application = QGuiApplication([])
+base_snapshot = MockLiveSession().snapshot
+provider = SessionAdapter(snapshot=base_snapshot)
+with TemporaryDirectory() as preferences_dir:
+    preferences = GuiPreferencesAdapter(app_dir=preferences_dir)
+    engine = QQmlApplicationEngine()
+    qml_directory = Path.cwd() / "draftomen" / "qml"
+    engine.addImportPath(str(qml_directory))
+    context = engine.rootContext()
+    context.setContextProperty("fixedFontFamily", _fixed_font_family())
+    context.setContextProperty("sessionProvider", provider)
+    context.setContextProperty("applicationTitle", "Draft Omen")
+    context.setContextProperty("applicationVersion", __version__)
+    context.setContextProperty("guiPreferences", preferences)
+    context.setContextProperty("initialSurface", "settings")
+    context.setContextProperty("initialWindowWidth", 900)
+    context.setContextProperty("initialWindowHeight", 760)
+    engine.setInitialProperties({"provider": provider})
+    engine.load(QUrl.fromLocalFile(str(qml_directory / "Main.qml")))
+    assert engine.rootObjects()
+    root = engine.rootObjects()[0]
+    profile_label = root.findChild(QObject, "statusProfileMessage")
+    cache_label = root.findChild(QObject, "settingsProfileCacheStatus")
+    assert profile_label is not None
+    assert cache_label is not None
+
+    for maturity, outcome, expected_status, expected_cache in (
+        ("mature", "unchanged", "Profile · mature · unchanged", "OTJ · mature · unchanged"),
+        ("semantic", "updated", "Profile · semantic · updated", "OTJ · semantic · updated"),
+        ("generic", None, "Profile · generic", "OTJ · generic"),
+    ):
+        provider._apply_snapshot(
+            replace(
+                base_snapshot,
+                set_profile=SetProfileState(
+                    set_code="OTJ",
+                    event_format="QuickDraft",
+                    maturity=maturity,
+                    profile_version="fixture",
+                    source="fixture",
+                    phase=DataLoadPhase.READY,
+                    refresh_outcome=outcome,
+                    message="Profile fixture status.",
+                ),
+            )
+        )
+        application.processEvents()
+        assert profile_label.property("text") == expected_status
+        assert cache_label.property("text") == expected_cache
 
     preferences.shutdown()
     del engine

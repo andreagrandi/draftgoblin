@@ -74,19 +74,38 @@ download them.
 ### Terminal interface
 
 For a terminal workflow, use the stable `draftomen-tui` command. It preserves
-the watch, replay, build, backtest, benchmark, data-refresh, and local
-`generate-profile` subcommands:
+the watch, replay, build, backtest, benchmark, data-refresh, local
+`generate-profile`, and `refresh-profile` subcommands:
 
 ```bash
 draftomen-tui
 draftomen-tui watch --plain
 ```
 
-To generate a deterministic local set profile from pinned input files, use
+To generate a deterministic set profile from pinned input files, use
 `generate-profile` with explicit set, format, stage, timezone-aware timestamp,
-card-database, and output paths. The complete metadata, early, and mature
-workflow, including optional ratings and source-manifest flags, is documented
-in [set profiles](docs/set-profiles.md).
+card-database, and output paths. The producer and cache workflow, including
+remote manifest fields, validation, refresh, recovery, and opt-in live
+loading, is documented in [set profiles](docs/set-profiles.md).
+
+### Optional remote set profiles
+
+Set profiles are local-first: live scoring uses a validated flat cache before
+any refresh, and remains offline when no manifest URL is configured. To opt in
+to a producer-hosted HTTPS manifest, pass the URL explicitly:
+
+```bash
+draftomen-tui watch --profile-manifest-url "$PROFILE_MANIFEST_URL"
+draftomen-tui watch --plain --profile-manifest-url "$PROFILE_MANIFEST_URL"
+draftomen --profile-manifest-url "$PROFILE_MANIFEST_URL"
+```
+
+The same profile can be refreshed manually with
+`draftomen-tui refresh-profile --set-code SET --format FORMAT
+--manifest-url "$PROFILE_MANIFEST_URL"` and an optional `--app-dir PATH`.
+Refresh validates the manifest and artifact, keeps the last-good cache on
+failure, and reports compact maturity/outcome status. Draft Omen does not
+bundle a hosted manifest; hosting and publication automation belong to #227.
 
 For development-only semantic analysis, use the reproducible [card corpus
 workflow](docs/corpus.md). It keeps pinned source bytes and locks outside

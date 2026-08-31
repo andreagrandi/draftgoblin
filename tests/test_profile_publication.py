@@ -22,6 +22,11 @@ from draftomen.seventeen import (
     SeventeenCardStats,
     SeventeenLandsFormatData,
 )
+from draftomen.profile_manifest import (
+    ProfileManifest,
+    ProfileManifestArtifact,
+    load_profile_manifest,
+)
 from draftomen.set_profile import SetProfile
 
 
@@ -510,3 +515,78 @@ def test_marker_failure_preserves_the_last_authoritative_generation(
         _publish(tmp_path, generated_at=GENERATED_AT + timedelta(seconds=1))
     assert first.manifest_path.read_bytes() == first_marker
 
+
+
+def test_manifest_conversion_matches_the_validated_generation_report(
+    tmp_path: Path,
+) -> None:
+    result = _publish(tmp_path)
+    artifact = publication.profile_manifest_artifact_from_publication(
+        result,
+        "https://cdn.example.test/tst-quickdraft.json.gz",
+    )
+    report = result.generation.report
+
+    assert isinstance(artifact, ProfileManifestArtifact)
+    assert artifact.set_code == report.set_code
+    assert artifact.event_format == report.event_format
+    assert artifact.set_profile_schema_version == report.set_profile_schema_version
+    assert artifact.profile_version == result.generation.profile.profile_version
+    assert artifact.generated_at == report.generated_at
+    assert artifact.gzip_bytes == report.gzip_bytes
+    assert artifact.profile_bytes == report.profile_bytes
+    assert artifact.gzip_sha256 == report.gzip_sha256
+    assert artifact.profile_sha256 == report.profile_sha256
+    assert artifact.maturity == result.generation.profile.maturity
+
+    generation_marker = result.manifest_path.read_bytes()
+    manifest = publication.build_profile_manifest((artifact,), published_at=GENERATED_AT)
+    manifest_path = publication.publish_profile_manifest(
+        tmp_path / "published" / "profile-manifest.json",
+        manifest,
+    )
+    assert load_profile_manifest(manifest_path) == manifest
+    assert result.manifest_path.read_bytes() == generation_marker
+
+
+def test_manifest_conversion_rejects_report_reconciliation_failure(
+    tmp_path: Path,
+) -> None:
+    result = _publish(tmp_path)
+    malformed_generation = replace(
+        result.generation,
+        report=replace(result.generation.report, profile_bytes=result.generation.report.profile_bytes + 1),
+    )
+    malformed_result = replace(result, generation=malformed_generation)
+
+    with pytest.raises(
+        publication.ProfilePublicationError,
+        match="checksums or sizes do not reconcile",
+    ):
+        publication.profile_manifest_artifact_from_publication(
+            malformed_result,
+            "https://cdn.example.test/tst-quickdraft.json.gz",
+        )
+
+
+def test_manifest_publication_failure_preserves_previous_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _publish(tmp_path)
+    artifact = publication.profile_manifest_artifact_from_publication(
+        result,
+        "https://cdn.example.test/tst-quickdraft.json.gz",
+    )
+    manifest = publication.build_profile_manifest((artifact,), published_at=GENERATED_AT)
+    path = tmp_path / "profile-manifest.json"
+    publication.publish_profile_manifest(path, manifest)
+    previous = path.read_bytes()
+
+    def fail_atomic_write(**_: object) -> None:
+        raise OSError("simulated replacement failure")
+
+    monkeypatch.setattr(publication, "_atomic_write", fail_atomic_write)
+    with pytest.raises(publication.ProfilePublicationError, match="Could not publish"):
+        publication.publish_profile_manifest(path, manifest)
+    assert path.read_bytes() == previous

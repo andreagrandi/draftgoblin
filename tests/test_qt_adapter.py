@@ -16,9 +16,10 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QCoreApplication, QObject, QTimer, QUrl, Slot
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.pool_ledger import evaluate_completed_pool_role_ledger
+from draftomen.set_profile import SetProfile
 
 from draftomen.mock_session import MockLiveSession
-from draftomen.preferences import GuiDisplayPreferences
+from draftomen.profile_client import ProfileClient, ProfileRefreshOutcome, ProfileRefreshResult
 from draftomen.qt_adapter import (
     GuiPreferencesAdapter,
     LiveSessionAdapter,
@@ -42,12 +43,14 @@ from draftomen.session import (
     LiveSessionCommand,
     LiveSessionSnapshot,
     PoolState,
+    ProfileRefreshRequest,
     Recommendation,
     RecommendationState,
     RequestBuild,
     RequestBacktest,
     RequestRatingsDownload,
     RetryError,
+    SetProfileState,
     SnapshotPublisher,
 )
 
@@ -91,6 +94,83 @@ class _FakeSession:
 
     def stop(self) -> LiveSessionSnapshot:
         return self.snapshot
+
+
+class _ProfileRefreshFakeClient:
+    def __init__(self, *, result: object = None, error: Exception | None = None) -> None:
+        self.result = result
+        self.error = error
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.calls: list[tuple[str, str]] = []
+        self.thread_ids: list[int] = []
+
+    def refresh(self, set_code: str, event_format: str) -> object:
+        self.calls.append((set_code, event_format))
+        self.thread_ids.append(threading.get_ident())
+        self.started.set()
+        self.release.wait(timeout=3.0)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class _ProfileRefreshFakeSession(_FakeSession):
+    def __init__(self, *, publish: SnapshotPublisher) -> None:
+        super().__init__(publish=publish)
+        self.profile_request = ProfileRefreshRequest(
+            generation=1,
+            set_code="OTJ",
+            event_format="QuickDraft",
+        )
+        self.completed_thread_ids: list[int] = []
+        self.failed_thread_ids: list[int] = []
+        self.completed_results: list[object] = []
+        self.failed_messages: list[str | None] = []
+
+    def profile_refresh_request(self) -> ProfileRefreshRequest | None:
+        return self.profile_request
+
+    def complete_profile_refresh(
+        self,
+        *,
+        request: ProfileRefreshRequest,
+        result: object,
+    ) -> None:
+        assert request == self.profile_request
+        self.completed_thread_ids.append(threading.get_ident())
+        self.completed_results.append(result)
+        self.profile_request = None
+        self.snapshot = replace(
+            self.snapshot,
+            set_profile=replace(
+                self.snapshot.set_profile,
+                refresh_outcome="updated",
+                message="Updated OTJ set profile.",
+            ),
+        )
+        self._publish(self.snapshot)
+
+    def fail_profile_refresh(
+        self,
+        *,
+        request: ProfileRefreshRequest,
+        error_message: str | None = None,
+    ) -> None:
+        assert request == self.profile_request
+        self.failed_thread_ids.append(threading.get_ident())
+        self.failed_messages.append(error_message)
+        self.profile_request = None
+        self.snapshot = replace(
+            self.snapshot,
+            set_profile=replace(
+                self.snapshot.set_profile,
+                phase=DataLoadPhase.FAILED,
+                refresh_outcome="remote_failed",
+                message="Set profile refresh failed for OTJ; using the last-good profile.",
+            ),
+        )
+        self._publish(self.snapshot)
 
 
 class _StartupReplaySession(_FakeSession):
@@ -479,6 +559,36 @@ def test_session_adapter_exposes_card_data_update_time_in_qvariant_map() -> None
     )
 
 
+def test_session_adapter_translates_set_profile_to_plain_qml_values() -> None:
+    adapter = SessionAdapter(
+        snapshot=LiveSessionSnapshot(
+            set_profile=SetProfileState(
+                set_code="OTJ",
+                event_format="QuickDraft",
+                maturity="semantic",
+                profile_version="2026.08",
+                source="local-semantic",
+                phase=DataLoadPhase.READY,
+                refresh_outcome="cached",
+                message="Using the cached semantic set profile for OTJ.",
+            )
+        )
+    )
+
+    profile_state = adapter.state["set_profile"]
+    assert profile_state == {
+        "set_code": "OTJ",
+        "event_format": "QuickDraft",
+        "maturity": "semantic",
+        "profile_version": "2026.08",
+        "source": "local-semantic",
+        "phase": "ready",
+        "refresh_outcome": "cached",
+        "message": "Using the cached semantic set profile for OTJ.",
+    }
+    assert not isinstance(profile_state, SetProfileState)
+
+
 def test_recommendation_model_updates_rows_without_reset_churn() -> None:
     model = RecommendationListModel()
     model_resets: list[object] = []
@@ -579,6 +689,136 @@ def _process_until(
             pytest.fail(f"Timed out waiting for {description}.")
         time.sleep(0.001)
     application.processEvents()
+
+
+def test_live_adapter_refreshes_profiles_off_worker_without_blocking_polling(
+    qcore_application: QCoreApplication,
+) -> None:
+    gui_thread_id = threading.get_ident()
+    sessions: list[_ProfileRefreshFakeSession] = []
+    client = _ProfileRefreshFakeClient(
+        result=ProfileRefreshResult(
+            profile=SetProfile.generic(set_code="OTJ", event_format="QuickDraft"),
+            outcome=ProfileRefreshOutcome.UPDATED,
+            diagnostics=(),
+        )
+    )
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _ProfileRefreshFakeSession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=5,
+        profile_client=cast(ProfileClient, client),
+    )
+    adapter.start()
+    try:
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(sessions)
+            and client.started.is_set()
+            and len(sessions[0].poll_thread_ids) >= 2,
+            description="profile refresh and continued live polling",
+        )
+        session = sessions[0]
+        assert client.calls == [("OTJ", "QuickDraft")]
+        assert client.thread_ids
+        assert all(thread_id != gui_thread_id for thread_id in client.thread_ids)
+        assert len(session.poll_thread_ids) >= 2
+        client.release.set()
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(session.completed_thread_ids),
+            description="profile refresh completion",
+        )
+        assert session.completed_results
+        assert session.completed_thread_ids[0] != gui_thread_id
+        assert session.completed_thread_ids[0] != client.thread_ids[0]
+        assert client.calls == [("OTJ", "QuickDraft")]
+    finally:
+        client.release.set()
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
+
+
+def test_live_adapter_routes_profile_refresh_failure_to_session_worker(
+    qcore_application: QCoreApplication,
+) -> None:
+    sessions: list[_ProfileRefreshFakeSession] = []
+    client = _ProfileRefreshFakeClient(error=RuntimeError("profile network failed"))
+    client.release.set()
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _ProfileRefreshFakeSession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=60_000,
+        profile_client=cast(ProfileClient, client),
+    )
+    adapter.start()
+    try:
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: bool(sessions) and bool(sessions[0].failed_thread_ids),
+            description="profile refresh failure",
+        )
+        session = sessions[0]
+        assert client.calls == [("OTJ", "QuickDraft")]
+        assert session.failed_messages == ["profile network failed"]
+        assert session.failed_thread_ids[0] != threading.get_ident()
+    finally:
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
+
+
+def test_live_adapter_shuts_down_cleanly_with_profile_refresh_in_flight(
+    qcore_application: QCoreApplication,
+) -> None:
+    sessions: list[_ProfileRefreshFakeSession] = []
+    client = _ProfileRefreshFakeClient(
+        result=ProfileRefreshResult(
+            profile=SetProfile.generic(set_code="OTJ", event_format="QuickDraft"),
+            outcome=ProfileRefreshOutcome.UNCHANGED,
+            diagnostics=(),
+        )
+    )
+
+    def factory(publish: SnapshotPublisher) -> LiveSession:
+        session = _ProfileRefreshFakeSession(publish=publish)
+        sessions.append(session)
+        return cast(LiveSession, session)
+
+    adapter = LiveSessionAdapter(
+        session_factory=factory,
+        poll_interval_ms=60_000,
+        profile_client=cast(ProfileClient, client),
+    )
+    adapter.start()
+    try:
+        _process_until(
+            application=qcore_application,
+            predicate=client.started.is_set,
+            description="profile refresh before shutdown",
+        )
+        adapter.shutdown()
+        assert adapter.thread is not None and adapter.thread.isRunning()
+        client.release.set()
+        _process_until(
+            application=qcore_application,
+            predicate=lambda: adapter.thread is not None
+            and not adapter.thread.isRunning(),
+            description="profile refresh worker shutdown",
+        )
+    finally:
+        client.release.set()
+        adapter.shutdown()
+        adapter.wait_for_shutdown()
 
 
 def test_live_adapter_runs_session_work_on_worker_and_queues_plain_snapshots(

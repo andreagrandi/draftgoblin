@@ -69,7 +69,17 @@ from draftomen.ranking import (
     rank_scored_cards,
     validate_ranking_mode,
 )
-from draftomen.set_profile import SetProfile, load_scoring_profile
+from draftomen.set_profile import (
+    ProfileMaturity,
+    SetProfile,
+    SetProfileError,
+    load_scoring_profile,
+)
+from draftomen.profile_client import (
+    ProfileClient,
+    ProfileRefreshOutcome,
+    ProfileRefreshResult,
+)
 from draftomen.seventeen import (
     DownloadProgressCallback,
     QUICK_DRAFT_FORMAT,
@@ -281,6 +291,35 @@ class RatingsState:
     rated_cards: int | None = None
     total_cards: int | None = None
     last_successful_update: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SetProfileState:
+    """Describe the active set profile without exposing profile internals.
+
+    The profile itself remains session-owned for scoring.  This projection is
+    deliberately limited to primitive values so frontends can render local
+    cache readiness and asynchronous refresh outcomes without seeing client
+    diagnostics.
+    """
+
+    set_code: str | None = None
+    event_format: str | None = None
+    maturity: str | None = None
+    profile_version: str | None = None
+    source: str | None = None
+    phase: DataLoadPhase = DataLoadPhase.UNAVAILABLE
+    refresh_outcome: str | None = None
+    message: str = "Set profile is not configured."
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileRefreshRequest:
+    """Identify one adapter-owned asynchronous profile refresh."""
+
+    generation: int
+    set_code: str
+    event_format: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -501,6 +540,7 @@ class LiveSessionSnapshot:
     draft: DraftIdentity | None = None
     card_data: CardDataState = field(default_factory=CardDataState)
     ratings: RatingsState = field(default_factory=RatingsState)
+    set_profile: SetProfileState = field(default_factory=SetProfileState)
     recommendations: RecommendationState = field(default_factory=RecommendationState)
     pool: PoolState = field(default_factory=PoolState)
     card_image: CardImageState = field(default_factory=CardImageState)
@@ -653,6 +693,7 @@ class LiveSession:
         card_image_service: CardImageService | None = None,
         splash_enabled: bool = SPLASH.enabled_by_default,
         set_profile: SetProfile | None = None,
+        profile_client: ProfileClient | None = None,
     ) -> None:
         if card_database is not None and card_database_loader is not None:
             raise ValueError(
@@ -690,7 +731,9 @@ class LiveSession:
         self._card_database_loader = card_database_loader
         self._configured_set_profile = set_profile
         self._set_profile = set_profile
+        self._profile_client = profile_client
         self._set_profiles_by_set: dict[str, SetProfile | None] = {}
+        self._set_profile_states_by_set: dict[str, SetProfileState] = {}
         self._ratings_loader = ratings_loader
         self._ratings_loader_factory = ratings_loader_factory
         self._ratings_progress_loader = ratings_progress_loader
@@ -703,6 +746,8 @@ class LiveSession:
         self._ratings_errors_by_set: dict[str, SessionError] = {}
         self._loading_rating_sets: set[str] = set()
         self._active_set_code_value: str | None = None
+        self._profile_refresh_generation = 0
+        self._profile_refresh_request: ProfileRefreshRequest | None = None
         self._current_pack_event: PackOfferedEvent | None = None
         self._current_scored_pack: ScoredPack | None = None
         self._transient_pool_grp_ids: tuple[int, ...] = ()
@@ -754,6 +799,7 @@ class LiveSession:
             accounts=self._known_accounts(),
             card_data=card_data,
             ratings=ratings_state,
+            set_profile=SetProfileState(),
             recommendations=RecommendationState(
                 ranking_mode=self._ranking_mode,
                 splash_enabled=splash_enabled,
@@ -791,6 +837,124 @@ class LiveSession:
         """
 
         return self.snapshot.current_scored_pack
+
+
+    def profile_refresh_request(self) -> ProfileRefreshRequest | None:
+        """Return the one pending profile refresh for adapter-owned work.
+
+        The request remains available until its completion or failure is
+        accepted.  Reading it never performs local or remote I/O.
+        """
+
+        with self._state_lock:
+            return self._profile_refresh_request
+
+    def complete_profile_refresh(
+        self,
+        *,
+        request: ProfileRefreshRequest,
+        result: ProfileRefreshResult | SetProfile,
+    ) -> None:
+        """Apply one adapter-owned refresh result if it is still current."""
+
+        with self._state_lock:
+            if not self._profile_refresh_request_is_current(request=request):
+                return
+
+            self._profile_refresh_request = None
+            active_set_code = self._active_set_code_value
+            if active_set_code is None:
+                return
+
+            if isinstance(result, SetProfile):
+                profile = result
+                outcome = ProfileRefreshOutcome.UPDATED.value
+            elif isinstance(result, ProfileRefreshResult):
+                profile = result.profile
+                outcome = _profile_refresh_outcome_value(result.outcome)
+            else:
+                raise TypeError("result must be a ProfileRefreshResult or SetProfile.")
+
+            if (
+                profile.set_code.upper() != active_set_code
+                or profile.event_format.casefold() != request.event_format.casefold()
+            ):
+                self._publish_profile_refresh_status_locked(
+                    request=request,
+                    outcome=ProfileRefreshOutcome.ARTIFACT_INVALID.value,
+                    phase=DataLoadPhase.FAILED,
+                )
+                return
+
+            current_profile = self._set_profile
+            profile_changed = (
+                profile.maturity is not ProfileMaturity.GENERIC
+                and profile != current_profile
+                and _profile_refresh_profile_is_adoptable(
+                    profile=profile,
+                    current_profile=current_profile,
+                    outcome=outcome,
+                )
+            )
+            if profile_changed:
+                self._set_profile = profile
+                self._set_profiles_by_set[active_set_code] = profile
+                self._set_profile_states_by_set[active_set_code] = (
+                    self._profile_state_for_profile(
+                        profile=profile,
+                        set_code=active_set_code,
+                        source="remote",
+                        phase=DataLoadPhase.READY,
+                        refresh_outcome=outcome,
+                    )
+                )
+                self._publish(
+                    snapshot=replace(
+                        self.snapshot,
+                        set_profile=self._set_profile_states_by_set[active_set_code],
+                    )
+                )
+                self._score_current_pack_locked()
+                return
+
+            if outcome == ProfileRefreshOutcome.UPDATED.value:
+                outcome = ProfileRefreshOutcome.UNCHANGED.value
+            phase = (
+                DataLoadPhase.READY
+                if outcome
+                in {
+                    ProfileRefreshOutcome.CACHED.value,
+                    ProfileRefreshOutcome.UNCHANGED.value,
+                }
+                else DataLoadPhase.FAILED
+            )
+            self._publish_profile_refresh_status_locked(
+                request=request,
+                outcome=outcome,
+                phase=phase,
+            )
+
+    def fail_profile_refresh(
+        self,
+        *,
+        request: ProfileRefreshRequest,
+        error_message: str | None = None,
+    ) -> None:
+        """Reject one adapter-owned refresh while retaining the last good profile."""
+
+        del error_message
+        with self._state_lock:
+            if not self._profile_refresh_request_is_current(request=request):
+                return
+            self._profile_refresh_request = None
+            if self._active_set_code_value is None:
+                return
+            self._publish_profile_refresh_status_locked(
+                request=request,
+                outcome=ProfileRefreshOutcome.REMOTE_FAILED.value,
+                phase=DataLoadPhase.FAILED,
+            )
+
 
     def selected_card_image_request(self) -> CardImageRequest | None:
         """Return the current selected-image fetch for an active frontend.
@@ -839,7 +1003,6 @@ class LiveSession:
         if image_uri is not None:
             self._card_image_uris_by_grp_id[grp_id] = image_uri
             self._card_image_paths_by_uri[image_uri] = image_path
-
 
     def recommendation_image_requests(self) -> tuple[CardImageRequest, ...]:
         """Return a stable view of all queued recommendation image fetches."""
@@ -1613,6 +1776,8 @@ class LiveSession:
         """
 
         with self._state_lock:
+            self._profile_refresh_generation += 1
+            self._profile_refresh_request = None
             self._card_image_generation += 1
             self._card_image_request = None
             self._retire_recommendation_images()
@@ -2764,28 +2929,223 @@ class LiveSession:
         with self._state_lock:
             return self._active_set_code_value
 
+    def _clear_active_set_code_locked(self) -> None:
+        self._profile_refresh_generation += 1
+        self._profile_refresh_request = None
+        self._active_set_code_value = None
+        self._set_profile = None
+
     def _set_active_set_code(self, *, set_code: str | None) -> None:
         normalized_set_code = None if set_code is None else set_code.upper()
         with self._state_lock:
             if normalized_set_code is None:
-                self._active_set_code_value = None
-                self._set_profile = None
+                self._clear_active_set_code_locked()
+                self._publish(
+                    snapshot=replace(
+                        self.snapshot,
+                        set_profile=SetProfileState(),
+                    )
+                )
                 return
             if normalized_set_code == self._active_set_code_value:
                 return
 
+            self._profile_refresh_generation += 1
+            generation = self._profile_refresh_generation
+            self._profile_refresh_request = None
             self._active_set_code_value = normalized_set_code
+
             if self._configured_set_profile is not None:
                 self._set_profile = self._configured_set_profile
-                return
-
-            if normalized_set_code not in self._set_profiles_by_set:
-                self._set_profiles_by_set[normalized_set_code] = load_scoring_profile(
-                    normalized_set_code,
-                    QUICK_DRAFT_FORMAT,
-                    app_dir=self.store.root.parent,
+                profile_state = self._profile_state_for_profile(
+                    profile=self._configured_set_profile,
+                    set_code=normalized_set_code,
+                    source="injected",
+                    phase=DataLoadPhase.READY,
                 )
-            self._set_profile = self._set_profiles_by_set[normalized_set_code]
+            else:
+                profile, source = self._load_local_profile_for_set(
+                    set_code=normalized_set_code,
+                )
+                self._set_profile = (
+                    None
+                    if profile.maturity is ProfileMaturity.GENERIC
+                    else profile
+                )
+                self._set_profiles_by_set[normalized_set_code] = (
+                    None
+                    if profile.maturity is ProfileMaturity.GENERIC
+                    else profile
+                )
+                profile_state = self._profile_state_for_profile(
+                    profile=profile,
+                    set_code=normalized_set_code,
+                    source=source,
+                    phase=DataLoadPhase.READY,
+                    refresh_outcome=(
+                        ProfileRefreshOutcome.CACHED.value
+                        if profile.maturity is not ProfileMaturity.GENERIC
+                        else None
+                    ),
+                )
+
+            self._set_profile_states_by_set[normalized_set_code] = profile_state
+            if (
+                self._configured_set_profile is None
+                and self._profile_refresh_allowed()
+            ):
+                self._profile_refresh_request = ProfileRefreshRequest(
+                    generation=generation,
+                    set_code=normalized_set_code,
+                    event_format=QUICK_DRAFT_FORMAT,
+                )
+            self._publish(
+                snapshot=replace(
+                    self.snapshot,
+                    set_profile=profile_state,
+                )
+            )
+
+    def _load_local_profile_for_set(
+        self,
+        *,
+        set_code: str,
+    ) -> tuple[SetProfile, str]:
+        cached_profile = self._set_profiles_by_set.get(set_code)
+        if set_code in self._set_profiles_by_set and cached_profile is not None:
+            return cached_profile, f"local-{cached_profile.maturity.value}"
+
+        if set_code in self._set_profiles_by_set and cached_profile is None:
+            return (
+                SetProfile.generic(
+                    set_code=set_code,
+                    event_format=QUICK_DRAFT_FORMAT,
+                ),
+                "generic",
+            )
+
+        if self._profile_client is not None:
+            try:
+                loaded = self._profile_client.load_cached(
+                    set_code,
+                    QUICK_DRAFT_FORMAT,
+                )
+            except (OSError, SetProfileError):
+                return (
+                    SetProfile.generic(
+                        set_code=set_code,
+                        event_format=QUICK_DRAFT_FORMAT,
+                    ),
+                    "generic",
+                )
+            profile = loaded.profile
+            source = str(loaded.source)
+            return profile, source
+
+        profile = load_scoring_profile(
+            set_code,
+            QUICK_DRAFT_FORMAT,
+            app_dir=self.store.root.parent,
+        )
+        if profile is None:
+            return (
+                SetProfile.generic(
+                    set_code=set_code,
+                    event_format=QUICK_DRAFT_FORMAT,
+                ),
+                "generic",
+            )
+        return profile, f"local-{profile.maturity.value}"
+
+    @staticmethod
+    def _profile_refresh_allowed_for_client(*, profile_client: object) -> bool:
+        manifest_url = getattr(profile_client, "manifest_url", None)
+        if not manifest_url:
+            return False
+        network_policy = getattr(profile_client, "network_policy", None)
+        policy_value = getattr(network_policy, "value", network_policy)
+        return str(policy_value).casefold() == "allowed"
+
+    def _profile_refresh_allowed(self) -> bool:
+        profile_client = self._profile_client
+        return (
+            profile_client is not None
+            and self._profile_refresh_allowed_for_client(
+                profile_client=profile_client,
+            )
+        )
+    def _profile_refresh_request_is_current(
+        self,
+        *,
+        request: ProfileRefreshRequest,
+    ) -> bool:
+        return (
+            request == self._profile_refresh_request
+            and request.generation == self._profile_refresh_generation
+            and request.set_code == self._active_set_code_value
+            and request.event_format.casefold() == QUICK_DRAFT_FORMAT.casefold()
+        )
+
+    @staticmethod
+    def _profile_state_for_profile(
+        *,
+        profile: SetProfile,
+        set_code: str,
+        source: str | None,
+        phase: DataLoadPhase,
+        refresh_outcome: str | None = None,
+    ) -> SetProfileState:
+        maturity = profile.maturity.value
+        resolved_source = source or (
+            "generic" if profile.maturity is ProfileMaturity.GENERIC else f"local-{maturity}"
+        )
+        if phase is DataLoadPhase.FAILED:
+            message = (
+                f"Set profile refresh failed for {set_code}; "
+                "using the last-good profile."
+            )
+        elif refresh_outcome == ProfileRefreshOutcome.UPDATED.value:
+            message = f"Updated {set_code} set profile."
+        elif refresh_outcome == ProfileRefreshOutcome.UNCHANGED.value:
+            message = f"{set_code} set profile is current."
+        elif profile.maturity is ProfileMaturity.GENERIC:
+            message = f"No set profile for {set_code}; generic scoring is active."
+        elif resolved_source == "injected":
+            message = f"Using the configured {maturity} set profile for {set_code}."
+        else:
+            message = f"Using the cached {maturity} set profile for {set_code}."
+        return SetProfileState(
+            set_code=set_code,
+            event_format=QUICK_DRAFT_FORMAT,
+            maturity=maturity,
+            profile_version=profile.profile_version,
+            source=resolved_source,
+            phase=phase,
+            refresh_outcome=refresh_outcome,
+            message=message,
+        )
+
+    def _publish_profile_refresh_status_locked(
+        self,
+        *,
+        request: ProfileRefreshRequest,
+        outcome: str,
+        phase: DataLoadPhase,
+    ) -> None:
+        active_profile = self._set_profile or SetProfile.generic(
+            set_code=request.set_code,
+            event_format=request.event_format,
+        )
+        previous_state = self.snapshot.set_profile
+        state = self._profile_state_for_profile(
+            profile=active_profile,
+            set_code=request.set_code,
+            source=previous_state.source,
+            phase=phase,
+            refresh_outcome=outcome,
+        )
+        self._set_profile_states_by_set[request.set_code] = state
+        self._publish(snapshot=replace(self.snapshot, set_profile=state))
 
     def _active_draft_state(self) -> DraftState | None:
         draft = self.snapshot.draft
@@ -3218,12 +3578,14 @@ class LiveSession:
         self._current_scored_pack = None
         self._transient_pool_grp_ids = ()
         with self._state_lock:
+            self._clear_active_set_code_locked()
             self._retire_recent_pick_images()
             errors = self._retire_derived_operations()
             card_image = self._retire_card_image()
             self._publish(
                 snapshot=replace(
                     self.snapshot,
+                    set_profile=SetProfileState(),
                     status=ApplicationStatus(
                         phase=ApplicationPhase.WAITING_FOR_DRAFT,
                         message="Waiting for a Quick Draft.",
@@ -3513,6 +3875,65 @@ class LiveSession:
                 scored_pack=scored_pack,
             )
         )
+
+
+def _profile_refresh_outcome_value(
+    outcome: ProfileRefreshOutcome | str,
+) -> str:
+    return outcome.value if isinstance(outcome, ProfileRefreshOutcome) else str(outcome)
+def _profile_refresh_profile_is_adoptable(
+    *,
+    profile: SetProfile,
+    current_profile: SetProfile | None,
+    outcome: str,
+) -> bool:
+    """Accept only a non-regressing profile from an adapter refresh.
+
+    Cached and unchanged results can carry a cache entry installed by another
+    client, so they are eligible when their validated content is newer.  An
+    explicit updated result may also replace a same-timestamp profile version,
+    preserving the existing refresh contract.
+    """
+
+    if profile.maturity is ProfileMaturity.GENERIC:
+        return False
+    if current_profile is None or current_profile.maturity is ProfileMaturity.GENERIC:
+        return True
+
+    maturity_rank = {
+        ProfileMaturity.MATURE: 0,
+        ProfileMaturity.EARLY: 1,
+        ProfileMaturity.SEMANTIC_ONLY: 2,
+        ProfileMaturity.METADATA_ONLY: 3,
+        ProfileMaturity.GENERIC: 4,
+    }
+    profile_rank = maturity_rank[profile.maturity]
+    current_rank = maturity_rank[current_profile.maturity]
+    if profile_rank > current_rank:
+        return False
+
+    def profile_time(candidate: SetProfile) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(
+                candidate.generated_at.replace("Z", "+00:00")
+            )
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise ValueError("profile generated_at must be timezone-aware")
+            return parsed.astimezone(UTC)
+        except (OverflowError, TypeError, ValueError):
+            return datetime.min.replace(tzinfo=UTC)
+
+    candidate_time = profile_time(profile)
+    current_time = profile_time(current_profile)
+    if candidate_time < current_time:
+        return False
+    if profile_rank < current_rank or candidate_time > current_time:
+        return True
+    return outcome not in {
+        ProfileRefreshOutcome.CACHED.value,
+        ProfileRefreshOutcome.UNCHANGED.value,
+    }
+
 
 
 def _ratings_last_successful_update(

@@ -310,6 +310,45 @@ Item {
                         Accessible.name: text
                         Accessible.description: qsTr("The latest successful card metadata update.")
                     }
+                    RowLayout {
+                        objectName: "settingsProfileStatusRow"
+                        Layout.fillWidth: true
+                        Label {
+                            text: qsTr("Set profile cache")
+                            color: Theme.text
+                            font.bold: true
+                        }
+                        Label {
+                            objectName: "settingsProfileCacheStatus"
+                            Layout.fillWidth: true
+                            text: {
+                                const profile = root.sessionState.set_profile
+                                if (!profile || !profile.set_code)
+                                    return qsTr("Unavailable")
+                                const maturity = profile.maturity || "generic"
+                                const outcome = profile.refresh_outcome
+                                const update = outcome ? " · " + outcome : ""
+                                return profile.set_code + " · " + maturity + update
+                            }
+                            color: Theme.textMuted
+                            horizontalAlignment: Text.AlignRight
+                            elide: Text.ElideRight
+                            Accessible.name: text
+                            Accessible.description: qsTr("Read-only set-profile cache and refresh status.")
+                        }
+                    }
+                    Label {
+                        objectName: "settingsProfileMessage"
+                        Layout.fillWidth: true
+                        text: root.sessionState.set_profile
+                            ? root.sessionState.set_profile.message
+                            : qsTr("Set profile is not configured.")
+                        color: Theme.textMuted
+                        wrapMode: Text.WordWrap
+                        Accessible.name: text
+                        Accessible.description: qsTr("Current set-profile status.")
+                    }
+
                     Label {
                         objectName: "settingsRatingsMessage"
                         text: "Ratings · " + root.sessionState.ratings.message

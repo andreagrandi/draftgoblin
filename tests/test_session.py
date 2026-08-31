@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import draftomen.session as session_module
+from draftomen.profile_client import ProfileRefreshOutcome, ProfileRefreshResult
 from draftomen.audit import load_draft_audit_records
 from draftomen.backtest import (
     BacktestPickResult as DomainBacktestPickResult,
@@ -75,6 +76,7 @@ from draftomen.session import (
     OperationKind,
     PoolCard,
     PoolState,
+    ProfileRefreshRequest,
     ProgressState,
     RatingsLoader,
     RatingsState,
@@ -84,6 +86,7 @@ from draftomen.session import (
     RequestBuild,
     RequestRatingsDownload,
     RetryError,
+    SetProfileState,
     SessionError,
 )
 from draftomen.seventeen import (
@@ -129,6 +132,7 @@ def test_default_live_session_snapshot_has_neutral_initial_state() -> None:
     assert snapshot.draft is None
     assert snapshot.card_data == CardDataState()
     assert snapshot.ratings == RatingsState()
+    assert snapshot.set_profile == SetProfileState()
     assert snapshot.recommendations == RecommendationState()
     assert snapshot.pool == PoolState()
     assert snapshot.progress is None
@@ -862,6 +866,226 @@ def test_live_session_explicit_profile_remains_authoritative_over_local_profile(
     assert session._set_profiles_by_set == {}
 
 
+class _ProfileClientStub:
+    manifest_url = "https://profiles.example.test/manifest.json"
+    network_policy = "allowed"
+
+    def __init__(self, profiles: dict[str, SetProfile | None]) -> None:
+        self.profiles = profiles
+        self.load_calls: list[tuple[str, str]] = []
+
+    def load_cached(self, set_code: str, event_format: str, **kwargs):
+        del kwargs
+        self.load_calls.append((set_code, event_format))
+        profile = self.profiles.get(set_code)
+        if profile is None:
+            profile = SetProfile.generic(
+                set_code=set_code,
+                event_format=event_format,
+            )
+            source = "generic"
+        else:
+            source = f"local-{profile.maturity.value}"
+        return SimpleNamespace(profile=profile, source=source)
+
+
+def test_live_session_profile_activation_is_local_first_and_queues_one_request(
+    tmp_path: Path,
+) -> None:
+    profile = _fixture_set_profile()
+    client = _ProfileClientStub({"TST": profile})
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        profile_client=client,
+    )
+
+    session._set_active_set_code(set_code="tst")
+    request = session.profile_refresh_request()
+
+    assert client.load_calls == [("TST", QUICK_DRAFT_FORMAT)]
+    assert session.snapshot.set_profile.maturity == "mature"
+    assert session.snapshot.set_profile.profile_version == profile.profile_version
+    assert request is not None
+    assert request.set_code == "TST"
+    assert request.event_format == QUICK_DRAFT_FORMAT
+    assert session.profile_refresh_request() is request
+
+
+def test_live_session_profile_switch_retires_stale_refresh_request(
+    tmp_path: Path,
+) -> None:
+    profile = _fixture_set_profile()
+    client = _ProfileClientStub({"TST": profile})
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        profile_client=client,
+    )
+
+    session._set_active_set_code(set_code="TST")
+    old_request = session.profile_refresh_request()
+    assert old_request is not None
+    session._set_active_set_code(set_code="ABC")
+    new_request = session.profile_refresh_request()
+    assert new_request is not None
+    assert new_request != old_request
+
+    session.complete_profile_refresh(
+        request=old_request,
+        result=ProfileRefreshResult(
+            profile=profile,
+            outcome=ProfileRefreshOutcome.UPDATED,
+        ),
+    )
+
+    assert session.snapshot.set_profile.set_code == "ABC"
+    assert session.profile_refresh_request() is new_request
+
+
+def test_live_session_newer_profile_result_updates_state_and_scores_current_pack(
+    tmp_path: Path,
+) -> None:
+    client = _ProfileClientStub({})
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        profile_client=client,
+    )
+    snapshot = session.process_lines(
+        lines=_profiled_history_lines(
+            pool_before_pick=_fixture_pool_before_pick(
+                pack_number=CONTEXT_PACK_NUMBER,
+                pick_number=CONTEXT_PICK_NUMBER,
+            )
+        )
+    )
+    request = session.profile_refresh_request()
+    assert request is not None
+    newer = _fixture_set_profile()
+    newer = replace(newer, profile_version="2.0")
+
+    session.complete_profile_refresh(
+        request=request,
+        result=ProfileRefreshResult(
+            profile=newer,
+            outcome=ProfileRefreshOutcome.UPDATED,
+        ),
+    )
+
+    assert session.snapshot.set_profile.profile_version == "2.0"
+    assert session.snapshot.set_profile.refresh_outcome == "updated"
+    assert session.snapshot.current_scored_pack is not snapshot.current_scored_pack
+    assert session.snapshot.current_scored_pack is not None
+    assert session.snapshot.current_scored_pack.scoring_context is not None
+    assert session.snapshot.current_scored_pack.scoring_context.set_profile == newer
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    (ProfileRefreshOutcome.UNCHANGED, ProfileRefreshOutcome.CACHED),
+)
+def test_live_session_adopts_newer_external_cached_profile_and_rescores(
+    tmp_path: Path,
+    outcome: ProfileRefreshOutcome,
+) -> None:
+    profile = _fixture_set_profile()
+    client = _ProfileClientStub({"TST": profile})
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        card_database=_fixture_card_database(),
+        profile_client=client,
+    )
+    snapshot = session.process_lines(
+        lines=_profiled_history_lines(
+            pool_before_pick=_fixture_pool_before_pick(
+                pack_number=CONTEXT_PACK_NUMBER,
+                pick_number=CONTEXT_PICK_NUMBER,
+            )
+        )
+    )
+    request = session.profile_refresh_request()
+    assert request is not None
+    newer = replace(
+        profile,
+        profile_version="2.0",
+        generated_at="2026-08-30T00:00:00+00:00",
+    )
+
+    session.complete_profile_refresh(
+        request=request,
+        result=ProfileRefreshResult(profile=newer, outcome=outcome),
+    )
+
+    assert session._set_profile is newer
+    assert session.snapshot.set_profile.profile_version == "2.0"
+    assert session.snapshot.set_profile.refresh_outcome == outcome.value
+    assert session.snapshot.current_scored_pack is not snapshot.current_scored_pack
+    assert session.snapshot.current_scored_pack is not None
+    assert session.snapshot.current_scored_pack.scoring_context is not None
+    assert session.snapshot.current_scored_pack.scoring_context.set_profile == newer
+
+
+def test_live_session_profile_unchanged_and_failed_refreshes_retain_last_good_state(
+    tmp_path: Path,
+) -> None:
+    profile = _fixture_set_profile()
+    client = _ProfileClientStub({"TST": profile})
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        profile_client=client,
+    )
+    session._set_active_set_code(set_code="TST")
+    request = session.profile_refresh_request()
+    assert request is not None
+    session.complete_profile_refresh(
+        request=request,
+        result=ProfileRefreshResult(
+            profile=profile,
+            outcome=ProfileRefreshOutcome.UNCHANGED,
+        ),
+    )
+    unchanged = session.snapshot
+    assert session._set_profile is profile
+    assert unchanged.set_profile.refresh_outcome == "unchanged"
+    assert unchanged.set_profile.phase is DataLoadPhase.READY
+
+    session._set_active_set_code(set_code=None)
+    session._set_active_set_code(set_code="TST")
+    request = session.profile_refresh_request()
+    assert request is not None
+    session.fail_profile_refresh(request=request, error_message="private diagnostic")
+
+    assert session._set_profile is profile
+    assert session.snapshot.set_profile.profile_version == profile.profile_version
+    assert session.snapshot.set_profile.phase is DataLoadPhase.FAILED
+    assert session.snapshot.set_profile.refresh_outcome == "remote-failed"
+    assert "private diagnostic" not in session.snapshot.set_profile.message
+
+
+def test_live_session_explicit_profile_is_authoritative_without_refresh_request(
+    tmp_path: Path,
+) -> None:
+    explicit = _fixture_set_profile()
+    client = _ProfileClientStub({"TST": replace(explicit, profile_version="local")})
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        set_profile=explicit,
+        profile_client=client,
+    )
+
+    session._set_active_set_code(set_code="TST")
+
+    assert client.load_calls == []
+    assert session.profile_refresh_request() is None
+    assert session._set_profile is explicit
+    assert session.snapshot.set_profile.source == "injected"
+
+
 def test_live_session_recovered_profiled_pack_uses_shared_context(
     tmp_path: Path,
 ) -> None:
@@ -1273,6 +1497,52 @@ def test_live_session_login_change_clears_prior_account_context(
         draft_id="second-draft",
         app_dir=app_dir,
     ).exists()
+
+
+def test_live_session_account_without_draft_clears_profile_and_retires_request(
+    tmp_path: Path,
+) -> None:
+    profile = _fixture_set_profile()
+    client = _ProfileClientStub({})
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        profile_client=client,
+    )
+    session.process_lines(
+        lines=(
+            _auth_line(account_id="first-account", screen_name="First"),
+            _course_line(event_name="QuickDraft_TST_20260823", course_id="first-draft"),
+        )
+    )
+    request = session.profile_refresh_request()
+    assert request is not None
+    assert session.snapshot.set_profile.set_code == "TST"
+
+    session.process_lines(
+        lines=(_auth_line(account_id="second-account", screen_name="Second"),)
+    )
+    switched = session.dispatch(
+        command=ChooseAccount(account_id="second-account")
+    )
+
+    assert switched.status == ApplicationStatus(
+        phase=ApplicationPhase.WAITING_FOR_DRAFT,
+        message="Waiting for a Quick Draft.",
+    )
+    assert switched.set_profile == SetProfileState()
+    assert session._active_set_code() is None
+    assert session._set_profile is None
+    assert session.profile_refresh_request() is None
+
+    session.complete_profile_refresh(
+        request=request,
+        result=ProfileRefreshResult(
+            profile=profile,
+            outcome=ProfileRefreshOutcome.UPDATED,
+        ),
+    )
+    assert session.snapshot is switched
 
 
 def test_live_session_recovers_login_profile_and_selects_latest_account_draft(
@@ -3193,6 +3463,39 @@ def test_live_session_stop_retires_in_flight_card_image_request(
     assert stopped.status.phase == ApplicationPhase.STOPPED
     assert stopped.card_image.phase != DataLoadPhase.LOADING
     assert session.selected_card_image_request() is None
+
+
+def test_live_session_stop_rejects_late_profile_refresh_completion(
+    tmp_path: Path,
+) -> None:
+    profile = _fixture_set_profile()
+    client = _ProfileClientStub({"TST": profile})
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        profile_client=client,
+    )
+    session._set_active_set_code(set_code="TST")
+    request = session.profile_refresh_request()
+    assert request is not None
+
+    stopped = session.stop()
+    session.complete_profile_refresh(
+        request=request,
+        result=ProfileRefreshResult(
+            profile=replace(
+                profile,
+                profile_version="2.0",
+                generated_at="2026-08-30T00:00:00+00:00",
+            ),
+            outcome=ProfileRefreshOutcome.UPDATED,
+        ),
+    )
+
+    assert session.snapshot is stopped
+    assert session.snapshot.status.phase is ApplicationPhase.STOPPED
+    assert session.profile_refresh_request() is None
+
 
 @pytest.mark.parametrize(
     "image_phase",
