@@ -703,12 +703,19 @@ def _open_text(*, path: str) -> Iterator[io.TextIOBase]:
                 raw = stack.enter_context(gzip.GzipFile(fileobj=raw, mode="rb"))
         else:
             raw = stack.enter_context(open(path, mode="rb"))
-            if path.lower().endswith((".gz", ".gzip")):
+            if path.lower().endswith((".gz", ".gzip")) or _has_gzip_magic(
+                path=path
+            ):
                 raw = stack.enter_context(gzip.GzipFile(fileobj=raw, mode="rb"))
         text_file = stack.enter_context(
             io.TextIOWrapper(raw, encoding="utf-8-sig", newline="")
         )
         yield text_file
+
+
+def _has_gzip_magic(*, path: str) -> bool:
+    with open(path, mode="rb") as input_file:
+        return input_file.read(2) == b"\x1f\x8b"
 
 
 def _valid_source_name(name: str) -> bool:

@@ -204,6 +204,18 @@ def test_plain_gzip_and_tar_csv_inputs_share_reader_behavior(tmp_path: Path) -> 
     assert read_public_dump(archived).rows == tuple(expected)
 
 
+def test_gzip_content_is_read_from_content_addressed_cache_path(tmp_path: Path) -> None:
+    cached = tmp_path / "content.bin"
+    cached.write_bytes(
+        gzip.compress(data=CSV_TEXT.encode(encoding="utf-8"), mtime=0)
+    )
+
+    assert read_public_dump(source=cached).rows == (
+        {"draft_id": "draft-one", "pick": "Card One"},
+        {"draft_id": "draft-two", "pick": "Card Two"},
+    )
+
+
 def test_malformed_row_report_is_structured_and_privacy_safe(tmp_path: Path) -> None:
     path = tmp_path / "private.csv"
     path.write_text(

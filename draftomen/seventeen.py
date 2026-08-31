@@ -1646,7 +1646,7 @@ def refresh_17lands_structure_targets(
     if draft_data_file is None:
         with tempfile.TemporaryDirectory(prefix="draftomen-17lands-") as directory:
             temporary_path = Path(directory) / "draft-data.csv.gz"
-            _download_public_draft_data(
+            download_public_draft_data(
                 url=source_url,
                 path=temporary_path,
                 timeout_seconds=timeout_seconds,
@@ -2112,7 +2112,7 @@ def _draft_row_matches(
 
 
 
-def _download_public_draft_data(
+def download_public_draft_data(
     *,
     url: str,
     path: Path,
