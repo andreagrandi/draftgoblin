@@ -27,11 +27,17 @@ from draftomen.profile_input_cache import (
     ProfileInputSource,
 )
 from draftomen.refresh_plan import PlannedEnvironment
-
+from draftomen.seventeen import (
+    SeventeenLandsError,
+    SeventeenLandsFormatData,
+    fetch_17lands_format_data,
+)
 
 PROFILE_INPUT_ACQUISITION_SCHEMA_VERSION = 1
 CARD_METADATA_ADAPTER_VERSION = 1
 CARD_METADATA_SOURCE_NAME = "card-metadata"
+RATINGS_ADAPTER_VERSION = 1
+RATINGS_SOURCE_NAME = "17lands-ratings"
 Clock = Callable[[], datetime]
 
 
@@ -64,9 +70,40 @@ class CardDatabaseFetcher(Protocol):
         ...
 
 
+class RatingsFetcher(Protocol):
+    """Fetch normalized ratings for one set and event format.
+    Implementations accept named parameters so tests remain explicit.
+    """
+
+    def __call__(
+        self,
+        *,
+        set_code: str,
+        event_format: str,
+        fetched_at: datetime,
+        timeout_seconds: int,
+    ) -> SeventeenLandsFormatData:
+        ...
+
+
 def _fetch_default_card_database(*, set_code: str, timeout_seconds: int) -> CardDatabase:
     del set_code
     return download_scryfall_card_database(timeout_seconds=timeout_seconds)
+
+
+def _fetch_default_ratings(
+    *,
+    set_code: str,
+    event_format: str,
+    fetched_at: datetime,
+    timeout_seconds: int,
+) -> SeventeenLandsFormatData:
+    return fetch_17lands_format_data(
+        set_code=set_code,
+        event_format=event_format,
+        fetched_at=fetched_at,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,13 +121,36 @@ class ProfileInputSourceReport:
     sha256: str | None = None
     content_bytes: int | None = None
     card_count: int = 0
+    rating_rows: int | None = None
+    rating_samples: int | None = None
     diagnostics: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ("card_count", "rating_rows", "rating_samples"):
+            count = getattr(self, name)
+            if count is not None and (
+                isinstance(count, bool) or not isinstance(count, int) or count < 0
+            ):
+                raise ProfileInputAcquisitionError(f"{name} must be a non-negative integer.")
+        if (self.rating_rows is None) != (self.rating_samples is None):
+            raise ProfileInputAcquisitionError(
+                "Rating row and sample availability must be recorded together."
+            )
+        object.__setattr__(self, "diagnostics", tuple(dict.fromkeys(self.diagnostics)))
 
     def to_json(self) -> dict[str, Any]:
         """Return deterministic provenance and sample availability.
         Optional cache-record fields appear only for verified inputs.
         """
 
+        sample_availability = (
+            {"card_count": self.card_count}
+            if self.rating_rows is None
+            else {
+                "rating_rows": self.rating_rows,
+                "rating_samples": self.rating_samples,
+            }
+        )
         value: dict[str, Any] = {
             "cache_lookup_outcome": (
                 None if self.cache_lookup_outcome is None else self.cache_lookup_outcome.value
@@ -100,7 +160,7 @@ class ProfileInputSourceReport:
             ),
             "diagnostics": list(self.diagnostics),
             "outcome": self.outcome.value,
-            "sample_availability": {"card_count": self.card_count},
+            "sample_availability": sample_availability,
             "source": self.source.to_json(),
         }
         if self.source_version is not None:
@@ -117,12 +177,14 @@ class ProfileInputSourceReport:
 @dataclass(frozen=True, slots=True)
 class ProfileBuildBundle:
     """Carry normalized inputs required by the existing profile generator.
-    Raw card metadata stays in memory and out of acquisition reports.
+    Raw metadata and ratings stay in memory and out of reports.
     """
 
     environment: PlannedEnvironment
     card_database: CardDatabase = field(repr=False)
     card_metadata: ProfileInputSourceReport
+    ratings: SeventeenLandsFormatData | None = field(default=None, repr=False)
+    ratings_source: ProfileInputSourceReport | None = None
 
     def __post_init__(self) -> None:
         if self.card_metadata.source.set_code != self.environment.set_code:
@@ -132,17 +194,33 @@ class ProfileBuildBundle:
             environment=self.environment,
             acquired_at=self.card_metadata.acquired_at,
         )
+        if self.ratings_source is not None and (
+            self.ratings_source.source.set_code != self.environment.set_code
+            or self.ratings_source.source.event_format != self.environment.event_format
+        ):
+            raise ProfileInputAcquisitionError("Ratings source does not match the bundle.")
+        if self.ratings is not None:
+            if self.ratings_source is None:
+                raise ProfileInputAcquisitionError("Ratings provenance is missing from the bundle.")
+            _validate_ratings(
+                ratings=self.ratings,
+                environment=self.environment,
+                acquired_at=self.ratings_source.acquired_at,
+            )
 
     def generator_inputs(self) -> dict[str, object]:
         """Return the values accepted by the existing profile generator.
         Stage, timestamp, and publication choices remain caller inputs.
         """
 
-        return {
+        values: dict[str, object] = {
             "card_database": self.card_database,
             "event_format": self.environment.event_format,
             "set_code": self.environment.set_code,
         }
+        if self.ratings is not None:
+            values["ratings"] = self.ratings
+        return values
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +232,7 @@ class ProfileInputAcquisitionResult:
     environment: PlannedEnvironment
     source: ProfileInputSourceReport
     bundle: ProfileBuildBundle | None = field(default=None, repr=False)
+    ratings_source: ProfileInputSourceReport | None = None
     skip_reasons: tuple[str, ...] = ()
     schema_version: int = PROFILE_INPUT_ACQUISITION_SCHEMA_VERSION
 
@@ -170,6 +249,16 @@ class ProfileInputAcquisitionResult:
 
         return self.bundle is not None
 
+    @property
+    def sources(self) -> tuple[ProfileInputSourceReport, ...]:
+        """Return source reports in deterministic acquisition order.
+        Required card metadata precedes optional empirical inputs.
+        """
+
+        if self.ratings_source is None:
+            return (self.source,)
+        return (self.source, self.ratings_source)
+
     def to_json(self) -> dict[str, Any]:
         """Return a deterministic path-free acquisition report.
         The bundle is represented only by its availability flag.
@@ -180,7 +269,7 @@ class ProfileInputAcquisitionResult:
             "environment": self.environment.to_json(),
             "schema_version": self.schema_version,
             "skip_reasons": list(self.skip_reasons),
-            "sources": [self.source.to_json()],
+            "sources": [source.to_json() for source in self.sources],
         }
 
     def to_bytes(self) -> bytes:
@@ -201,6 +290,22 @@ class _CardMetadataSnapshot:
     source_version: str
     acquired_at: datetime
     sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RatingsSnapshot:
+    ratings: SeventeenLandsFormatData
+    payload: bytes
+    source_version: str
+    acquired_at: datetime
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RatingsAcquisition:
+    report: ProfileInputSourceReport
+    ratings: SeventeenLandsFormatData | None = field(default=None, repr=False)
+    skip_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,6 +364,83 @@ class CardMetadataAdapter:
             database=normalized,
             payload=payload,
             source_version=f"v{CARD_METADATA_ADAPTER_VERSION}-{version_time}-{sha256}",
+            acquired_at=timestamp,
+            sha256=sha256,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SeventeenLandsRatingsAdapter:
+    """Fetch format-scoped 17Lands ratings as canonical cache bytes.
+    The existing normalized ratings model remains the generator contract.
+    """
+
+    fetch_ratings: RatingsFetcher = field(default=_fetch_default_ratings)
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS
+    source_name: str = RATINGS_SOURCE_NAME
+
+    def __post_init__(self) -> None:
+        if not callable(self.fetch_ratings):
+            raise ProfileInputAcquisitionError("fetch_ratings must be callable.")
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, int)
+            or self.timeout_seconds <= 0
+        ):
+            raise ProfileInputAcquisitionError("timeout_seconds must be positive.")
+        normalized = ProfileInputSource(
+            name=self.source_name,
+            set_code="TST",
+            event_format="QuickDraft",
+        )
+        object.__setattr__(self, "source_name", normalized.name)
+
+    def source_for(self, *, environment: PlannedEnvironment) -> ProfileInputSource:
+        """Return the set-and-format cache identity for ratings.
+        Quick Draft and Premier Draft evidence remain independent.
+        """
+
+        return ProfileInputSource(
+            name=self.source_name,
+            set_code=environment.set_code,
+            event_format=environment.event_format,
+        )
+
+    def acquire(
+        self,
+        *,
+        environment: PlannedEnvironment,
+        acquired_at: datetime,
+    ) -> _RatingsSnapshot:
+        """Fetch and serialize normalized ratings for one environment.
+        Empty, mismatched, or invalid data fails before cache mutation.
+        """
+
+        timestamp = _timestamp(acquired_at)
+        fetched = self.fetch_ratings(
+            set_code=environment.set_code,
+            event_format=environment.event_format,
+            fetched_at=timestamp,
+            timeout_seconds=self.timeout_seconds,
+        )
+        _validate_ratings(
+            ratings=fetched,
+            environment=environment,
+            acquired_at=timestamp,
+        )
+        ratings = SeventeenLandsFormatData.from_json(data=fetched.to_json())
+        _validate_ratings(
+            ratings=ratings,
+            environment=environment,
+            acquired_at=timestamp,
+        )
+        payload = _ratings_bytes(ratings)
+        sha256 = hashlib.sha256(payload).hexdigest()
+        version_time = timestamp.strftime("%Y%m%dT%H%M%S%fZ")
+        return _RatingsSnapshot(
+            ratings=ratings,
+            payload=payload,
+            source_version=f"v{RATINGS_ADAPTER_VERSION}-{version_time}-{sha256}",
             acquired_at=timestamp,
             sha256=sha256,
         )
@@ -349,7 +531,7 @@ def acquire_card_metadata_bundle(
             environment=environment,
             acquired_at=acquired_at,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - source failures become bounded outcomes.
         return _refresh_failure(
             environment=environment,
             lookup=lookup,
@@ -386,8 +568,170 @@ def acquire_card_metadata_bundle(
             result=stored,
             outcome=ProfileInputAcquisitionOutcome.ACQUIRED,
             database=snapshot.database,
-            cache_lookup_outcome=lookup.outcome,
-            cache_store_outcome=stored.outcome,
+            cache_lookup_outcome=ProfileInputCacheOutcome(lookup.outcome),
+            cache_store_outcome=ProfileInputCacheOutcome(stored.outcome),
+            diagnostics=content_diagnostics,
+        ),
+    )
+
+
+def acquire_profile_build_bundle(
+    *,
+    environment: PlannedEnvironment,
+    cache: ProfileInputCache,
+    card_metadata_adapter: CardMetadataAdapter | None = None,
+    ratings_adapter: SeventeenLandsRatingsAdapter | None = None,
+    offline: bool = False,
+    clock: Clock | None = None,
+) -> ProfileInputAcquisitionResult:
+    """Acquire required metadata and optional ratings for one build.
+    Ratings failures preserve the valid metadata-only bundle.
+    """
+
+    metadata_result = acquire_card_metadata_bundle(
+        environment=environment,
+        cache=cache,
+        adapter=card_metadata_adapter,
+        offline=offline,
+        clock=clock,
+    )
+    if metadata_result.bundle is None:
+        return metadata_result
+
+    ratings_result = _acquire_ratings(
+        environment=environment,
+        cache=cache,
+        adapter=ratings_adapter or SeventeenLandsRatingsAdapter(),
+        offline=offline,
+        clock=clock,
+    )
+    skip_reasons = list(metadata_result.skip_reasons)
+    if ratings_result.skip_reason is not None:
+        skip_reasons.append(ratings_result.skip_reason)
+    return ProfileInputAcquisitionResult(
+        environment=environment,
+        source=metadata_result.source,
+        bundle=ProfileBuildBundle(
+            environment=environment,
+            card_database=metadata_result.bundle.card_database,
+            card_metadata=metadata_result.source,
+            ratings=ratings_result.ratings,
+            ratings_source=ratings_result.report,
+        ),
+        ratings_source=ratings_result.report,
+        skip_reasons=tuple(skip_reasons),
+    )
+
+
+def _acquire_ratings(
+    *,
+    environment: PlannedEnvironment,
+    cache: ProfileInputCache,
+    adapter: SeventeenLandsRatingsAdapter,
+    offline: bool,
+    clock: Clock | None,
+) -> _RatingsAcquisition:
+    source = adapter.source_for(environment=environment)
+    try:
+        lookup = cache.lookup(source=source, offline=offline)
+    except ProfileInputCacheError:
+        return _RatingsAcquisition(
+            report=ProfileInputSourceReport(
+                source=source,
+                outcome=ProfileInputAcquisitionOutcome.UNAVAILABLE,
+                cache_lookup_outcome=None,
+                rating_rows=0,
+                rating_samples=0,
+                diagnostics=("17lands-ratings-cache-lookup-failed",),
+            ),
+            skip_reason="17lands-ratings-cache-unavailable",
+        )
+
+    cached, content_diagnostics = _load_cached_ratings(
+        result=lookup,
+        environment=environment,
+    )
+    cache_is_corrupt = lookup.record is not None and cached is None
+    if cached is not None and lookup.outcome in {
+        ProfileInputCacheOutcome.FRESH,
+        ProfileInputCacheOutcome.OFFLINE_REUSED,
+    }:
+        outcome = (
+            ProfileInputAcquisitionOutcome.CACHED
+            if lookup.outcome is ProfileInputCacheOutcome.FRESH
+            else ProfileInputAcquisitionOutcome.OFFLINE_REUSED
+        )
+        return _RatingsAcquisition(
+            ratings=cached,
+            report=_ratings_report_from_cache(
+                result=lookup,
+                outcome=outcome,
+                ratings=cached,
+                diagnostics=content_diagnostics,
+            ),
+        )
+
+    if offline:
+        corrupt = cache_is_corrupt or lookup.outcome is ProfileInputCacheOutcome.CORRUPT
+        return _RatingsAcquisition(
+            report=_ratings_report_from_cache(
+                result=lookup,
+                outcome=(
+                    ProfileInputAcquisitionOutcome.CORRUPT
+                    if corrupt
+                    else ProfileInputAcquisitionOutcome.MISSING
+                ),
+                diagnostics=content_diagnostics,
+            ),
+            skip_reason=(
+                "17lands-ratings-cache-corrupt"
+                if corrupt
+                else "17lands-ratings-cache-missing"
+            ),
+        )
+
+    acquired_at = _now(clock)
+    try:
+        snapshot = adapter.acquire(
+            environment=environment,
+            acquired_at=acquired_at,
+        )
+    except Exception:  # noqa: BLE001 - source failures become bounded outcomes.
+        return _ratings_refresh_failure(
+            lookup=lookup,
+            cached=cached,
+            cache_is_corrupt=cache_is_corrupt,
+            diagnostics=(*content_diagnostics, "17lands-ratings-acquisition-failed"),
+            stale_reason="17lands-ratings-refresh-failed",
+            unavailable_reason="17lands-ratings-unavailable",
+        )
+
+    try:
+        stored = cache.store(
+            source=source,
+            source_version=snapshot.source_version,
+            input_stream=BytesIO(snapshot.payload),
+            expected_sha256=snapshot.sha256,
+            acquired_at=snapshot.acquired_at,
+        )
+    except ProfileInputCacheError:
+        return _ratings_refresh_failure(
+            lookup=lookup,
+            cached=cached,
+            cache_is_corrupt=cache_is_corrupt,
+            diagnostics=(*content_diagnostics, "17lands-ratings-cache-store-failed"),
+            stale_reason="17lands-ratings-cache-store-failed",
+            unavailable_reason="17lands-ratings-cache-store-failed",
+        )
+
+    return _RatingsAcquisition(
+        ratings=snapshot.ratings,
+        report=_ratings_report_from_cache(
+            result=stored,
+            outcome=ProfileInputAcquisitionOutcome.ACQUIRED,
+            ratings=snapshot.ratings,
+            cache_lookup_outcome=ProfileInputCacheOutcome(lookup.outcome),
+            cache_store_outcome=ProfileInputCacheOutcome(stored.outcome),
             diagnostics=content_diagnostics,
         ),
     )
@@ -478,6 +822,74 @@ def _load_cached_database(
     return database, result.diagnostics
 
 
+def _validate_ratings(
+    *,
+    ratings: SeventeenLandsFormatData,
+    environment: PlannedEnvironment,
+    acquired_at: datetime | None,
+) -> None:
+    if not isinstance(ratings, SeventeenLandsFormatData):
+        raise ProfileInputAcquisitionError("Ratings adapter returned an invalid dataset.")
+    if ratings.set_code.casefold() != environment.set_code.casefold():
+        raise ProfileInputAcquisitionError("Ratings contain an unexpected set.")
+    if ratings.event_format.casefold() != environment.event_format.casefold():
+        raise ProfileInputAcquisitionError("Ratings contain an unexpected event format.")
+    if not ratings.card_ratings:
+        raise ProfileInputAcquisitionError("Ratings did not contain any card rows.")
+    if acquired_at is None:
+        raise ProfileInputAcquisitionError("Ratings acquisition timestamp is missing.")
+    if _timestamp(ratings.fetched_at) != _timestamp(acquired_at):
+        raise ProfileInputAcquisitionError("Ratings timestamp does not match its record.")
+    for row in ratings.card_ratings.values():
+        for name in ("seen", "picked", "games_played", "opening_hand", "games_in_hand"):
+            count = getattr(row.sample_counts, name)
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise ProfileInputAcquisitionError("Ratings contain invalid sample counts.")
+
+
+def _ratings_bytes(ratings: SeventeenLandsFormatData) -> bytes:
+    return (
+        json.dumps(ratings.to_json(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+
+
+def _rating_sample_count(ratings: SeventeenLandsFormatData) -> int:
+    return sum(row.sample_counts.games_in_hand for row in ratings.card_ratings.values())
+
+
+def _load_cached_ratings(
+    *,
+    result: ProfileInputCacheResult,
+    environment: PlannedEnvironment,
+) -> tuple[SeventeenLandsFormatData | None, tuple[str, ...]]:
+    if result.record is None or result.content_path is None:
+        return None, result.diagnostics
+    try:
+        payload = result.content_path.read_bytes()
+        value = json.loads(payload.decode("utf-8"))
+        if not isinstance(value, Mapping):
+            raise ProfileInputAcquisitionError("Ratings cache is not an object.")
+        ratings = SeventeenLandsFormatData.from_json(data=value)
+        if payload != _ratings_bytes(ratings):
+            raise ProfileInputAcquisitionError("Ratings cache is not canonical.")
+        _validate_ratings(
+            ratings=ratings,
+            environment=environment,
+            acquired_at=result.record.acquired_at,
+        )
+    except (
+        OSError,
+        ProfileInputAcquisitionError,
+        SeventeenLandsError,
+        TypeError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
+        return None, (*result.diagnostics, "17lands-ratings-content-invalid")
+    return ratings, result.diagnostics
+
+
 def _refresh_failure(
     *,
     environment: PlannedEnvironment,
@@ -516,6 +928,41 @@ def _refresh_failure(
     )
 
 
+def _ratings_refresh_failure(
+    *,
+    lookup: ProfileInputCacheResult,
+    cached: SeventeenLandsFormatData | None,
+    cache_is_corrupt: bool,
+    diagnostics: tuple[str, ...],
+    stale_reason: str,
+    unavailable_reason: str,
+) -> _RatingsAcquisition:
+    if cached is not None and lookup.outcome is ProfileInputCacheOutcome.STALE:
+        return _RatingsAcquisition(
+            ratings=cached,
+            report=_ratings_report_from_cache(
+                result=lookup,
+                outcome=ProfileInputAcquisitionOutcome.STALE,
+                ratings=cached,
+                diagnostics=diagnostics,
+            ),
+            skip_reason=stale_reason,
+        )
+    corrupt = cache_is_corrupt or lookup.outcome is ProfileInputCacheOutcome.CORRUPT
+    return _RatingsAcquisition(
+        report=_ratings_report_from_cache(
+            result=lookup,
+            outcome=(
+                ProfileInputAcquisitionOutcome.CORRUPT
+                if corrupt
+                else ProfileInputAcquisitionOutcome.UNAVAILABLE
+            ),
+            diagnostics=diagnostics,
+        ),
+        skip_reason=("17lands-ratings-cache-corrupt" if corrupt else unavailable_reason),
+    )
+
+
 def _report_from_cache(
     *,
     result: ProfileInputCacheResult,
@@ -526,10 +973,13 @@ def _report_from_cache(
     diagnostics: tuple[str, ...] = (),
 ) -> ProfileInputSourceReport:
     record = result.record
+    lookup_outcome = ProfileInputCacheOutcome(result.outcome)
     return ProfileInputSourceReport(
         source=result.source,
         outcome=outcome,
-        cache_lookup_outcome=(result.outcome if cache_lookup_outcome is None else cache_lookup_outcome),
+        cache_lookup_outcome=(
+            lookup_outcome if cache_lookup_outcome is None else cache_lookup_outcome
+        ),
         cache_store_outcome=cache_store_outcome,
         source_version=None if record is None else record.source_version,
         acquired_at=None if record is None else record.acquired_at,
@@ -537,6 +987,34 @@ def _report_from_cache(
         content_bytes=None if record is None else record.content_bytes,
         card_count=0 if database is None else len(database),
         diagnostics=tuple(dict.fromkeys(diagnostics)),
+    )
+
+
+def _ratings_report_from_cache(
+    *,
+    result: ProfileInputCacheResult,
+    outcome: ProfileInputAcquisitionOutcome,
+    ratings: SeventeenLandsFormatData | None = None,
+    cache_lookup_outcome: ProfileInputCacheOutcome | None = None,
+    cache_store_outcome: ProfileInputCacheOutcome | None = None,
+    diagnostics: tuple[str, ...] = (),
+) -> ProfileInputSourceReport:
+    record = result.record
+    lookup_outcome = ProfileInputCacheOutcome(result.outcome)
+    return ProfileInputSourceReport(
+        source=result.source,
+        outcome=outcome,
+        cache_lookup_outcome=(
+            lookup_outcome if cache_lookup_outcome is None else cache_lookup_outcome
+        ),
+        cache_store_outcome=cache_store_outcome,
+        source_version=None if record is None else record.source_version,
+        acquired_at=None if record is None else record.acquired_at,
+        sha256=None if record is None else record.sha256,
+        content_bytes=None if record is None else record.content_bytes,
+        rating_rows=0 if ratings is None else len(ratings.card_ratings),
+        rating_samples=0 if ratings is None else _rating_sample_count(ratings),
+        diagnostics=diagnostics,
     )
 
 
@@ -588,6 +1066,8 @@ __all__ = [
     "CARD_METADATA_ADAPTER_VERSION",
     "CARD_METADATA_SOURCE_NAME",
     "PROFILE_INPUT_ACQUISITION_SCHEMA_VERSION",
+    "RATINGS_ADAPTER_VERSION",
+    "RATINGS_SOURCE_NAME",
     "CardDatabaseFetcher",
     "CardMetadataAdapter",
     "ProfileBuildBundle",
@@ -595,5 +1075,8 @@ __all__ = [
     "ProfileInputAcquisitionOutcome",
     "ProfileInputAcquisitionResult",
     "ProfileInputSourceReport",
+    "RatingsFetcher",
+    "SeventeenLandsRatingsAdapter",
     "acquire_card_metadata_bundle",
+    "acquire_profile_build_bundle",
 ]

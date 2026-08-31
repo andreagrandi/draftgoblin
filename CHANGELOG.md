@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Add optional format-scoped 17Lands ratings acquisition with deterministic
+  sample reporting, bounded cache reuse, offline support, stale fallback, and
+  metadata-only failure recovery. (#295)
 - Add set-scoped card-metadata acquisition with deterministic source records,
   bounded cache reuse, stale fallback, and metadata-only profile-build bundles.
   (#292)
