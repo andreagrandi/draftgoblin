@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Reduce GitHub issue and project API usage with centralized authenticated I/O,
+  explicit call budgets, batched ProjectV2 mutations, and single-pass
+  verification.
 - Expand the GitHub issue workflow with implementation size and orchestration-risk
   classification plus approval-gated epic decomposition and dependency linking.
 - Add issue-226's remote set-profile manifest/client workflow with
