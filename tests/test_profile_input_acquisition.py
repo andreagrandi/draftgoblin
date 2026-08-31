@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -9,10 +10,13 @@ from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.profile_generation import generate_set_profile
 from draftomen.profile_input_acquisition import (
     CARD_METADATA_ADAPTER_VERSION,
+    RATINGS_ADAPTER_VERSION,
     CardMetadataAdapter,
     ProfileInputAcquisitionOutcome,
     ProfileInputAcquisitionResult,
+    SeventeenLandsRatingsAdapter,
     acquire_card_metadata_bundle,
+    acquire_profile_build_bundle,
 )
 from draftomen.profile_input_cache import (
     ProfileInputCache,
@@ -22,7 +26,12 @@ from draftomen.profile_input_cache import (
 )
 from draftomen.refresh_plan import PlannedEnvironment
 from draftomen.set_profile import ProfileMaturity
-
+from draftomen.seventeen import (
+    ColorPairWinRate,
+    RatingSampleCounts,
+    SeventeenCardStats,
+    SeventeenLandsFormatData,
+)
 
 NOW = datetime(2026, 8, 31, 12, tzinfo=UTC)
 
@@ -46,6 +55,26 @@ class StubCardDatabaseFetcher:
         if self.error is not None:
             raise self.error
         return self.database
+
+
+class StubRatingsFetcher:
+    def __init__(self, ratings: SeventeenLandsFormatData) -> None:
+        self.ratings = ratings
+        self.calls: list[tuple[str, str, datetime, int]] = []
+        self.error: Exception | None = None
+
+    def __call__(
+        self,
+        *,
+        set_code: str,
+        event_format: str,
+        fetched_at: datetime,
+        timeout_seconds: int,
+    ) -> SeventeenLandsFormatData:
+        self.calls.append((set_code, event_format, fetched_at, timeout_seconds))
+        if self.error is not None:
+            raise self.error
+        return self.ratings
 
 
 def _environment(*, event_format: str = "QuickDraft") -> PlannedEnvironment:
@@ -83,6 +112,36 @@ def _database() -> CardDatabase:
     )
 
 
+def _ratings() -> SeventeenLandsFormatData:
+    return SeventeenLandsFormatData(
+        set_code="TST",
+        event_format="quickdraft",
+        fetched_at=NOW,
+        card_ratings={
+            1: SeventeenCardStats(
+                grp_id=1,
+                name="Requested Card",
+                color="U",
+                rarity="common",
+                average_last_seen_at=3.5,
+                gih_win_rate=0.60,
+                opening_hand_win_rate=None,
+                drawn_improvement_win_rate=None,
+                sample_counts=RatingSampleCounts(
+                    seen=100,
+                    picked=50,
+                    games_played=40,
+                    opening_hand=20,
+                    games_in_hand=10,
+                ),
+            )
+        },
+        pair_win_rates={
+            "WU": ColorPairWinRate(pair="WU", wins=6, games=10, win_rate=0.60)
+        },
+    )
+
+
 def _cache(tmp_path: Path, *, clock: FrozenClock) -> ProfileInputCache:
     return ProfileInputCache(
         tmp_path / "profile-input-cache",
@@ -101,6 +160,10 @@ def _adapter(fetcher: StubCardDatabaseFetcher) -> CardMetadataAdapter:
     return CardMetadataAdapter(fetch_database=fetcher, timeout_seconds=17)
 
 
+def _ratings_adapter(fetcher: StubRatingsFetcher) -> SeventeenLandsRatingsAdapter:
+    return SeventeenLandsRatingsAdapter(fetch_ratings=fetcher, timeout_seconds=19)
+
+
 def _acquire(
     *,
     cache: ProfileInputCache,
@@ -113,6 +176,24 @@ def _acquire(
         environment=_environment(event_format=event_format),
         cache=cache,
         adapter=adapter,
+        offline=offline,
+        clock=clock,
+    )
+
+
+def _acquire_profile(
+    *,
+    cache: ProfileInputCache,
+    card_adapter: CardMetadataAdapter,
+    ratings_adapter: SeventeenLandsRatingsAdapter,
+    clock: FrozenClock,
+    offline: bool = False,
+) -> ProfileInputAcquisitionResult:
+    return acquire_profile_build_bundle(
+        environment=_environment(),
+        cache=cache,
+        card_metadata_adapter=card_adapter,
+        ratings_adapter=ratings_adapter,
         offline=offline,
         clock=clock,
     )
@@ -325,3 +406,248 @@ def test_card_metadata_cache_is_shared_across_formats_for_one_set(tmp_path: Path
     assert result.bundle is not None
     assert result.bundle.environment.event_format == "premierdraft"
     assert fetcher.calls == [("TST", 17)]
+
+
+def test_profile_bundle_acquires_ratings_and_generates_early_profile(tmp_path: Path) -> None:
+    clock = FrozenClock()
+    card_fetcher = StubCardDatabaseFetcher(_database())
+    ratings_fetcher = StubRatingsFetcher(_ratings())
+    result = _acquire_profile(
+        cache=_cache(tmp_path, clock=clock),
+        card_adapter=_adapter(card_fetcher),
+        ratings_adapter=_ratings_adapter(ratings_fetcher),
+        clock=clock,
+    )
+
+    assert result.succeeded
+    assert tuple(report.source.name for report in result.sources) == (
+        "card-metadata",
+        "17lands-ratings",
+    )
+    assert result.ratings_source is not None
+    assert result.ratings_source.outcome is ProfileInputAcquisitionOutcome.ACQUIRED
+    assert result.ratings_source.cache_lookup_outcome is ProfileInputCacheOutcome.MISSING
+    assert result.ratings_source.cache_store_outcome is ProfileInputCacheOutcome.FRESH
+    assert result.ratings_source.rating_rows == 1
+    assert result.ratings_source.rating_samples == 10
+    assert result.ratings_source.to_json()["sample_availability"] == {
+        "rating_rows": 1,
+        "rating_samples": 10,
+    }
+    assert result.ratings_source.source_version == (
+        f"v{RATINGS_ADAPTER_VERSION}-20260831T120000000000Z-"
+        f"{result.ratings_source.sha256}"
+    )
+    assert ratings_fetcher.calls == [("TST", "quickdraft", NOW, 19)]
+    assert result.bundle is not None
+    assert result.bundle.ratings == _ratings()
+
+    generated = generate_set_profile(
+        stage="early",
+        generated_at=NOW,
+        **result.bundle.generator_inputs(),
+    )
+    assert generated.profile.maturity is ProfileMaturity.EARLY
+    assert len(generated.profile.card_ratings) == 1
+    assert generated.profile.card_ratings[0].gih_win_rate.samples == 10
+    assert generated.profile.pair("WU") is not None
+    assert generated.profile.pair("WU").performance.samples == 10  # type: ignore[union-attr]
+
+    repeated = _acquire_profile(
+        cache=_cache(tmp_path / "repeat", clock=clock),
+        card_adapter=_adapter(StubCardDatabaseFetcher(_database())),
+        ratings_adapter=_ratings_adapter(StubRatingsFetcher(_ratings())),
+        clock=clock,
+    )
+    serialized = result.to_bytes().decode("utf-8")
+    assert result.to_bytes() == repeated.to_bytes()
+    assert str(tmp_path) not in serialized
+    assert "Requested Card" not in serialized
+
+
+def test_fresh_ratings_cache_is_reused_without_fetching_again(tmp_path: Path) -> None:
+    clock = FrozenClock()
+    cache = _cache(tmp_path, clock=clock)
+    card_fetcher = StubCardDatabaseFetcher(_database())
+    ratings_fetcher = StubRatingsFetcher(_ratings())
+    card_adapter = _adapter(card_fetcher)
+    ratings_adapter = _ratings_adapter(ratings_fetcher)
+
+    acquired = _acquire_profile(
+        cache=cache,
+        card_adapter=card_adapter,
+        ratings_adapter=ratings_adapter,
+        clock=clock,
+    )
+    cached = _acquire_profile(
+        cache=cache,
+        card_adapter=card_adapter,
+        ratings_adapter=ratings_adapter,
+        clock=clock,
+    )
+
+    assert acquired.ratings_source is not None
+    assert acquired.ratings_source.outcome is ProfileInputAcquisitionOutcome.ACQUIRED
+    assert cached.ratings_source is not None
+    assert cached.ratings_source.outcome is ProfileInputAcquisitionOutcome.CACHED
+    assert cached.ratings_source.cache_lookup_outcome is ProfileInputCacheOutcome.FRESH
+    assert cached.ratings_source.source_version == acquired.ratings_source.source_version
+    assert card_fetcher.calls == [("TST", 17)]
+    assert ratings_fetcher.calls == [("TST", "quickdraft", NOW, 19)]
+
+
+def test_offline_profile_acquisition_reuses_verified_ratings(tmp_path: Path) -> None:
+    clock = FrozenClock()
+    cache = _cache(tmp_path, clock=clock)
+    card_fetcher = StubCardDatabaseFetcher(_database())
+    ratings_fetcher = StubRatingsFetcher(_ratings())
+    card_adapter = _adapter(card_fetcher)
+    ratings_adapter = _ratings_adapter(ratings_fetcher)
+    _acquire_profile(
+        cache=cache,
+        card_adapter=card_adapter,
+        ratings_adapter=ratings_adapter,
+        clock=clock,
+    )
+    card_fetcher.error = RuntimeError("network must not be called")
+    ratings_fetcher.error = RuntimeError("network must not be called")
+
+    result = _acquire_profile(
+        cache=cache,
+        card_adapter=card_adapter,
+        ratings_adapter=ratings_adapter,
+        clock=clock,
+        offline=True,
+    )
+
+    assert result.succeeded
+    assert result.source.outcome is ProfileInputAcquisitionOutcome.OFFLINE_REUSED
+    assert result.ratings_source is not None
+    assert result.ratings_source.outcome is ProfileInputAcquisitionOutcome.OFFLINE_REUSED
+    assert result.bundle is not None
+    assert result.bundle.ratings == _ratings()
+    assert card_fetcher.calls == [("TST", 17)]
+    assert ratings_fetcher.calls == [("TST", "quickdraft", NOW, 19)]
+
+
+def test_missing_offline_ratings_preserve_metadata_only_bundle(tmp_path: Path) -> None:
+    clock = FrozenClock()
+    cache = _cache(tmp_path, clock=clock)
+    card_fetcher = StubCardDatabaseFetcher(_database())
+    card_adapter = _adapter(card_fetcher)
+    _acquire(cache=cache, adapter=card_adapter, clock=clock)
+    ratings_fetcher = StubRatingsFetcher(_ratings())
+
+    result = _acquire_profile(
+        cache=cache,
+        card_adapter=card_adapter,
+        ratings_adapter=_ratings_adapter(ratings_fetcher),
+        clock=clock,
+        offline=True,
+    )
+
+    assert result.succeeded
+    assert result.bundle is not None
+    assert result.bundle.ratings is None
+    assert "ratings" not in result.bundle.generator_inputs()
+    assert result.ratings_source is not None
+    assert result.ratings_source.outcome is ProfileInputAcquisitionOutcome.MISSING
+    assert result.ratings_source.rating_rows == 0
+    assert result.ratings_source.rating_samples == 0
+    assert result.skip_reasons == ("17lands-ratings-cache-missing",)
+    assert ratings_fetcher.calls == []
+
+
+def test_stale_ratings_survive_failed_refresh_with_bounded_reason(tmp_path: Path) -> None:
+    clock = FrozenClock()
+    cache = _cache(tmp_path, clock=clock)
+    card_adapter = _adapter(StubCardDatabaseFetcher(_database()))
+    ratings_fetcher = StubRatingsFetcher(_ratings())
+    ratings_adapter = _ratings_adapter(ratings_fetcher)
+    acquired = _acquire_profile(
+        cache=cache,
+        card_adapter=card_adapter,
+        ratings_adapter=ratings_adapter,
+        clock=clock,
+    )
+    clock.value = NOW + timedelta(hours=2)
+    ratings_fetcher.error = RuntimeError("token=secret at /private/ratings")
+
+    result = _acquire_profile(
+        cache=cache,
+        card_adapter=card_adapter,
+        ratings_adapter=ratings_adapter,
+        clock=clock,
+    )
+
+    assert result.succeeded
+    assert result.bundle is not None
+    assert result.bundle.ratings == _ratings()
+    assert result.ratings_source is not None
+    assert result.ratings_source.outcome is ProfileInputAcquisitionOutcome.STALE
+    assert acquired.ratings_source is not None
+    assert result.ratings_source.source_version == acquired.ratings_source.source_version
+    assert result.skip_reasons == ("17lands-ratings-refresh-failed",)
+    serialized = result.to_bytes().decode("utf-8")
+    assert "secret" not in serialized
+    assert "/private/ratings" not in serialized
+
+
+def test_corrupt_ratings_preserve_metadata_bundle_and_report_failed_source(
+    tmp_path: Path,
+) -> None:
+    clock = FrozenClock()
+    cache = _cache(tmp_path, clock=clock)
+    card_adapter = _adapter(StubCardDatabaseFetcher(_database()))
+    ratings_fetcher = StubRatingsFetcher(_ratings())
+    ratings_adapter = _ratings_adapter(ratings_fetcher)
+    _acquire_profile(
+        cache=cache,
+        card_adapter=card_adapter,
+        ratings_adapter=ratings_adapter,
+        clock=clock,
+    )
+    lookup = cache.lookup(source=ratings_adapter.source_for(environment=_environment()))
+    assert lookup.content_path is not None
+    lookup.content_path.write_bytes(b"corrupt")
+    ratings_fetcher.error = RuntimeError(f"credential at {tmp_path}")
+
+    result = _acquire_profile(
+        cache=cache,
+        card_adapter=card_adapter,
+        ratings_adapter=ratings_adapter,
+        clock=clock,
+    )
+
+    assert result.succeeded
+    assert result.bundle is not None
+    assert result.bundle.ratings is None
+    assert result.ratings_source is not None
+    assert result.ratings_source.source.name == "17lands-ratings"
+    assert result.ratings_source.outcome is ProfileInputAcquisitionOutcome.CORRUPT
+    assert result.skip_reasons == ("17lands-ratings-cache-corrupt",)
+    serialized = result.to_bytes().decode("utf-8")
+    assert str(tmp_path) not in serialized
+    assert "credential" not in serialized
+    assert "Requested Card" not in serialized
+
+
+def test_mismatched_ratings_preserve_metadata_bundle_as_unavailable(tmp_path: Path) -> None:
+    clock = FrozenClock()
+    ratings_fetcher = StubRatingsFetcher(replace(_ratings(), event_format="PremierDraft"))
+    result = _acquire_profile(
+        cache=_cache(tmp_path, clock=clock),
+        card_adapter=_adapter(StubCardDatabaseFetcher(_database())),
+        ratings_adapter=_ratings_adapter(ratings_fetcher),
+        clock=clock,
+    )
+
+    assert result.succeeded
+    assert result.bundle is not None
+    assert result.bundle.ratings is None
+    assert result.ratings_source is not None
+    assert result.ratings_source.outcome is ProfileInputAcquisitionOutcome.UNAVAILABLE
+    assert result.ratings_source.source_version is None
+    assert result.ratings_source.rating_rows == 0
+    assert result.ratings_source.rating_samples == 0
+    assert result.skip_reasons == ("17lands-ratings-unavailable",)

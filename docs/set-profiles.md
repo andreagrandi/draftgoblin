@@ -357,11 +357,43 @@ corrupt content, an unavailable source, or a cache failure returns a result
 without a bundle and with a bounded outcome; freshly fetched bytes never bypass
 the cache when publication fails.
 
-This boundary supplies only the metadata needed for a metadata-only profile
-build. It does not acquire 17Lands ratings or public-draft evidence, select an
-early or mature stage, execute a refresh plan, publish artifacts, add a CLI, or
-change the runtime card database. Those empirical acquisition and partial-source
-behaviors remain in #293.
+`acquire_card_metadata_bundle` supplies only the metadata needed for a
+metadata-only profile build. It does not acquire empirical evidence, select a
+generation stage, execute a refresh plan, publish artifacts, add a CLI, or
+change the runtime card database.
+
+## Optional 17Lands ratings profile inputs
+
+`acquire_profile_build_bundle` composes the required metadata acquisition with
+an optional format-scoped `SeventeenLandsRatingsAdapter`. The default adapter
+uses the existing normalized `SeventeenLandsFormatData` contract, validates it
+for the planned set and event format, and stores canonical JSON through the
+same bounded profile-input cache.
+
+```python
+from draftomen.profile_input_acquisition import acquire_profile_build_bundle
+
+result = acquire_profile_build_bundle(
+    environment=planned_environment,
+    cache=cache,
+    offline=False,
+)
+if result.bundle is not None:
+    generator_inputs = result.bundle.generator_inputs()
+```
+
+Ratings cache identities include both set and event format. Source reports
+record the normalized rating-row count and the sum of games-in-hand samples,
+along with source version, UTC acquisition timestamp, digest, byte count, cache
+outcomes, diagnostics, and skip reasons. They never retain rating rows, card
+names, local paths, credentials, exception text, or secrets.
+
+Fresh ratings are reused without network access. `offline=True` reuses the
+newest verified entry, and a verified stale entry remains usable if its online
+refresh fails. Missing, corrupt, unavailable, or uncacheable ratings produce a
+bounded source outcome while preserving the valid metadata-only bundle. Public
+draft acquisition and three-source partial-failure orchestration remain in
+#296.
 
 ## Plan profile refreshes
 
