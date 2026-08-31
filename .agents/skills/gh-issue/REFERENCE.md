@@ -49,6 +49,11 @@ Size is approximate; never estimate exact LOC in issue content.
   networking/cache/offline behavior, multiple runtime/UI surfaces, or many
   independent requirements.
 
+Only `S` and `M` issues are implementation-ready. `L` and `XL` issues are
+epic-shaped and must be decomposed into native `S`/`M` sub-issues before
+implementation is scheduled (see SKILL.md, "Size and implementation
+readiness").
+
 Use High orchestration risk for security/hostile input, concurrency/locking,
 migrations, cache consistency, networking/offline behavior, public schema/API
 compatibility, complex lifecycle/state transitions, multiple runtime/UI
@@ -68,8 +73,8 @@ tests. Otherwise use Normal. Size and risk are independent.
 
 ## Acceptance Criteria
 
-- [ ] <Observable done condition>
-- [ ] <Observable done condition>
+- [ ] AC1: <Observable done condition>
+- [ ] AC2: <Observable done condition>
 
 ## Implementation classification
 

@@ -26,12 +26,14 @@ Complete this assessment before writing a detailed plan or editing files:
 
 A decomposition warning applies when the ticket:
 
+- is sized `L` or `XL` on the project board (see the `gh-issue` skill's size
+  definitions and implementation-readiness rule);
 - spans more than one major subsystem;
 - combines independently reversible behaviors;
 - combines a reusable backend capability with substantial UI delivery;
 - contains several independent security, lifecycle, or integration concerns;
-- is expected to change more than roughly 15-20 files;
-- is expected to exceed roughly 800-1,000 meaningful changed lines; or
+- is expected to change more than roughly 10 files;
+- is expected to exceed roughly 500 meaningful changed lines; or
 - cannot be understood and reviewed as one coherent outcome.
 
 Any warning requires a decomposition decision before planning. Propose smaller,
@@ -77,10 +79,13 @@ assignment. Before delegation:
   stable narrower ownership exists.
 
 Writing agents must perform targeted reads and start the owned change promptly.
-After roughly 10-15 minutes without a concrete handoff, stop and re-slice. After
-each dependency wave, the parent inspects the diff and runs focused tests before
-starting consumers. After two basic regression loops in one slice, reassign the
-narrow broken contract instead of continuing broad patches.
+Wait for each delegated slice with one full-length wait and judge the returned
+result; never poll in short windows, evaluate interim progress, or steer or
+stop an agent that is still working. Re-slice only after a slice returns
+failed, cancelled, or expired. After each dependency wave, the parent inspects
+the diff and runs focused tests before starting consumers. After two basic
+regression loops in one slice, reassign the narrow broken contract instead of
+continuing broad patches.
 
 ## Stop at Early Scope Drift
 
