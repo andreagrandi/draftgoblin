@@ -319,6 +319,50 @@ deleted-record and deleted-byte counts. Cache mutation methods require a
 single writer process. Atomic replacement protects readers, but this boundary
 does not add inter-process locks, leases, retries, or stale-lock recovery.
 
+## Card metadata profile inputs
+
+`draftomen.profile_input_acquisition` turns one `PlannedEnvironment` into the
+required card-metadata portion of a `ProfileBuildBundle`. The default
+`CardMetadataAdapter` downloads Scryfall's default-card bulk data, retains only
+cards whose set code matches the planned environment, normalizes them through
+the existing `CardDatabase` schema, and stores canonical bytes through
+`ProfileInputCache`. Card metadata is keyed by set rather than event format, so
+one verified set snapshot can serve Quick Draft and Premier Draft profile
+builds.
+
+```python
+from draftomen.profile_input_acquisition import acquire_card_metadata_bundle
+
+result = acquire_card_metadata_bundle(
+    environment=planned_environment,
+    cache=cache,
+    offline=False,
+)
+if result.bundle is not None:
+    generator_inputs = result.bundle.generator_inputs()
+```
+
+The bundle keeps the normalized `CardDatabase` in memory for the existing
+profile generator. Its canonical acquisition report contains only the logical
+source identity, source version, UTC acquisition timestamp, SHA-256, byte and
+card counts, cache lookup/store outcomes, stable diagnostics, and skip reasons.
+It never serializes card rows, image URLs, cache paths, credentials, exception
+text, or secrets.
+
+Fresh verified metadata is reused without a network request. `offline=True`
+uses the newest verified cache entry and never invokes the adapter. A stale but
+verified entry remains usable when an online refresh fails, with explicit
+`stale` and `card-metadata-refresh-failed` reporting. Missing offline metadata,
+corrupt content, an unavailable source, or a cache failure returns a result
+without a bundle and with a bounded outcome; freshly fetched bytes never bypass
+the cache when publication fails.
+
+This boundary supplies only the metadata needed for a metadata-only profile
+build. It does not acquire 17Lands ratings or public-draft evidence, select an
+early or mature stage, execute a refresh plan, publish artifacts, add a CLI, or
+change the runtime card database. Those empirical acquisition and partial-source
+behaviors remain in #293.
+
 ## Plan profile refreshes
 
 `plan-profile-refresh` is a dry-run producer command. It selects environment

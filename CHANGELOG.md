@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Add set-scoped card-metadata acquisition with deterministic source records,
+  bounded cache reuse, stale fallback, and metadata-only profile-build bundles.
+  (#292)
 - Add bounded, content-aware profile-input caching with strict canonical
   records, verified offline reuse, deterministic retention, and privacy-safe
   outcomes. (#288)
