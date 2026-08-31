@@ -67,6 +67,28 @@ See [REFERENCE.md](REFERENCE.md) for classifications, templates, IDs, and API pa
   the native parent-child relationship.
 - Never recommend a model in issue content.
 
+## Size and implementation readiness
+
+Size reflects expected implementation scope, including tests, fixtures, and
+documentation:
+
+- `S`: one focused change; roughly 3 files and 100 meaningful lines or less.
+- `M`: one subsystem outcome; roughly 10 files and 500 meaningful lines or less.
+- `L`: more than one subsystem, or up to roughly 20 files / 1,000 meaningful
+  lines.
+- `XL`: epic-scale; several independently reviewable outcomes.
+
+Only `S` and `M` issues are implementation-ready. Treat `L` and `XL` issues as
+epic-shaped: decompose them into native `S`/`M` sub-issues using the
+`pr-scope-guidance` assessment before implementation is scheduled. Do not
+leave decomposition to be discovered during an implementation run.
+
+Every implementation-ready issue must contain numbered acceptance criteria,
+each stating one observable outcome verifiable by a named test or check.
+Implementation workflows consume these criteria verbatim as their checklist,
+so write them to be checked off individually. Prefer roughly 8 criteria or
+fewer per issue; more is a sign the issue should be split.
+
 ## Execute after approval
 
 ### One issue

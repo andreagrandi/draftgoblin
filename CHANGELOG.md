@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Tighten agent skill guidance: single full-length waits for delegated
+  implementation slices, size-based implementation readiness with board-time
+  epic decomposition, and numbered acceptance-criteria issue templates.
 - Add format-scoped public-draft acquisition with deterministic row reporting,
   verified cache and offline reuse, stale fallback, and independent three-source
   failure handling for profile-build bundles. (#296)
