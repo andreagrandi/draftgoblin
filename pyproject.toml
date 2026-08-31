@@ -86,6 +86,7 @@ files = [
     "draftomen/preferences.py",
     "draftomen/profile_client.py",
     "draftomen/profile_generation.py",
+    "draftomen/profile_input_cache.py",
     "draftomen/profile_manifest.py",
     "draftomen/profile_publication.py",
     "draftomen/profile_statistics.py",

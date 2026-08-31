@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Add bounded, content-aware profile-input caching with strict canonical
+  records, verified offline reuse, deterministic retention, and privacy-safe
+  outcomes. (#288)
 - Add deterministic `plan-profile-refresh` dry runs with explicit Arena
   lifecycle metadata, 17Lands expansion discovery, bounded selections,
   canonical plans, diagnostics, and atomic plan output. (#283)
