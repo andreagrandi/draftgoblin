@@ -250,6 +250,75 @@ Historical-pick modeling, benchmark calibration, promotion gates, and other
 runtime-integration signals proposed in #88 remain outside this profile
 contract.
 
+## Profile input cache foundation
+
+The library-only `draftomen.profile_input_cache` boundary stores immutable
+profile-input bytes without downloading or interpreting them. It is deliberately
+separate from the set-profile artifact cache and has no source adapters,
+network policy, refresh workflow, CLI defaults, migration, or publication
+behavior. A caller supplies a logical `ProfileInputSource`, an explicit
+`source_version`, and a binary stream:
+
+```python
+from datetime import timedelta
+from draftomen.profile_input_cache import (
+    ProfileInputCache,
+    ProfileInputCachePolicy,
+    ProfileInputSource,
+)
+
+cache = ProfileInputCache(
+    ".draftomen/profile-input-cache",
+    policy=ProfileInputCachePolicy(
+        freshness_ttl=timedelta(hours=24),
+        max_entry_bytes=64 * 1024 * 1024,
+        max_total_bytes=256 * 1024 * 1024,
+        max_records=32,
+        max_versions_per_source=2,
+    ),
+)
+```
+
+`ProfileInputSource.name` is a normalized safe logical name. Optional
+`set_code` is normalized to uppercase and `event_format` is case-folded.
+Source identities intentionally cannot carry URLs, local paths, headers, raw
+rows, or other free-form metadata. Records contain only that identity, the
+source version, UTC acquisition time, SHA-256, and byte count. The object is
+stored at `objects/<sha256>.bin`; its canonical sidecar is stored at
+`records/<sha256-of-source-and-version>.json`. SHA-256 verifies integrity and
+pinning, but is not a signature or authenticity mechanism.
+
+The policy fields are all explicit and positive: `freshness_ttl` controls the
+online fresh/stale boundary (`age < freshness_ttl` is fresh and
+`age >= freshness_ttl` is stale); `max_entry_bytes` rejects an oversized
+stream while it is staged; `max_total_bytes` counts each shared content object
+once; `max_records` limits sidecars; and `max_versions_per_source` limits
+retained versions for one source. A new entry is rejected if those bounds
+cannot be met while retaining one verified entry for every source. Staging is
+streamed and temporary, so a transient peak can be one candidate plus existing
+objects; failed staging or publication does not replace the prior valid
+sidecar. Victim cleanup is recoverable: if cleanup fails after the candidate is
+published, the candidate remains within visible bounds and the next cache
+operation reconciles the pending cleanup before returning an existing same-version
+entry.
+
+`lookup(..., source_version=...)` is exact. Without a version it selects the
+newest verified record deterministically by acquisition time, version, and
+digest. Online reads return `fresh` or `stale`; `offline=True` returns a
+verified entry as `offline-reused`. Missing identities return `missing`, while
+malformed metadata, mismatched identity, truncation, checksum failure, and
+pin failure return `corrupt`. An offline latest lookup may skip a corrupt
+newer candidate and reuse the newest older verified entry. Results and
+diagnostics contain no operational paths or input bytes.
+
+`prune()` removes invalid records, orphaned objects, temporary staging files,
+and deterministic oldest superseded entries. `invalidate()` can target one
+version or all versions for a source; it refuses to remove that source's last
+verified offline copy unless `allow_offline_loss=True`. Both return only
+deleted-record and deleted-byte counts. Cache mutation methods require a
+single writer process. Atomic replacement protects readers, but this boundary
+does not add inter-process locks, leases, retries, or stale-lock recovery.
+
 ## Plan profile refreshes
 
 `plan-profile-refresh` is a dry-run producer command. It selects environment
