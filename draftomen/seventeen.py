@@ -4,6 +4,7 @@ Keep network access isolated so CI can exercise recorded responses only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -44,6 +45,7 @@ FetchJson: TypeAlias = Callable[[str, int], Any]
 
 SEVENTEEN_LANDS_ATTRIBUTION = "Card data from 17Lands (17lands.com)"
 SEVENTEEN_LANDS_BASE_URL = "https://www.17lands.com"
+SEVENTEEN_LANDS_EXPANSIONS_ENDPOINT = f"{SEVENTEEN_LANDS_BASE_URL}/data/expansions"
 CARD_RATINGS_ENDPOINT = f"{SEVENTEEN_LANDS_BASE_URL}/api/card_data"
 COLOR_RATINGS_ENDPOINT = f"{SEVENTEEN_LANDS_BASE_URL}/color_ratings/data"
 PUBLIC_DRAFT_DATA_URL_TEMPLATE = (
@@ -106,6 +108,137 @@ class SeventeenLandsCacheOutdatedError(SeventeenLandsError):
     """Raised when a legacy cache predates the current 17Lands data API.
     Live loaders replace it automatically instead of serving incomplete data.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class SeventeenLandsExpansionDiagnostic:
+    """Describe one malformed or duplicate 17Lands expansion entry."""
+
+    reason: str
+    entry: str | None
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class SeventeenLandsExpansionInventory:
+    """Normalized 17Lands expansion inventory with source provenance."""
+
+    expansion_codes: tuple[str, ...]
+    source_url: str
+    source_payload_digest: str
+    diagnostics: tuple[SeventeenLandsExpansionDiagnostic, ...] = ()
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(code, str) for code in self.expansion_codes):
+            raise TypeError("17Lands expansion codes must be strings.")
+        codes = tuple(
+            sorted({code.strip().upper() for code in self.expansion_codes if code.strip()})
+        )
+        if not isinstance(self.source_url, str) or not self.source_url.strip():
+            raise ValueError("17Lands expansion source URL must be non-empty.")
+        if (
+            not isinstance(self.source_payload_digest, str)
+            or not self.source_payload_digest.strip()
+        ):
+            raise ValueError("17Lands expansion source payload digest must be non-empty.")
+        if any(
+            not isinstance(item, SeventeenLandsExpansionDiagnostic)
+            for item in self.diagnostics
+        ):
+            raise TypeError("17Lands expansion diagnostics must be typed diagnostics.")
+        object.__setattr__(self, "expansion_codes", codes)
+        object.__setattr__(
+            self,
+            "diagnostics",
+            tuple(
+                sorted(
+                    self.diagnostics,
+                    key=lambda item: (item.reason, item.entry or "", item.detail),
+                )
+            ),
+        )
+
+
+def parse_17lands_expansion_inventory(
+    payload: Any,
+    *,
+    source_url: str = SEVENTEEN_LANDS_EXPANSIONS_ENDPOINT,
+) -> SeventeenLandsExpansionInventory:
+    """Parse a decoded ``/data/expansions`` response without network access."""
+
+    if not isinstance(payload, list):
+        raise SeventeenLandsError("Malformed 17Lands expansions response; expected a JSON list.")
+
+    canonical_entries = tuple(
+        sorted(
+            json.dumps(
+                entry,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            for entry in payload
+        )
+    )
+    canonical_payload = json.dumps(
+        canonical_entries,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    payload_digest = hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
+
+    codes: set[str] = set()
+    diagnostics: list[SeventeenLandsExpansionDiagnostic] = []
+    for entry in payload:
+        if not isinstance(entry, str):
+            diagnostics.append(
+                SeventeenLandsExpansionDiagnostic(
+                    reason="malformed-entry",
+                    entry=None,
+                    detail=f"expected a non-empty string, got {type(entry).__name__}",
+                )
+            )
+            continue
+        code = entry.strip().upper()
+        if not code:
+            diagnostics.append(
+                SeventeenLandsExpansionDiagnostic(
+                    reason="malformed-entry",
+                    entry=entry,
+                    detail="expected a non-empty string",
+                )
+            )
+            continue
+        if code in codes:
+            diagnostics.append(
+                SeventeenLandsExpansionDiagnostic(
+                    reason="duplicate-entry",
+                    entry=code,
+                    detail="normalized expansion code already present",
+                )
+            )
+            continue
+        codes.add(code)
+
+    return SeventeenLandsExpansionInventory(
+        expansion_codes=tuple(codes),
+        source_url=source_url,
+        source_payload_digest=payload_digest,
+        diagnostics=tuple(diagnostics),
+    )
+
+
+def fetch_17lands_expansion_inventory(
+    *,
+    fetch_json: FetchJson | None = None,
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+) -> SeventeenLandsExpansionInventory:
+    """Fetch and parse the authoritative 17Lands expansion inventory."""
+
+    json_fetcher = _default_fetch_json if fetch_json is None else fetch_json
+    payload = json_fetcher(SEVENTEEN_LANDS_EXPANSIONS_ENDPOINT, timeout_seconds)
+    return parse_17lands_expansion_inventory(payload)
 
 
 @dataclass(frozen=True, slots=True)

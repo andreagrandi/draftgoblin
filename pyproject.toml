@@ -94,6 +94,7 @@ files = [
     "draftomen/qt_gui.py",
     "draftomen/qt_mock.py",
     "draftomen/ranking.py",
+    "draftomen/refresh_plan.py",
     "draftomen/replay.py",
     "draftomen/semantic_roles.py",
     "draftomen/session.py",

@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Add deterministic `plan-profile-refresh` dry runs with explicit Arena
+  lifecycle metadata, 17Lands expansion discovery, bounded selections,
+  canonical plans, diagnostics, and atomic plan output. (#283)
 - Reduce GitHub issue and project API usage with centralized authenticated I/O,
   explicit call budgets, batched ProjectV2 mutations, and single-pass
   verification.

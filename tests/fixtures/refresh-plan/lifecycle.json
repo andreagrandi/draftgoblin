@@ -1,0 +1,8 @@
+{
+  "provider": "Arena schedule",
+  "source_url": "https://schedule.example.test/arena.json",
+  "version": "2026-08-30",
+  "active": ["NEW"],
+  "mature": ["MATURE"],
+  "historical": ["OLD"]
+}

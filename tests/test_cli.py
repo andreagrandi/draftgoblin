@@ -45,6 +45,8 @@ PROFILE_GENERATION_FIXTURE_DIR = (
     Path(__file__).parent / "fixtures" / "profile-generation"
 )
 CLI_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+REFRESH_PLAN_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "refresh-plan"
 PROFILE_GENERATION_AT = "2026-08-30T12:00:00+00:00"
 
 
@@ -1216,3 +1218,235 @@ def test_generate_profile_cli_rejects_invalid_timestamp_as_argparse_error(
     assert expected_error in completed.stderr
     assert not completed.stderr.startswith("generate-profile:")
 
+
+def test_plan_profile_refresh_cli_dry_run_prints_canonical_plan_without_profiles(
+    tmp_path: Path,
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "draftomen.cli",
+            "plan-profile-refresh",
+            "--set-code",
+            "new",
+            "--event-format",
+            "PremierDraft",
+            "--inventory-file",
+            str(REFRESH_PLAN_FIXTURE_DIR / "expansions.json"),
+            "--lifecycle-file",
+            str(REFRESH_PLAN_FIXTURE_DIR / "lifecycle.json"),
+            "--dry-run",
+        ],
+        cwd=CLI_REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    parsed = json.loads(completed.stdout)
+    assert parsed["selection"] == {"mode": "manual", "set_code": "NEW"}
+    assert parsed["event_format"] == "premierdraft"
+    assert parsed["environments"] == [
+        {
+            "event_format": "premierdraft",
+            "lifecycle": "active",
+            "reasons": ["manual"],
+            "set_code": "NEW",
+        }
+    ]
+    assert completed.stdout.endswith("\n")
+    assert parsed["inventory"]["source_url"] == "https://www.17lands.com/data/expansions"
+    assert str(REFRESH_PLAN_FIXTURE_DIR) not in completed.stdout
+    assert "file://" not in completed.stdout
+    assert parsed["lifecycle"]["source_url"] == "https://schedule.example.test/arena.json"
+    assert (
+        "inventory:duplicate-entry:entry=NEW:normalized expansion code already present"
+        in parsed["diagnostics"]
+    )
+    assert "inventory:malformed-entry:entry=:expected a non-empty string" in parsed["diagnostics"]
+    assert not list(tmp_path.glob("**/*profile*"))
+
+
+def test_plan_profile_refresh_cli_output_plan_writes_without_printing(
+    tmp_path: Path,
+) -> None:
+    output_plan = tmp_path / "refresh-plan.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "draftomen.cli",
+            "plan-profile-refresh",
+            "--set-code",
+            "new",
+            "--event-format",
+            "PremierDraft",
+            "--inventory-file",
+            str(REFRESH_PLAN_FIXTURE_DIR / "expansions.json"),
+            "--lifecycle-file",
+            str(REFRESH_PLAN_FIXTURE_DIR / "lifecycle.json"),
+            "--output-plan",
+            str(output_plan),
+        ],
+        cwd=CLI_REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+    assert json.loads(output_plan.read_text(encoding="utf-8"))["selection"] == {
+        "mode": "manual",
+        "set_code": "NEW",
+    }
+    assert output_plan.read_text(encoding="utf-8").endswith("\n")
+    assert not list(tmp_path.glob("**/*profile*"))
+
+
+def test_plan_profile_refresh_cli_requires_exactly_one_output_mode() -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "plan-profile-refresh",
+                "--set-code",
+                "TST",
+                "--event-format",
+                "QuickDraft",
+            ]
+        )
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "plan-profile-refresh",
+                "--set-code",
+                "TST",
+                "--event-format",
+                "QuickDraft",
+                "--dry-run",
+                "--output-plan",
+                "plan.json",
+            ]
+        )
+
+
+def test_plan_profile_refresh_cli_rejects_empty_automatic_selection(tmp_path: Path) -> None:
+    lifecycle_file = tmp_path / "lifecycle.json"
+    lifecycle_file.write_text(
+        json.dumps(
+            {
+                "provider": "Arena schedule",
+                "source_url": "https://schedule.example.test/arena.json",
+                "version": "2026-08-30",
+            }
+        ),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "draftomen.cli",
+            "plan-profile-refresh",
+            "--active",
+            "--event-format",
+            "QuickDraft",
+            "--inventory-file",
+            str(REFRESH_PLAN_FIXTURE_DIR / "expansions.json"),
+            "--lifecycle-file",
+            str(lifecycle_file),
+            "--dry-run",
+        ],
+        cwd=CLI_REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert "active selection matched no environments" in completed.stderr
+
+
+
+def test_plan_profile_refresh_cli_rejects_unknown_manual_selection() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "draftomen.cli",
+            "plan-profile-refresh",
+            "--set-code",
+            "NOT-IN-17LANDS",
+            "--event-format",
+            "QuickDraft",
+            "--inventory-file",
+            str(REFRESH_PLAN_FIXTURE_DIR / "expansions.json"),
+            "--lifecycle-file",
+            str(REFRESH_PLAN_FIXTURE_DIR / "lifecycle.json"),
+            "--dry-run",
+        ],
+        cwd=CLI_REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert "NOT-IN-17LANDS" in completed.stderr
+    assert "not present in the 17Lands inventory" in completed.stderr
+
+
+def test_plan_profile_refresh_cli_requires_one_selection_and_event_format() -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["plan-profile-refresh", "--event-format", "QuickDraft", "--dry-run"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["plan-profile-refresh", "--active", "--dry-run"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["plan-profile-refresh", "--active", "--event-format", "QuickDraft", "--set-code", "TST", "--dry-run"]
+        )
+
+
+
+@pytest.mark.parametrize("lifecycle_url", ["", "not-a-url"])
+def test_plan_profile_refresh_cli_rejects_malformed_lifecycle_url_without_traceback(
+    lifecycle_url: str,
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "draftomen.cli",
+            "plan-profile-refresh",
+            "--set-code",
+            "NEW",
+            "--event-format",
+            "PremierDraft",
+            "--inventory-file",
+            str(REFRESH_PLAN_FIXTURE_DIR / "expansions.json"),
+            "--lifecycle-url",
+            lifecycle_url,
+            "--dry-run",
+        ],
+        cwd=CLI_REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert "Traceback" not in completed.stderr
+    assert completed.stderr.strip() == (
+        "plan-profile-refresh: lifecycle URL must be an absolute URL"
+    )
