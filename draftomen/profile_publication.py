@@ -9,14 +9,14 @@ the authoritative generation marker.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 import gzip
 import hashlib
 import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Mapping, TypeAlias
+from typing import Iterable, Mapping, TypeAlias
 import zlib
 
 from draftomen.carddb import CardDatabaseError, load_card_database
@@ -29,6 +29,11 @@ from draftomen.profile_generation import (
     ProfileGenerationStage,
     generate_set_profile,
 )
+from draftomen.profile_manifest import (
+    ProfileManifest,
+    ProfileManifestArtifact,
+    ProfileManifestError,
+)
 from draftomen.public_dump import (
     PublicDumpChecksumError,
     PublicDumpError,
@@ -37,7 +42,7 @@ from draftomen.public_dump import (
     load_public_dump_manifest,
 )
 from draftomen.seventeen import SeventeenLandsError, load_17lands_format_data
-from draftomen.set_profile import SetProfile, SetProfileError
+from draftomen.set_profile import ProfileMaturity, SetProfile, SetProfileError
 
 
 PathInput: TypeAlias = str | os.PathLike[str]
@@ -120,6 +125,105 @@ class ProfilePublicationResult:
         """Return the outcome for a result that passed publication validation."""
 
         return "passed"
+
+
+def profile_manifest_artifact_from_publication(
+    result: ProfilePublicationResult,
+    artifact_url: str,
+) -> ProfileManifestArtifact:
+    """Convert one validated local publication into a remote manifest artifact."""
+
+    if not isinstance(result, ProfilePublicationResult):
+        raise ProfilePublicationError("result must be a ProfilePublicationResult.")
+    generation = result.generation
+    try:
+        profile = generation.profile
+        report = generation.report
+        if not isinstance(report, ProfileGenerationReport):
+            raise ProfilePublicationError("publication result contains an invalid generation report.")
+        _validate_generation(
+            generation=generation,
+            set_code=profile.set_code,
+            event_format=profile.event_format,
+            stage=report.stage,
+        )
+        expected_maturity = {
+            ProfileGenerationStage.METADATA.value: ProfileMaturity.METADATA_ONLY,
+            ProfileGenerationStage.EARLY.value: ProfileMaturity.EARLY,
+            ProfileGenerationStage.MATURE.value: ProfileMaturity.MATURE,
+        }.get(report.stage)
+        if expected_maturity is None or profile.maturity is not expected_maturity:
+            raise ProfilePublicationError(
+                "Generation report stage and profile maturity do not reconcile."
+            )
+        if report.generated_at != profile.generated_at:
+            raise ProfilePublicationError(
+                "Generation report timestamp and profile timestamp do not reconcile."
+            )
+        return ProfileManifestArtifact(
+            set_code=report.set_code,
+            event_format=report.event_format,
+            set_profile_schema_version=report.set_profile_schema_version,
+            profile_version=profile.profile_version,
+            generated_at=report.generated_at,
+            url=artifact_url,
+            gzip_bytes=report.gzip_bytes,
+            profile_bytes=report.profile_bytes,
+            gzip_sha256=report.gzip_sha256,
+            profile_sha256=report.profile_sha256,
+            maturity=profile.maturity,
+        )
+    except ProfilePublicationError:
+        raise
+    except (
+        AttributeError,
+        ProfileManifestError,
+        TypeError,
+        ValueError,
+        UnicodeError,
+        RecursionError,
+    ) as error:
+        raise ProfilePublicationError(
+            "Could not convert the profile publication to a manifest artifact."
+        ) from error
+
+
+def build_profile_manifest(
+    artifacts: Iterable[ProfileManifestArtifact],
+    *,
+    published_at: str | datetime,
+) -> ProfileManifest:
+    """Build a deterministic aggregate manifest from validated artifacts."""
+
+    try:
+        timestamp = (
+            published_at.astimezone(UTC).isoformat()
+            if isinstance(published_at, datetime)
+            else published_at
+        )
+        if isinstance(published_at, datetime) and published_at.tzinfo is None:
+            raise ProfilePublicationError("published_at must include a timezone.")
+        return ProfileManifest(artifacts=tuple(artifacts), published_at=timestamp)
+    except ProfilePublicationError:
+        raise
+    except (ProfileManifestError, TypeError, ValueError, UnicodeError, RecursionError) as error:
+        raise ProfilePublicationError("Could not build the profile manifest.") from error
+
+
+def publish_profile_manifest(path: PathInput, manifest: ProfileManifest) -> Path:
+    """Atomically publish one canonical aggregate profile manifest."""
+
+    if not isinstance(manifest, ProfileManifest):
+        raise ProfilePublicationError("manifest must be a ProfileManifest.")
+    output = _path(value=path, field_name="profile_manifest_path")
+    try:
+        payload = manifest.to_bytes()
+        _atomic_write(path=output, payload=payload)
+    except ProfilePublicationError:
+        raise
+    except (ProfileManifestError, OSError, TypeError, ValueError, UnicodeError) as error:
+        raise ProfilePublicationError("Could not publish the profile manifest.") from error
+    return output
 
 
 # Keep the public signature explicit: callers must opt into every input source.
@@ -512,6 +616,9 @@ def _atomic_write(*, path: Path, payload: bytes) -> None:
 __all__ = [
     "ProfilePublicationError",
     "ProfilePublicationResult",
+    "build_profile_manifest",
     "generate_local_profile_artifacts",
+    "profile_manifest_artifact_from_publication",
+    "publish_profile_manifest",
 ]
 

@@ -36,6 +36,11 @@ from draftomen.set_profile import (
     SetProfileError,
     load_scoring_profile,
 )
+from draftomen.profile_client import (
+    ProfileClient,
+    ProfileClientError,
+    ProfileNetworkPolicy,
+)
 from draftomen.profile_publication import (
     ProfilePublicationError,
     generate_local_profile_artifacts,
@@ -178,6 +183,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=argparse.SUPPRESS,
+    )
+    watch_parser.add_argument(
+        "--profile-manifest-url",
+        default=None,
+        help=(
+            "Opt in to live set-profile refreshes from this manifest URL. "
+            "Without this option, live scoring remains offline."
+        ),
     )
     watch_parser.set_defaults(handler=handle_watch)
 
@@ -532,6 +545,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     structure_parser.set_defaults(handler=handle_refresh_structure_targets)
 
+    refresh_profile_parser = subparsers.add_parser(
+        name="refresh-profile",
+        help="Refresh one set profile from a published manifest.",
+        description=(
+            "Fetch and validate one published set profile, retaining any "
+            "last-good local cache when the remote refresh fails."
+        ),
+    )
+    refresh_profile_parser.add_argument(
+        "--set-code",
+        required=True,
+        help="Set code for the profile to refresh.",
+    )
+    refresh_profile_parser.add_argument(
+        "--format",
+        required=True,
+        help="Event format for the profile to refresh.",
+    )
+    refresh_profile_parser.add_argument(
+        "--manifest-url",
+        required=True,
+        help="Published profile manifest URL.",
+    )
+    refresh_profile_parser.add_argument(
+        "--app-dir",
+        type=Path,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    refresh_profile_parser.set_defaults(handler=handle_refresh_profile)
+
     profile_parser = subparsers.add_parser(
         name="generate-profile",
         help="Generate and publish a validated local set profile.",
@@ -655,6 +699,35 @@ def handle_generate_profile(args: argparse.Namespace) -> int:
     print(f"artifact={result.artifact_path}")
     print(f"generation_manifest={result.manifest_path}")
     return 0
+def handle_refresh_profile(args: argparse.Namespace) -> int:
+    """Refresh one published profile while retaining any usable cache."""
+
+    try:
+        client = ProfileClient(
+            app_dir=args.app_dir,
+            manifest_url=args.manifest_url,
+            network_policy=ProfileNetworkPolicy.ALLOWED,
+        )
+        result = client.refresh(
+            args.set_code,
+            args.format,
+            network_policy=ProfileNetworkPolicy.ALLOWED,
+        )
+    except Exception as error:
+        print(f"refresh-profile: {error}", file=sys.stderr)
+        return 1
+
+    cache_path = client.profile_path(args.set_code, args.format)
+    print(
+        "refresh-profile: "
+        f"set_code={result.profile.set_code} "
+        f"format={result.profile.event_format} "
+        f"maturity={result.maturity.value} "
+        f"outcome={result.status} "
+        f"cache_path={cache_path}"
+    )
+    return 0 if result.maturity.value != "generic" else 1
+
 
 
 def format_version() -> str:
@@ -681,6 +754,15 @@ def handle_watch(args: argparse.Namespace) -> int:
         return 2
 
     try:
+        profile_client = (
+            None
+            if args.profile_manifest_url is None
+            else ProfileClient(
+                app_dir=args.app_dir,
+                manifest_url=args.profile_manifest_url,
+                network_policy=ProfileNetworkPolicy.ALLOWED,
+            )
+        )
         if args.plain:
             database = _load_watch_card_database(args=args)
             ratings_loader = metadata_augmenting_ratings_loader(
@@ -703,6 +785,7 @@ def handle_watch(args: argparse.Namespace) -> int:
                 splash_enabled=(
                     True if args.splash_enabled is None else args.splash_enabled
                 ),
+                profile_client=profile_client,
             )
 
         def load_ratings(
@@ -739,6 +822,7 @@ def handle_watch(args: argparse.Namespace) -> int:
             ),
             mana_icons_enabled=args.mana_icons,
             splash_enabled=args.splash_enabled,
+            profile_client=profile_client,
         )
     except KeyboardInterrupt:
         return 130
@@ -749,10 +833,12 @@ def handle_watch(args: argparse.Namespace) -> int:
         DraftLogParseError,
         DraftPoolError,
         LogFollowError,
+        ProfileClientError,
         SeventeenLandsError,
     ) as error:
         print(f"watch failed: {error}", file=sys.stderr)
         return 1
+
 
 
 def _load_watch_card_database(*, args: argparse.Namespace) -> CardDatabase:

@@ -15,6 +15,7 @@ from draftomen.session import (
     RequestBuild,
     RequestRatingsDownload,
     RetryError,
+    SetProfileState,
 )
 
 
@@ -22,6 +23,16 @@ def test_ready_mock_snapshot_covers_every_desktop_data_surface() -> None:
     snapshot = MockLiveSession().snapshot
 
     assert snapshot.status.phase == ApplicationPhase.DRAFTING
+    assert snapshot.set_profile == SetProfileState(
+        set_code="OTJ",
+        event_format="QuickDraft",
+        maturity="mature",
+        profile_version="mock-1",
+        source="mock",
+        phase=DataLoadPhase.READY,
+        refresh_outcome="unchanged",
+        message="Mock Quick Draft set profile is current.",
+    )
     assert snapshot.ratings.last_successful_update == (
         "2026-08-23T12:00:00+00:00"
     )

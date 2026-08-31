@@ -33,6 +33,7 @@ from draftomen.qt_adapter import (
 )
 from draftomen.qt_mock import MockSessionAdapter
 from draftomen.session import LiveSession, SnapshotPublisher
+from draftomen.profile_client import ProfileClient
 from draftomen.seventeen import (
     DownloadProgressCallback,
     SeventeenLandsData,
@@ -109,6 +110,11 @@ def _parser(*, forced_provider: ProviderName | None = None) -> argparse.Argument
         default=None,
         help="Use a local Scryfall JSONL card database in live mode.",
     )
+    parser.add_argument(
+        "--profile-manifest-url",
+        default=None,
+        help="Opt in to refreshing set profiles from this HTTPS manifest URL.",
+    )
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.set_defaults(startup_scan=True)
     parser.add_argument(
@@ -141,7 +147,14 @@ def _live_session_factory(
     app_dir: Path | None,
     bulk_file: Path | None,
     poll_interval: float,
+    profile_manifest_url: str | None = None,
+    profile_client: ProfileClient | None = None,
 ) -> SessionFactory:
+    if profile_client is None and profile_manifest_url is not None:
+        profile_client = ProfileClient(
+            app_dir=app_dir,
+            manifest_url=profile_manifest_url,
+        )
     def load_card_database() -> CardDatabase:
         if bulk_file is not None:
             return build_card_database_from_bulk_file(path=bulk_file)
@@ -165,6 +178,7 @@ def _live_session_factory(
             log_path=resolve_player_log_path(log_path=log_path),
             card_database_loader=load_card_database,
             app_dir=app_dir,
+            profile_client=profile_client,
             poll_interval=poll_interval,
             snapshot_publisher=publish,
             ratings_progress_loader_factory=lambda database: (
@@ -198,13 +212,25 @@ def _build_provider(*, args: argparse.Namespace) -> SessionAdapter:
         )
     if args.poll_interval <= 0:
         raise ValueError("--poll-interval must be greater than zero.")
+    profile_manifest_url = getattr(args, "profile_manifest_url", None)
+    profile_client = (
+        None
+        if profile_manifest_url is None
+        else ProfileClient(
+            app_dir=args.app_dir,
+            manifest_url=profile_manifest_url,
+        )
+    )
     return LiveSessionAdapter(
         session_factory=_live_session_factory(
             log_path=args.log_path,
             app_dir=args.app_dir,
             bulk_file=args.bulk_file,
             poll_interval=args.poll_interval,
+            profile_manifest_url=profile_manifest_url,
+            profile_client=profile_client,
         ),
+        profile_client=profile_client,
         poll_interval_ms=max(1, round(args.poll_interval * 1000)),
         startup_scan=args.startup_scan,
     )

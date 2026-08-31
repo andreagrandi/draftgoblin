@@ -1,15 +1,22 @@
 # Set profiles
 
-A set profile is an optional, local artifact containing evidence for one set and
-one Limited event format. The profile boundary is in `draftomen.set_profile`.
-It is separate from the card database and 17Lands cache formats; those existing
-cache files are not migrated or rewritten by profile loading.
+A set profile is an immutable, versioned artifact containing evidence for one
+set and one Limited event format. The profile boundary is in
+`draftomen.set_profile`. It is separate from the card database and 17Lands
+cache formats; those existing cache files are not migrated or rewritten by
+profile loading.
 
-## Generate local artifacts
+The producer workflow is explicit and reproducible: it reads caller-selected
+local inputs, writes a validated compressed artifact plus a generation marker,
+and can turn those outputs into a remote manifest record. The client workflow
+is offline-first and network-optional; no profile host or production manifest
+is bundled with Draft Omen.
 
-`generate-profile` is the operator-facing, local-only workflow for producing a
-profile artifact. It never downloads a card database, ratings, or draft dump.
-Run it through the installed terminal entry point:
+## Generate producer artifacts
+
+`generate-profile` is the producer-side workflow for generating a profile from
+local inputs. It never downloads a card database, ratings, or draft dump. Run
+it through the installed terminal entry point:
 
 ```sh
 uv run draftomen-tui generate-profile \
@@ -200,6 +207,30 @@ generation_manifest=<generation-json-path>
 The count values are aggregates from the generation report; the paths point to
 the two local publication outputs described above.
 
+### Producer API for a remote manifest
+
+The producer APIs are explicit about the handoff from local generation to
+remote publication:
+
+1. `generate_local_profile_artifacts(...)` returns a validated
+   `ProfilePublicationResult` containing the compressed artifact, generation
+   report, and aggregate counts.
+2. `profile_manifest_artifact_from_publication(result, artifact_url)` validates
+   that result and converts it to one `ProfileManifestArtifact`. The supplied
+   URL is the location where the producer will serve that exact compressed
+   artifact.
+3. `build_profile_manifest(artifacts, published_at=...)` builds the canonical
+   `ProfileManifest` for one or more set/format artifacts.
+4. `publish_profile_manifest(path, manifest)` writes the canonical manifest
+   atomically. `load_profile_manifest(path)` and `dump_profile_manifest(...)`
+   provide strict local manifest I/O.
+
+Remote publication is intentionally a separate operator/deployment concern.
+Draft Omen does not ship a hosted endpoint, upload job, schedule, signing
+workflow, or production manifest URL. Issue #227 owns hosting and publication
+automation; a producer must arrange serving the manifest and the exact
+artifact URLs before clients can refresh.
+
 ### Provenance and legal responsibility
 
 The source manifest is part of the reproducible input record. The generation
@@ -215,10 +246,9 @@ without inventing them. A report's provenance fields are documentation, not a
 license grant. The workflow emits compact aggregate/profile artifacts; it does
 not publish the source dump or redistribute raw rows.
 
-This issue does not implement remote publication scheduling (#227) or client
-download behavior (#226). It also does not implement the historical-pick model,
-benchmark, promotion-gate, or runtime-integration signals proposed in #88;
-those remain deferred work.
+Historical-pick modeling, benchmark calibration, promotion gates, and other
+runtime-integration signals proposed in #88 remain outside this profile
+contract.
 
 ## Schema version 1
 
@@ -276,9 +306,42 @@ records, so equivalent profiles have stable bytes. The domain graph consists of
 frozen dataclasses and tuples; parsed JSON is not retained as mutable
 dictionaries or lists.
 
-## Lifecycle and local loading
+## Remote manifest schema version 1
 
-Profile files are local only. The default path is:
+The producer manifest is a canonical JSON object with exactly these top-level
+fields:
+
+- `schema_version`: exactly `1`.
+- `published_at`: a timezone-aware ISO-8601 publication timestamp.
+- `artifacts`: a non-empty array with at most one artifact for each normalized
+  `set_code` and `format` pair.
+
+Each `artifacts` item has exactly these fields:
+
+- `set_code` and `format`: non-empty, case-folded safe path components.
+- `set_profile_schema_version`: exactly the supported set-profile schema (`1`).
+- `profile_version`: a non-empty producer version.
+- `generated_at`: a timezone-aware ISO-8601 timestamp.
+- `url`: an absolute HTTPS URL for the compressed profile artifact.
+- `gzip_bytes` and `profile_bytes`: positive integer compressed and
+  decompressed sizes.
+- `gzip_sha256` and `profile_sha256`: 64-hex-character SHA-256 digests of
+  the exact compressed and decompressed bytes.
+- `maturity`: `mature`, `early`, `semantic-only`, or `metadata-only`;
+  `generic` is never a downloadable manifest artifact.
+
+Unknown fields, duplicate set/format identities, future schema versions,
+invalid timestamps, unsafe path components, bad sizes/digests, and non-HTTPS
+URLs are rejected. Manifest and profile serialization is canonical (sorted
+keys and records with a final newline), so equivalent values have stable
+bytes. `ProfileManifest.from_json()` and `load_profile_manifest()` perform
+strict validation; `ProfileManifest.select(set_code=..., event_format=...)`
+only returns an exact normalized identity.
+
+## Lifecycle, cache, and refresh
+
+Profile use is local-first and network-optional. The authoritative profile
+cache is always the flat path:
 
 ```text
 <app-data>/set-profiles/<set-code>-<format>.json
@@ -286,25 +349,124 @@ Profile files are local only. The default path is:
 
 Here `<app-data>` means the directory returned by `app_data_dir()` (normally
 `~/.draftomen`); `set_profile_path()` does not append `.draftomen` a second
-time.
+time. The client keeps a separate validated manifest envelope at
+`<app-data>/set-profiles/v1/manifest.json`; that file is only a manifest
+validation/TTL cache, not a profile source. Downloaded profiles are stored as
+canonical, uncompressed JSON at the flat path.
 
-Use `load_set_profile(path)` when a caller needs strict failure. Use
-`safe_load_set_profile(set_code, event_format, ...)` at a live boundary. A safe
-load never returns JSON and always returns one `SetProfileLoadResult`:
+`ProfileClient(app_dir=..., manifest_url=..., network_policy=...)` is the
+public client boundary. `ProfileNetworkPolicy.OFFLINE` forbids network access;
+`ProfileNetworkPolicy.ALLOWED` permits it only when a manifest URL is
+configured. `load_cached(set_code, event_format)` performs local I/O only and
+never constructs a request. `refresh(set_code, event_format, force=False,
+network_policy=...)` returns a `ProfileRefreshResult` containing the usable
+profile, optional diagnostics/manifest, and a compact `status`.
 
-1. choose the valid local `mature` profile;
-2. otherwise choose a valid local `early` profile;
-3. otherwise choose a valid local `semantic-only` profile;
-4. otherwise choose a valid local `metadata-only` profile;
-5. otherwise use a supplied `last_valid_profile` only if its set and format both
-   match the requested target;
-6. otherwise return a zero-confidence immutable `generic` profile for exactly the
-   requested set and format.
+For ordinary candidate loading, `safe_load_set_profile(...)` never raises for
+missing, corrupt, future-schema, malformed, or wrong-target candidates. Its
+deterministic fallback hierarchy is mature, then early, semantic-only, and
+metadata-only (the evidence-backed shorthand is mature → semantic/early →
+generic), then a supplied `last_valid_profile` whose set and format match, and
+finally a zero-confidence generic profile for exactly the requested target.
+`load_scoring_profile(...)` returns `None` instead of exposing that generic
+fallback to scoring.
 
-Missing, corrupt, future-schema, malformed, and wrong-target candidates become
-diagnostics instead of exceptions. Candidate directories may be supplied for
-fixture or application-specific discovery, but selection remains maturity-first
-and deterministic. No remote fetch is attempted.
+`ProfileClient.load_cached()` first uses a valid non-generic flat profile. If
+that destination is missing, corrupt, future-schema, wrong-target, or generic,
+it checks historical locations from earlier versions:
+
+```text
+<app-data>/profiles/<set>-<format>.json
+<app-data>/set-profiles/v1/profiles/<set>-<format>.json
+<app-data>/set-profiles/v1/<set>-<format>.json
+```
+
+A valid non-generic historical profile is reused offline and, when the flat
+destination is writable, migrated there under the per-profile lock; the
+historical file remains untouched. This preserves profiles across upgrades
+without requiring a remote manifest. Corrupt or future-schema files are
+reported as diagnostics and are not automatically deleted. A refresh failure
+never deletes or replaces the last-good flat profile (or generic fallback); a
+newly fetched valid manifest may still be cached independently before an
+artifact failure is reported.
+
+When networking is allowed, the client reuses a validated manifest for its
+default 24-hour TTL unless `force=True`, then selects the exact normalized
+set/format artifact. It accepts only a newer maturity or timestamp; an
+identical artifact is `unchanged`, while an older, lower-maturity, or
+same-timestamp conflicting artifact is `stale-manifest`. A missing target
+artifact is `missing`. Manifest and artifact failures never replace the
+current profile.
+
+Every remote URL must be absolute HTTPS with no credentials, fragment,
+whitespace, or non-default port. Artifact URLs and redirects must remain on
+the manifest URL's HTTPS origin. The client applies a positive timeout (10
+seconds by default), bounds the manifest to 1 MiB, compressed artifacts to
+64 MiB, and decompressed profiles to 128 MiB. It streams the gzip bytes,
+checks the declared compressed size and SHA-256, rejects incomplete or
+trailing gzip data, checks decompressed size and SHA-256, then validates
+canonical JSON, set-profile schema, set/format identity, profile version,
+maturity, generated timestamp, and schema version before installation.
+
+Staging files are created in the destination directory. A successful commit
+flushes and atomically replaces the flat cache with `os.replace`, then
+flushes the directory; a failed download, decompression, checksum, schema, or
+metadata check cannot become current. Concurrent refreshes for the same cache
+key use a process-local lock and re-read the destination under that lock, so a
+later commit cannot overwrite a newer valid profile with an older one.
+
+Refresh outcomes are compact and stable:
+
+```text
+offline | cached | unchanged | updated | missing | stale-manifest |
+manifest-invalid | artifact-invalid | remote-failed
+```
+
+`offline` means no usable cached profile was available when networking was
+disabled; `cached` means a non-generic local profile was retained without
+networking; `updated` means a newer artifact was committed. The remaining
+outcomes describe why a remote refresh did not replace the cache. In every
+case the result's `profile` is the usable last-good or generic fallback.
+The manual command prints this as compact maturity/outcome status:
+
+```sh
+uv run draftomen-tui refresh-profile \
+  --set-code TST \
+  --format quickdraft \
+  --manifest-url "$PROFILE_MANIFEST_URL"
+
+# Optional explicit application-data directory:
+uv run draftomen-tui refresh-profile \
+  --set-code TST \
+  --format quickdraft \
+  --manifest-url "$PROFILE_MANIFEST_URL" \
+  --app-dir "$HOME/.draftomen"
+```
+
+Output is one privacy-safe line such as
+`refresh-profile: set_code=tst format=quickdraft maturity=mature
+outcome=updated cache_path=...`. It does not print profile rows or source
+data. A non-generic usable result exits successfully; a generic result or
+setup failure exits non-zero.
+
+Live refresh is always an explicit opt-in. Supply the same HTTPS manifest URL
+to any live terminal mode:
+
+```sh
+draftomen-tui watch --profile-manifest-url "$PROFILE_MANIFEST_URL"
+draftomen-tui watch --plain --profile-manifest-url "$PROFILE_MANIFEST_URL"
+```
+
+The desktop live command accepts the same opt-in:
+
+```sh
+draftomen --profile-manifest-url "$PROFILE_MANIFEST_URL"
+```
+
+Without `--profile-manifest-url`, TUI, plain-watch, and desktop live scoring
+remain offline and use local/historical caches only. TUI and desktop expose
+compact maturity/outcome status (for example `mature · updated`); failure
+status does not discard the profile already used for scoring.
 
 ## Semantic-role compatibility
 
@@ -318,8 +480,12 @@ Missing empirical sections do not remove a valid semantic role profile.
 
 ## Deliberate exclusions
 
-The generator does not change pick scoring, deck-building heuristics,
-card-database schemas, or 17Lands cache schemas. It does not fetch input data
-or perform remote publication; it only validates and writes local artifacts.
-Producers remain responsible for generating evidence and choosing maturity; the
+The generator and client do not change pick scoring, deck-building heuristics,
+card-database schemas, or 17Lands cache schemas. The generator reads only
+explicit local inputs; the producer manifest APIs validate and write local
+publication files, while the client downloads only when explicitly configured.
+Neither side hosts, uploads, schedules, signs, or discovers a production
+manifest. Issue #227 owns hosting and publication automation.
+Producers remain responsible for generating evidence, choosing maturity, and
+serving the exact checksummed artifacts described by their manifest; the
 loader only validates, orders, and safely exposes profiles.

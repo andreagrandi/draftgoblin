@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, Thread
+import time
+from types import SimpleNamespace
 from typing import NoReturn
+from draftomen.profile_client import ProfileRefreshOutcome, ProfileRefreshResult
 
 from draftomen.audit import load_draft_audit_records
 from draftomen.carddb import CardDatabase, CardInfo, build_card_database_from_bulk_file
@@ -16,7 +20,12 @@ from draftomen.seventeen import (
     SeventeenLandsError,
     SeventeenLandsFormatData,
 )
-from draftomen.set_profile import dump_set_profile, load_set_profile, set_profile_path
+from draftomen.set_profile import (
+    SetProfile,
+    dump_set_profile,
+    load_set_profile,
+    set_profile_path,
+)
 from draftomen.watch import PlainLogWatcher
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
@@ -148,7 +157,7 @@ def test_plain_watch_auto_loads_conventional_profile_through_shared_session(
         poll_interval=0.01,
     )
 
-    watcher.process_lines(
+    output = watcher.process_lines(
         lines=[
             _pack_line(
                 event_name="QuickDraft_TST_20260829",
@@ -159,6 +168,7 @@ def test_plain_watch_auto_loads_conventional_profile_through_shared_session(
             )
         ]
     )
+    assert "Status: Profile: mature" in output
 
     snapshot = watcher.session.snapshot
     scored_pack = snapshot.current_scored_pack
@@ -182,10 +192,148 @@ def test_plain_watch_auto_loads_conventional_profile_through_shared_session(
             recommendation.contextual_profile_maturity
             == scored_card.contextual_profile_maturity
         )
-        assert (
-            recommendation.contextual_profile_confidence
-            == scored_card.contextual_profile_confidence
-        )
+    assert (
+        recommendation.contextual_profile_confidence
+        == scored_card.contextual_profile_confidence
+    )
+def test_plain_watch_refreshes_profile_off_poll_loop_and_renders_shared_status(
+    tmp_path: Path,
+) -> None:
+    profile = load_set_profile(
+        Path(__file__).parent / "fixtures" / "set-profiles" / "mature.json",
+        expected_set_code="TST",
+        expected_format=QUICK_DRAFT_FORMAT,
+    )
+    started = Event()
+    release = Event()
+
+    class BlockingProfileClient:
+        manifest_url = "https://profiles.example.test/m.json"
+        network_policy = "allowed"
+
+        def load_cached(self, set_code: str, event_format: str, **kwargs):
+            del kwargs
+            return SimpleNamespace(
+                profile=SetProfile.generic(
+                    set_code=set_code,
+                    event_format=event_format,
+                ),
+                source="generic",
+            )
+
+        def refresh(self, set_code: str, event_format: str):
+            assert (set_code, event_format) == ("TST", QUICK_DRAFT_FORMAT)
+            started.set()
+            assert release.wait(timeout=5.0)
+            return ProfileRefreshResult(
+                profile=profile,
+                outcome=ProfileRefreshOutcome.UPDATED,
+            )
+
+    watcher = PlainLogWatcher(
+        log_path=tmp_path / "Player.log",
+        card_database=_fixture_card_database(),
+        profile_client=BlockingProfileClient(),
+    )
+    try:
+        watcher.session._set_active_set_code(set_code="TST")
+        watcher._schedule_profile_refresh()
+        assert started.wait(timeout=5.0)
+
+        # A blocked refresh must not prevent the normal polling call.
+        poll_started = time.monotonic()
+        blocked_output = watcher.poll_once()
+        assert time.monotonic() - poll_started < 1.0
+        assert "Status: Profile: generic" in blocked_output
+
+        release.set()
+        deadline = time.monotonic() + 5.0
+        while watcher.profile_refresh_in_flight is not None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        refreshed_output = watcher.process_lines(lines=[])
+        assert "Status: Profile: mature (updated)" in refreshed_output
+    finally:
+        release.set()
+        watcher.close()
+
+
+def test_plain_watch_close_quiesces_blocked_refresh_without_late_publication(
+    tmp_path: Path,
+) -> None:
+    profile = load_set_profile(
+        Path(__file__).parent / "fixtures" / "set-profiles" / "mature.json",
+        expected_set_code="TST",
+        expected_format=QUICK_DRAFT_FORMAT,
+    )
+    started = Event()
+    release = Event()
+    close_finished = Event()
+
+    class BlockingProfileClient:
+        manifest_url = "https://profiles.example.test/m.json"
+        network_policy = "allowed"
+
+        def load_cached(self, set_code: str, event_format: str, **kwargs):
+            del kwargs
+            return SimpleNamespace(
+                profile=SetProfile.generic(
+                    set_code=set_code,
+                    event_format=event_format,
+                ),
+                source="generic",
+            )
+
+        def refresh(self, set_code: str, event_format: str):
+            assert (set_code, event_format) == ("TST", QUICK_DRAFT_FORMAT)
+            started.set()
+            assert release.wait(timeout=5.0)
+            return ProfileRefreshResult(
+                profile=profile,
+                outcome=ProfileRefreshOutcome.UPDATED,
+            )
+
+    watcher = PlainLogWatcher(
+        log_path=tmp_path / "Player.log",
+        card_database=_fixture_card_database(),
+        profile_client=BlockingProfileClient(),
+    )
+    published = []
+    watcher.session._snapshot_publisher = published.append
+    watcher.session._set_active_set_code(set_code="TST")
+    watcher._schedule_profile_refresh()
+    assert started.wait(timeout=5.0)
+
+    def close_watcher() -> None:
+        watcher.close()
+        close_finished.set()
+
+    closer = Thread(target=close_watcher, daemon=True)
+    closer.start()
+    try:
+        assert not close_finished.wait(timeout=0.05)
+        deadline = time.monotonic() + 5.0
+        while (
+            watcher.session.snapshot.status.phase.value != "stopped"
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert watcher.session.snapshot.status.phase.value == "stopped"
+        stopped = watcher.session.snapshot
+        publication_count = len(published)
+
+        release.set()
+        assert close_finished.wait(timeout=5.0)
+        closer.join(timeout=5.0)
+
+        assert watcher._profile_refresh_executor is None
+        assert watcher.profile_refresh_in_flight is None
+        assert watcher.session.snapshot is stopped
+        assert len(published) == publication_count
+    finally:
+        release.set()
+        closer.join(timeout=5.0)
+        watcher.close()
+
 
 
 def test_plain_watch_does_not_assign_post_login_draft_events_to_prior_account(

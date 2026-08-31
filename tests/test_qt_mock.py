@@ -29,6 +29,8 @@ def test_qt_translation_publishes_plain_values_without_domain_payloads() -> None
     assert values["status"]["phase"] == "drafting"
     assert values["recommendations"]["cards"][0]["card"]["name"]
     assert values["build"]["average_mana_value"] == pytest.approx(expected_average)
+    assert values["set_profile"]["maturity"] == "mature"
+    assert values["set_profile"]["refresh_outcome"] == "unchanged"
     assert values["pool"]["average_mana_value"] == pytest.approx(17 / 7)
     recent_picks = values["pool"]["recent_picks"]
     assert isinstance(recent_picks, list)

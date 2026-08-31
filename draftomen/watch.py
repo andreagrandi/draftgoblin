@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable
 from dataclasses import replace
 from os import PathLike
+from threading import Lock
 from typing import TextIO, TypeAlias
 
 from draftomen.carddb import CardDatabase
+from draftomen.profile_client import ProfileClient, ProfileRefreshResult
 from draftomen.config import POLL_INTERVAL_SECONDS
 from draftomen.deckbuilder import DeckBuilderError, format_build_result
 from draftomen.events import (
@@ -31,6 +34,7 @@ from draftomen.session import (
     LiveSession,
     LiveSessionEvent,
     OperationKind,
+    ProfileRefreshRequest,
     RequestBuild,
 )
 from draftomen.seventeen import SeventeenLandsData
@@ -50,6 +54,7 @@ class PlainLogWatcher:
         log_path: PathInput,
         card_database: CardDatabase,
         app_dir: PathInput | None = None,
+        profile_client: ProfileClient | None = None,
         poll_interval: float = POLL_INTERVAL_SECONDS,
         previous_log_path: PathInput | None = None,
         ratings_loader: RatingsLoader | None = None,
@@ -58,6 +63,19 @@ class PlainLogWatcher:
         self.card_database = card_database
         self.splash_enabled = splash_enabled
         self._events: list[LiveSessionEvent] = []
+        self._profile_client = profile_client
+        self._profile_refresh_lock = Lock()
+        self._profile_refresh_in_flight: ProfileRefreshRequest | None = None
+        self._profile_refresh_executor = (
+            None
+            if profile_client is None
+            else ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="draftomen-profile-refresh",
+            )
+        )
+        self._closed = False
+        self._last_profile_status: str | None = None
         self.session = LiveSession(
             log_path=log_path,
             card_database=card_database,
@@ -65,11 +83,109 @@ class PlainLogWatcher:
             poll_interval=poll_interval,
             previous_log_path=previous_log_path,
             event_publisher=self._capture_event,
+            profile_client=profile_client,
             ratings_loader=ratings_loader,
             lazy_pair_card_ratings=True,
             splash_enabled=splash_enabled,
         )
         self.log_path = self.session.log_path
+
+    @property
+    def profile_refresh_in_flight(self) -> ProfileRefreshRequest | None:
+        """Return the adapter-owned profile refresh currently running."""
+
+        with self._profile_refresh_lock:
+            return self._profile_refresh_in_flight
+
+    def _schedule_profile_refresh(self) -> None:
+        """Start one pending profile refresh without blocking log polling."""
+
+        executor = self._profile_refresh_executor
+        if executor is None:
+            return
+        request = self.session.profile_refresh_request()
+        with self._profile_refresh_lock:
+            if (
+                self._closed
+                or request is None
+                or self._profile_refresh_in_flight is not None
+            ):
+                return
+            self._profile_refresh_in_flight = request
+        try:
+            executor.submit(self._refresh_profile_worker, request)
+        except RuntimeError:
+            with self._profile_refresh_lock:
+                if self._profile_refresh_in_flight == request:
+                    self._profile_refresh_in_flight = None
+            return
+
+    def _refresh_profile_worker(self, request: ProfileRefreshRequest) -> None:
+        """Run ProfileClient.refresh and return its result through LiveSession."""
+
+        try:
+            with self._profile_refresh_lock:
+                if (
+                    self._closed
+                    or self._profile_refresh_in_flight != request
+                ):
+                    return
+            if self.session.profile_refresh_request() != request:
+                return
+            if self._profile_client is None:
+                return
+            result = self._profile_client.refresh(
+                request.set_code,
+                request.event_format,
+            )
+            if not isinstance(result, ProfileRefreshResult):
+                raise TypeError("ProfileClient.refresh returned an invalid result.")
+            with self._profile_refresh_lock:
+                if (
+                    self._closed
+                    or self._profile_refresh_in_flight != request
+                ):
+                    return
+                self.session.complete_profile_refresh(request=request, result=result)
+        except Exception as error:  # pragma: no cover - defensive adapter boundary.
+            with self._profile_refresh_lock:
+                if (
+                    self._closed
+                    or self._profile_refresh_in_flight != request
+                ):
+                    return
+                self.session.fail_profile_refresh(
+                    request=request,
+                    error_message=str(error),
+                )
+        finally:
+            with self._profile_refresh_lock:
+                if self._profile_refresh_in_flight == request:
+                    self._profile_refresh_in_flight = None
+                    schedule_next = not self._closed
+                else:
+                    schedule_next = False
+            if schedule_next:
+                self._schedule_profile_refresh()
+
+    def close(self) -> None:
+        """Stop the session and synchronously release the adapter worker."""
+
+        with self._profile_refresh_lock:
+            if self._closed:
+                return
+            self._closed = True
+            executor = self._profile_refresh_executor
+            self._profile_refresh_executor = None
+
+        try:
+            self.session.stop()
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True, cancel_futures=True)
+            with self._profile_refresh_lock:
+                self._profile_refresh_in_flight = None
+
 
     def _capture_event(self, published: LiveSessionEvent) -> None:
         if (
@@ -90,15 +206,16 @@ class PlainLogWatcher:
 
         self._events.clear()
         self.session.poll_once()
+        self._schedule_profile_refresh()
         return self._render_published_events()
 
     def scan_startup_files(self, *, include_previous: bool = True) -> str:
         """Process Player-prev.log and Player.log from the beginning.
         This is opt-in recovery for a watch session started mid-draft.
         """
-
         self._events.clear()
         self.session.scan_startup_files(include_previous=include_previous)
+        self._schedule_profile_refresh()
         return self._render_published_events()
 
     def process_lines(self, *, lines: Iterable[str]) -> str:
@@ -108,15 +225,29 @@ class PlainLogWatcher:
 
         self._events.clear()
         self.session.process_lines(lines=lines)
+        self._schedule_profile_refresh()
         return self._render_published_events()
-
     def _render_published_events(self) -> str:
         output_lines: list[str] = []
         for published in self._events:
             output_lines.extend(self._format_event(published=published))
 
         self._events.clear()
+        profile_status = self._profile_status_text()
+        if profile_status is not None and profile_status != self._last_profile_status:
+            output_lines.append(profile_status)
+            self._last_profile_status = profile_status
         return _join_output_lines(lines=output_lines)
+    def _profile_status_text(self) -> str | None:
+        state = self.session.snapshot.set_profile
+        if state.set_code is None:
+            return None
+        maturity = state.maturity or "unavailable"
+        status = f"Profile: {maturity}"
+        if state.refresh_outcome is not None:
+            status += f" ({state.refresh_outcome})"
+        return f"Status: {status}"
+
 
     def _format_event(self, *, published: LiveSessionEvent) -> list[str]:
         event = published.event
@@ -240,9 +371,10 @@ def run_plain_watch(
     stop_after_empty_polls: int | None = None,
     ratings_loader: RatingsLoader | None = None,
     splash_enabled: bool = True,
+    profile_client: ProfileClient | None = None,
 ) -> int:
     """Run watch --plain until interrupted or a test stop condition fires.
-    The process returns zero unless a caller catches and maps an exception.
+    Profile refreshes run in a separate adapter-owned worker.
     """
 
     if output is None:
@@ -255,32 +387,39 @@ def run_plain_watch(
         poll_interval=poll_interval,
         ratings_loader=ratings_loader,
         splash_enabled=splash_enabled,
+        profile_client=profile_client,
     )
-    output.write("Draft Omen watch\n")
-    output.write(f"Watching: {watcher.log_path}\n")
-    output.write("Mode: plain-text\n\n")
-    output.flush()
+    try:
+        output.write("Draft Omen watch\n")
+        output.write(f"Watching: {watcher.log_path}\n")
+        output.write("Mode: plain-text\n\n")
+        output.flush()
 
-    if startup_scan:
-        _write_if_present(output=output, text=watcher.scan_startup_files())
+        if startup_scan:
+            _write_if_present(output=output, text=watcher.scan_startup_files())
 
-    if once:
-        _write_if_present(output=output, text=watcher.poll_once())
-        return 0
-
-    empty_polls = 0
-    while True:
-        text = watcher.poll_once()
-        if text:
-            _write_if_present(output=output, text=text)
-            empty_polls = 0
-        else:
-            empty_polls += 1
-
-        if stop_after_empty_polls is not None and empty_polls >= stop_after_empty_polls:
+        if once:
+            _write_if_present(output=output, text=watcher.poll_once())
             return 0
 
-        time.sleep(poll_interval)
+        empty_polls = 0
+        while True:
+            text = watcher.poll_once()
+            if text:
+                _write_if_present(output=output, text=text)
+                empty_polls = 0
+            else:
+                empty_polls += 1
+
+            if (
+                stop_after_empty_polls is not None
+                and empty_polls >= stop_after_empty_polls
+            ):
+                return 0
+
+            time.sleep(poll_interval)
+    finally:
+        watcher.close()
 
 
 def _write_if_present(*, output: TextIO, text: str) -> None:

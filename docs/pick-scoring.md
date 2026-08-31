@@ -49,9 +49,34 @@ coordinates (`pack_number`, `pick_number`, `global_pick_index`,
 context is authoritative: conflicting coordinates are rejected and the same
 context is returned unchanged. `PickEngine.score_pack` resolves stage and
 commitment once, then uses the same private validated construction path.
-Workflow entry points automatically call `load_scoring_profile` for the active
-set/format, selecting a conventional local non-generic profile before
-passing it into scoring; an explicitly supplied profile remains authoritative.
+Offline, recovered, accountless, replay, backtest, and benchmark entry points
+call `load_scoring_profile` for the active set/format before scoring. It
+selects a conventional local non-generic profile from the flat cache path,
+while an explicitly supplied profile remains authoritative. A live session
+without a configured `ProfileClient` uses the same local loader.
+Live sessions with a configured `ProfileClient` read that cache first and
+refresh asynchronously; they never make network access part of score
+construction.
+
+### Cached profile selection
+
+The flat cache is `<app-data>/set-profiles/<set>-<format>.json`, where
+`<app-data>` is the application-data directory (normally `~/.draftomen`).
+`ProfileClient.load_cached` reads this path without network access. A valid
+non-generic profile is used as-is. If the flat file is missing, corrupt,
+future-schema, wrong-target, or generic, valid historical profile locations
+are checked and a usable non-generic profile may be migrated to the flat path.
+Invalid files are diagnostics, not automatic deletions.
+
+When candidate loading has multiple valid profiles, maturity precedence is
+`mature`, `early`, `semantic-only`, `metadata-only`, then a matching
+`last_valid_profile`, and finally generic. `load_scoring_profile` converts
+that generic result to `None`, so the existing rating/color path remains
+unchanged when no usable profile is available. If a live manifest URL is
+explicitly configured, an adapter-owned refresh can atomically install a
+validated newer profile and rescore the active pack; stale, invalid, or
+unavailable remote data leaves the profile already selected for scoring in
+place. Without that opt-in URL, live scoring remains offline.
 
 `PickScoringContext` is an immutable value with exactly two fields:
 

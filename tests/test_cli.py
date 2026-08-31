@@ -111,6 +111,97 @@ def test_subcommands_are_registered_with_help_text(
     assert expected_help in captured.out
 
 
+def test_profile_manifest_url_is_live_watch_opt_in_only() -> None:
+    parser = build_parser()
+    watch = parser.parse_args(
+        args=["watch", "--profile-manifest-url", "https://profiles.example.test/m.json"]
+    )
+    assert watch.profile_manifest_url == "https://profiles.example.test/m.json"
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            args=[
+                "replay",
+                str(QUICK_DRAFT_FIXTURE_PATH),
+                "--profile-manifest-url",
+                "https://profiles.example.test/m.json",
+            ]
+        )
+
+
+def test_refresh_profile_parser_requires_named_refresh_inputs() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        args=[
+            "refresh-profile",
+            "--set-code",
+            "TST",
+            "--format",
+            QUICK_DRAFT_FORMAT,
+            "--manifest-url",
+            "https://profiles.example.test/m.json",
+            "--app-dir",
+            "/tmp/draftomen",
+        ]
+    )
+    assert args.set_code == "TST"
+    assert args.format == QUICK_DRAFT_FORMAT
+    assert args.manifest_url == "https://profiles.example.test/m.json"
+    assert args.app_dir == Path("/tmp/draftomen")
+
+
+def test_refresh_profile_prints_compact_outcome_and_uses_cached_profile_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class FakeProfileClient:
+        def __init__(self, *, app_dir, manifest_url, network_policy) -> None:
+            assert app_dir == tmp_path / "app"
+            assert manifest_url == "https://profiles.example.test/m.json"
+            assert network_policy.value == "allowed"
+
+        def refresh(self, set_code, event_format, *, network_policy):
+            calls.append((set_code, event_format))
+            return SimpleNamespace(
+                profile=SimpleNamespace(
+                    set_code="TST",
+                    event_format=event_format.casefold(),
+                ),
+                maturity=SimpleNamespace(value="mature"),
+                status="remote-failed",
+            )
+
+        def profile_path(self, set_code, event_format):
+            return tmp_path / "app" / f"{set_code.casefold()}-{event_format.casefold()}.json"
+
+    monkeypatch.setattr(cli, "ProfileClient", FakeProfileClient)
+    args = build_parser().parse_args(
+        args=[
+            "refresh-profile",
+            "--set-code",
+            "TST",
+            "--format",
+            QUICK_DRAFT_FORMAT,
+            "--manifest-url",
+            "https://profiles.example.test/m.json",
+            "--app-dir",
+            str(tmp_path / "app"),
+        ]
+    )
+
+    assert args.handler(args) == 0
+    assert calls == [("TST", QUICK_DRAFT_FORMAT)]
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert (
+        "refresh-profile: set_code=TST format=quickdraft "
+        "maturity=mature outcome=remote-failed "
+        f"cache_path={tmp_path / 'app' / 'tst-quickdraft.json'}"
+    ) in output.out
+
 def test_corpus_build_cli_local_then_offline_is_byte_stable(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
