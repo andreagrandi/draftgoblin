@@ -4,6 +4,10 @@
 - Add `execute-profile-refresh` to stage portable, content-addressed profile
   inputs from strict plans with bounded cache reuse, offline replay, and
   privacy-safe execution authorities. (#290)
+- Add deterministic profile-generation stage selection from staged ratings and
+  public-draft availability with immutable thresholds and privacy-safe records.
+  (#301)
+
 - Tighten agent skill guidance: single full-length waits for delegated
   implementation slices, size-based implementation readiness with board-time
   epic decomposition, and numbered acceptance-criteria issue templates.

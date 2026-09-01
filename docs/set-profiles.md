@@ -666,6 +666,62 @@ license notices, and obtain any permissions required for redistribution. The
 executor is strictly no-network in offline mode and explicitly excludes
 profile generation and remote publication.
 
+## Select a profile-generation stage
+
+After staging, load the bundle and select a stage from its role-keyed source
+reports. The selector consumes only `bundle.ratings_source` and
+`bundle.public_draft_source`; it does not read raw rows or local paths:
+
+```python
+from draftomen.profile_generation_stage_policy import select_profile_generation_stage
+from draftomen.profile_refresh_execution import load_staged_profile_build_bundle
+
+bundle = load_staged_profile_build_bundle(bundle_directory)
+selection = select_profile_generation_stage(
+    ratings_report=bundle.ratings_source,
+    public_draft_report=bundle.public_draft_source,
+)
+stage = selection.stage.value
+```
+
+The positive defaults are one rating row, one games-in-hand rating sample, and
+one validated public-draft row. In exact terms, `early` is selected only when
+the pinned ratings report has `rating_rows >= early_rating_rows` **and**
+`rating_samples >= early_rating_samples`. `mature` is selected only when that
+early predicate is met **and** the pinned public-draft report has
+`draft_rows >= mature_draft_rows`. Mature is checked before early. A complete
+report that does not meet the early predicate selects `metadata`; lifecycle
+metadata does not promote a stage.
+
+Thresholds are configurable through the immutable
+`ProfileGenerationStageThresholds` value passed as `thresholds=`. Its
+`early_rating_rows`, `early_rating_samples`, and `mature_draft_rows` fields
+must each be positive integers. The default value is
+`DEFAULT_PROFILE_GENERATION_STAGE_THRESHOLDS`; callers should retain the
+thresholds used for each selection.
+
+`selection.to_json()` is a deterministic record with exactly these top-level
+keys: `stage`, `thresholds`, `observed_availability`, and `rationale`.
+`thresholds` records the early rating-row/sample predicates and the mature
+rating-row/sample plus draft-row predicates. `observed_availability` records
+only `ratings_available`, `rating_rows`, `rating_samples`,
+`public_drafts_available`, and `draft_rows`. The record contains bounded
+counts and rationale only: it omits source names, digests, URLs, local paths,
+raw rows, and row values.
+
+For optional evidence, `None` means that role is unavailable; with both role
+reports `None`, selection is explicitly `metadata` with the
+`no-empirical-evidence` rationale. Complete zero counts do not satisfy the
+positive thresholds and never upgrade a stage. Partial or ambiguous supplied
+reports (including incomplete pins, missing paired rating counts, or counts
+for the wrong role) raise a bounded `ProfileGenerationStagePolicyError`
+instead of falling back to another stage.
+
+Selection is a decision record only. It does not generate or publish a
+profile, and it does not certify that the generator will accept the selected
+stage; callers must invoke the unchanged explicit generator and its validation
+workflow separately.
+
 ## Schema version 1
 
 A profile is a JSON object with these required fields:
