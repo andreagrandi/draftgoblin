@@ -75,7 +75,13 @@ from draftomen.refresh_plan import (
     fetch_lifecycle_metadata,
     load_17lands_inventory_file,
     load_lifecycle_file,
+    load_refresh_plan,
     write_refresh_plan,
+)
+from draftomen.profile_input_cache import ProfileInputCache
+from draftomen.profile_refresh_execution import (
+    DEFAULT_PROFILE_REFRESH_CACHE_POLICY,
+    execute_profile_refresh_plan,
 )
 from draftomen.replay import ReplayError, replay_log_file
 from draftomen.seventeen import (
@@ -715,6 +721,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the canonical plan JSON; this command never generates profiles.",
     )
     plan_parser.set_defaults(handler=handle_plan_profile_refresh)
+    execute_parser = subparsers.add_parser(
+        name="execute-profile-refresh",
+        help="Acquire and stage profile-refresh inputs from a canonical plan.",
+        description=(
+            "Acquire and stage a canonical profile refresh plan by staging verified "
+            "generator inputs; this command never generates or publishes profiles."
+        ),
+    )
+    execute_parser.add_argument(
+        "--plan",
+        required=True,
+        type=Path,
+        help="Canonical refresh plan JSON.",
+    )
+    execute_parser.add_argument(
+        "--cache-dir",
+        required=True,
+        type=Path,
+        help="Bounded profile-input cache directory.",
+    )
+    execute_parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help="Directory for staged bundles and execution authority.",
+    )
+    execute_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Allow only verified cached inputs; never access the network.",
+    )
+    execute_parser.set_defaults(handler=handle_execute_profile_refresh)
     return parser
 
 
@@ -860,6 +898,44 @@ def handle_plan_profile_refresh(args: argparse.Namespace) -> int:
 
     sys.stdout.write(plan.to_bytes().decode("utf-8"))
     return 0
+
+
+def handle_execute_profile_refresh(args: argparse.Namespace) -> int:
+    """Stage every environment in a canonical refresh plan."""
+
+    try:
+        plan = load_refresh_plan(args.plan)
+    except Exception:  # noqa: BLE001 - CLI errors are intentionally path-free.
+        print("execute-profile-refresh: invalid plan", file=sys.stderr)
+        return 1
+
+    try:
+        cache = ProfileInputCache(
+            args.cache_dir,
+            policy=DEFAULT_PROFILE_REFRESH_CACHE_POLICY,
+        )
+    except Exception:  # noqa: BLE001 - CLI errors are intentionally path-free.
+        print("execute-profile-refresh: cache error", file=sys.stderr)
+        return 1
+
+    try:
+        result = execute_profile_refresh_plan(
+            plan=plan,
+            cache=cache,
+            output_dir=args.output_dir,
+            offline=bool(args.offline),
+        )
+        payload = result.to_bytes()
+        stream = getattr(sys.stdout, "buffer", None)
+        if stream is None:
+            sys.stdout.write(payload.decode("utf-8"))
+        else:
+            stream.write(payload)
+    except Exception:  # noqa: BLE001 - CLI errors are intentionally path-free.
+        print("execute-profile-refresh: execution error", file=sys.stderr)
+        return 1
+
+    return 0 if result.succeeded else 1
 
 
 def format_version() -> str:

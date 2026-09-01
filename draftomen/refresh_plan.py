@@ -13,7 +13,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,9 +30,34 @@ REFRESH_PLAN_SCHEMA_VERSION = 1
 LIFECYCLE_STAGES = ("active", "mature", "historical")
 SelectionMode = Literal["manual", "active", "history"]
 
+_PLAN_FIELDS = frozenset(
+    {
+        "diagnostics",
+        "environments",
+        "event_format",
+        "inventory",
+        "lifecycle",
+        "schema_version",
+        "selection",
+    }
+)
+_ENVIRONMENT_FIELDS = frozenset({"event_format", "lifecycle", "reasons", "set_code"})
+_INVENTORY_FIELDS = frozenset({"source_payload_digest", "source_url"})
+_LIFECYCLE_FIELDS = frozenset({"provider", "source_url", "version"})
+_MANUAL_SELECTION_FIELDS = frozenset({"mode", "set_code"})
+_ACTIVE_SELECTION_FIELDS = frozenset({"mode"})
+_HISTORY_SELECTION_FIELDS = frozenset({"mode", "max_environments"})
+_MAX_DIAGNOSTICS = 256
+_MAX_DIAGNOSTIC_LENGTH = 512
+_MAX_PLAN_BYTES = 1_048_576
+
 
 class RefreshPlanError(ValueError):
     """Raised when a refresh plan cannot be built from its required inputs."""
+
+
+class _DuplicateJSONKeyError(ValueError):
+    """Raised when a JSON object repeats one of its keys."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +159,10 @@ class RefreshPlan:
     environments: tuple[PlannedEnvironment, ...]
     inventory_source_url: str
     inventory_payload_digest: str
-    lifecycle: LifecycleMetadata
+    # The caller's lifecycle metadata is kept intact; plan identity and
+    # serialization use the per-plan projection computed in to_json, so
+    # equality must not depend on classifications outside the plan.
+    lifecycle: LifecycleMetadata = field(compare=False)
     diagnostics: tuple[str, ...] = ()
     selection_set_code: str | None = None
     max_environments: int | None = None
@@ -145,6 +173,8 @@ class RefreshPlan:
             raise ValueError(f"unsupported refresh plan schema version: {self.schema_version!r}")
         if self.selection_mode not in ("manual", "active", "history"):
             raise ValueError("refresh plan selection mode must be manual, active, or history")
+        if not isinstance(self.lifecycle, LifecycleMetadata):
+            raise TypeError("refresh plan lifecycle must be LifecycleMetadata")
         event_format = _normalize_event_format(self.event_format)
         if event_format is None:
             raise ValueError("refresh plan event format must be non-empty")
@@ -154,26 +184,200 @@ class RefreshPlan:
             raise ValueError("refresh plan inventory provenance must be non-empty")
         if self.selection_mode == "manual" and _normalize_set_code(self.selection_set_code) is None:
             raise ValueError("manual refresh plans require a set code")
+        if self.selection_mode != "manual" and self.selection_set_code is not None:
+            raise ValueError("only manual refresh plans accept a selection set code")
         if self.selection_mode == "history" and (
             not isinstance(self.max_environments, int) or isinstance(self.max_environments, bool)
             or self.max_environments < 1
         ):
             raise ValueError("history refresh plans require a positive max environment count")
+        if self.selection_mode != "history" and self.max_environments is not None:
+            raise ValueError("only history refresh plans accept a max environment count")
+        raw_environments = tuple(self.environments)
+        if any(not isinstance(item, PlannedEnvironment) for item in raw_environments):
+            raise TypeError("refresh plan environments must be PlannedEnvironment values")
         environments = tuple(
             sorted(
-                self.environments,
+                raw_environments,
                 key=lambda item: (item.set_code, item.event_format, item.lifecycle or "", item.reasons),
             )
         )
-        if any(not isinstance(item, PlannedEnvironment) for item in environments):
-            raise TypeError("refresh plan environments must be PlannedEnvironment values")
-        diagnostics = tuple(sorted(set(diagnostic for diagnostic in self.diagnostics if diagnostic)))
+        cleaned_diagnostics = {
+            _bounded_diagnostic(diagnostic) for diagnostic in self.diagnostics if diagnostic
+        }
+        cleaned_diagnostics.discard("")
+        diagnostics = tuple(sorted(cleaned_diagnostics)[:_MAX_DIAGNOSTICS])
         object.__setattr__(self, "event_format", event_format)
         object.__setattr__(self, "inventory_source_url", source_url)
         object.__setattr__(self, "inventory_payload_digest", digest)
         object.__setattr__(self, "selection_set_code", _normalize_set_code(self.selection_set_code))
         object.__setattr__(self, "environments", environments)
         object.__setattr__(self, "diagnostics", diagnostics)
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> RefreshPlan:
+        """Decode one strict, canonical schema-1 plan object, accepting only
+        the exact shape emitted by :meth:`to_json`."""
+
+        _plan_object(value, "refresh plan")
+        _plan_keys(value, _PLAN_FIELDS, "refresh plan")
+        schema_version = value["schema_version"]
+        if (
+            not isinstance(schema_version, int)
+            or isinstance(schema_version, bool)
+            or schema_version != REFRESH_PLAN_SCHEMA_VERSION
+        ):
+            raise RefreshPlanError("refresh plan has an unsupported schema version")
+
+        event_format = _plan_component(value["event_format"], "event_format", casefold=True)
+
+        inventory_value = value["inventory"]
+        _plan_object(inventory_value, "refresh plan inventory")
+        _plan_keys(inventory_value, _INVENTORY_FIELDS, "refresh plan inventory")
+        inventory_source_url = _plan_nonempty_text(inventory_value["source_url"], "inventory.source_url")
+        inventory_payload_digest = _plan_nonempty_text(
+            inventory_value["source_payload_digest"],
+            "inventory.source_payload_digest",
+        )
+
+        lifecycle_value = value["lifecycle"]
+        _plan_object(lifecycle_value, "refresh plan lifecycle")
+        _plan_keys(lifecycle_value, _LIFECYCLE_FIELDS, "refresh plan lifecycle")
+        provider = _plan_text(lifecycle_value["provider"], "lifecycle.provider")
+        lifecycle_source_url = _plan_text(lifecycle_value["source_url"], "lifecycle.source_url")
+        lifecycle_version = _plan_text(lifecycle_value["version"], "lifecycle.version")
+
+        diagnostics = _plan_diagnostics(value["diagnostics"])
+
+        selection_value = value["selection"]
+        _plan_object(selection_value, "refresh plan selection")
+        raw_mode = selection_value.get("mode")
+        if raw_mode not in ("manual", "active", "history"):
+            raise RefreshPlanError("refresh plan selection mode is invalid")
+        if raw_mode == "manual":
+            expected_selection_fields = _MANUAL_SELECTION_FIELDS
+        elif raw_mode == "active":
+            expected_selection_fields = _ACTIVE_SELECTION_FIELDS
+        else:
+            expected_selection_fields = _HISTORY_SELECTION_FIELDS
+        _plan_keys(selection_value, expected_selection_fields, "refresh plan selection")
+
+        selection_set_code: str | None = None
+        max_environments: int | None = None
+        if raw_mode == "manual":
+            selection_set_code = _plan_component(selection_value["set_code"], "selection.set_code", casefold=False)
+        elif raw_mode == "history":
+            max_environments = selection_value["max_environments"]
+            if (
+                isinstance(max_environments, bool)
+                or not isinstance(max_environments, int)
+                or max_environments < 1
+            ):
+                raise RefreshPlanError("refresh plan selection max_environments is invalid")
+
+        environments_value = value["environments"]
+        if not isinstance(environments_value, list) or not environments_value:
+            raise RefreshPlanError("refresh plan environments must be a non-empty array")
+        environments: list[PlannedEnvironment] = []
+        identities: set[tuple[str, str]] = set()
+        for item in environments_value:
+            _plan_object(item, "refresh plan environment")
+            _plan_keys(item, _ENVIRONMENT_FIELDS, "refresh plan environment")
+            set_code = _plan_component(item["set_code"], "environment.set_code", casefold=False)
+            environment_format = _plan_component(
+                item["event_format"],
+                "environment.event_format",
+                casefold=True,
+            )
+            if environment_format != event_format:
+                raise RefreshPlanError("refresh plan environment format does not match event_format")
+            identity = (set_code, environment_format)
+            if identity in identities:
+                raise RefreshPlanError("refresh plan contains duplicate environment identities")
+            identities.add(identity)
+
+            lifecycle = item["lifecycle"]
+            if lifecycle is not None:
+                if not isinstance(lifecycle, str) or lifecycle not in LIFECYCLE_STAGES:
+                    raise RefreshPlanError("refresh plan environment lifecycle is invalid")
+            reasons_value = item["reasons"]
+            if not isinstance(reasons_value, list) or not reasons_value:
+                raise RefreshPlanError("refresh plan environment reasons must be a non-empty array")
+            reasons: list[str] = []
+            for reason in reasons_value:
+                if not isinstance(reason, str) or not reason.strip() or len(reason) > _MAX_DIAGNOSTIC_LENGTH:
+                    raise RefreshPlanError("refresh plan environment reason is invalid")
+                if any(ord(character) < 32 or ord(character) == 127 for character in reason):
+                    raise RefreshPlanError("refresh plan environment reason is invalid")
+                reasons.append(reason)
+            if len(set(reasons)) != len(reasons):
+                raise RefreshPlanError("refresh plan environment reasons contain duplicates")
+            try:
+                environments.append(
+                    PlannedEnvironment(
+                        set_code=set_code,
+                        event_format=environment_format,
+                        lifecycle=lifecycle,
+                        reasons=tuple(reasons),
+                    )
+                )
+            except (TypeError, ValueError) as error:
+                raise RefreshPlanError("refresh plan environment is invalid") from error
+
+        if raw_mode == "manual":
+            if len(environments) != 1 or selection_set_code != environments[0].set_code:
+                raise RefreshPlanError("manual refresh plans must select exactly one matching environment")
+        elif raw_mode == "history" and max_environments is not None and len(environments) > max_environments:
+            raise RefreshPlanError("history refresh plan exceeds max_environments")
+
+        lifecycle_metadata = LifecycleMetadata(
+            provider=provider,
+            source_url=lifecycle_source_url,
+            version=lifecycle_version,
+            classifications=tuple(
+                (environment.set_code, environment.lifecycle)
+                for environment in environments
+                if environment.lifecycle is not None
+            ),
+        )
+        try:
+            plan = cls(
+                selection_mode=raw_mode,
+                event_format=event_format,
+                environments=tuple(environments),
+                inventory_source_url=inventory_source_url,
+                inventory_payload_digest=inventory_payload_digest,
+                lifecycle=lifecycle_metadata,
+                diagnostics=diagnostics,
+                selection_set_code=selection_set_code,
+                max_environments=max_environments,
+                schema_version=schema_version,
+            )
+        except (TypeError, ValueError) as error:
+            raise RefreshPlanError("refresh plan contains invalid schema-1 values") from error
+        if plan.to_json() != dict(value):
+            raise RefreshPlanError("refresh plan is not canonical")
+        return plan
+
+    @classmethod
+    def from_bytes(cls, payload: bytes) -> RefreshPlan:
+        """Decode one canonical schema-1 plan from UTF-8 JSON bytes."""
+
+        if not isinstance(payload, bytes):
+            raise RefreshPlanError("refresh plan bytes must be bytes")
+        if len(payload) > _MAX_PLAN_BYTES:
+            raise RefreshPlanError("refresh plan bytes exceed the supported size")
+        try:
+            value = json.loads(
+                payload.decode("utf-8"),
+                object_pairs_hook=_reject_duplicate_json_keys,
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, _DuplicateJSONKeyError, RecursionError):
+            raise RefreshPlanError("could not parse refresh plan bytes") from None
+        plan = cls.from_json(value)
+        if payload != plan.to_bytes():
+            raise RefreshPlanError("refresh plan bytes are not canonical")
+        return plan
+
 
     def to_json(self) -> dict[str, Any]:
         """Return the one supported plan schema as JSON-compatible data."""
@@ -191,7 +395,16 @@ class RefreshPlan:
                 "source_payload_digest": self.inventory_payload_digest,
                 "source_url": self.inventory_source_url,
             },
-            "lifecycle": self.lifecycle.to_json(),
+            "lifecycle": LifecycleMetadata(
+                provider=self.lifecycle.provider,
+                source_url=self.lifecycle.source_url,
+                version=self.lifecycle.version,
+                classifications=tuple(
+                    (environment.set_code, environment.lifecycle)
+                    for environment in self.environments
+                    if environment.lifecycle is not None
+                ),
+            ).to_json(),
             "schema_version": self.schema_version,
             "selection": selection,
         }
@@ -392,6 +605,16 @@ def build_refresh_plan(
     )
 
 
+def load_refresh_plan(path: str | os.PathLike[str]) -> RefreshPlan:
+    """Load one canonical refresh plan without retaining or exposing its path."""
+
+    try:
+        payload = Path(path).read_bytes()
+    except (OSError, TypeError, ValueError, UnicodeError):
+        raise RefreshPlanError("could not read refresh plan") from None
+    return RefreshPlan.from_bytes(payload)
+
+
 def load_17lands_inventory_file(path: str | os.PathLike[str]) -> SeventeenLandsExpansionInventory:
     """Load the exact raw JSON list accepted by ``/data/expansions``."""
 
@@ -460,6 +683,13 @@ def write_refresh_plan(path: str | os.PathLike[str], plan: RefreshPlan) -> Path:
 
     if not isinstance(plan, RefreshPlan):
         raise TypeError("plan must be a RefreshPlan")
+    payload = plan.to_bytes()
+    try:
+        RefreshPlan.from_bytes(payload)
+    except RefreshPlanError as error:
+        raise RefreshPlanError(
+            f"refresh plan failed canonical validation before write: {error}"
+        ) from error
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None
@@ -471,7 +701,7 @@ def write_refresh_plan(path: str | os.PathLike[str], plan: RefreshPlan) -> Path:
             delete=False,
         ) as temporary:
             temporary_name = temporary.name
-            temporary.write(plan.to_bytes())
+            temporary.write(payload)
             temporary.flush()
             os.fsync(temporary.fileno())
         os.replace(temporary_name, destination)
@@ -485,6 +715,79 @@ def write_refresh_plan(path: str | os.PathLike[str], plan: RefreshPlan) -> Path:
             except OSError:
                 pass
     return destination
+
+
+def _plan_object(value: Any, field_name: str) -> None:
+    if not isinstance(value, Mapping):
+        raise RefreshPlanError(f"{field_name} must be an object")
+
+
+def _plan_keys(value: Mapping[str, Any], expected: frozenset[str], field_name: str) -> None:
+    if set(value) != expected:
+        raise RefreshPlanError(f"{field_name} has invalid fields")
+
+
+def _plan_text(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise RefreshPlanError(f"{field_name} must be a string")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise RefreshPlanError(f"{field_name} contains invalid characters")
+    return value
+
+
+def _plan_nonempty_text(value: Any, field_name: str) -> str:
+    text = _plan_text(value, field_name)
+    if not text.strip():
+        raise RefreshPlanError(f"{field_name} must be non-empty")
+    return text
+
+
+def _plan_component(value: Any, field_name: str, *, casefold: bool) -> str:
+    if not isinstance(value, str):
+        raise RefreshPlanError(f"{field_name} must be a string")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise RefreshPlanError(f"{field_name} must be a safe path component")
+    normalized = _normalize_event_format(value) if casefold else _normalize_set_code(value)
+    if normalized is None or normalized in {".", ".."} or "/" in normalized or "\\" in normalized:
+        raise RefreshPlanError(f"{field_name} must be a safe path component")
+    return normalized
+
+
+def _bounded_diagnostic(diagnostic: str) -> str:
+    cleaned = "".join(
+        " " if (ord(character) < 32 or ord(character) == 127) else character
+        for character in str(diagnostic)
+    ).strip()
+    return cleaned[:_MAX_DIAGNOSTIC_LENGTH]
+
+
+def _plan_diagnostics(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise RefreshPlanError("refresh plan diagnostics must be an array")
+    if len(value) > _MAX_DIAGNOSTICS:
+        raise RefreshPlanError("refresh plan diagnostics exceed the supported limit")
+    diagnostics: list[str] = []
+    for diagnostic in value:
+        if (
+            not isinstance(diagnostic, str)
+            or not diagnostic
+            or len(diagnostic) > _MAX_DIAGNOSTIC_LENGTH
+            or any(ord(character) < 32 or ord(character) == 127 for character in diagnostic)
+        ):
+            raise RefreshPlanError("refresh plan diagnostics contain an invalid entry")
+        diagnostics.append(diagnostic)
+    if len(set(diagnostics)) != len(diagnostics):
+        raise RefreshPlanError("refresh plan diagnostics contain duplicates")
+    return tuple(diagnostics)
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise _DuplicateJSONKeyError
+        value[key] = item
+    return value
 
 
 def _metadata_text(payload: Mapping[str, Any], name: str, diagnostics: list[str]) -> str:
@@ -555,6 +858,7 @@ __all__ = [
     "discover_17lands_inventory",
     "fetch_lifecycle_metadata",
     "load_17lands_inventory_file",
+    "load_refresh_plan",
     "load_lifecycle_file",
     "parse_lifecycle_metadata",
     "write_refresh_plan",

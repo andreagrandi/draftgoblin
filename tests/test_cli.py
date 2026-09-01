@@ -3,8 +3,10 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from importlib.metadata import version
+from io import BytesIO
 from pathlib import Path
 import subprocess
 import sys
@@ -14,12 +16,21 @@ from typing import NoReturn
 import pytest
 
 from draftomen import __version__
-from draftomen import config
 from draftomen import cli
+from draftomen import config
 from draftomen.audit import load_draft_audit_records
 from draftomen.carddb import CardDatabase
 from draftomen.cli import build_parser, main
 from draftomen.pool import DraftState, load_draft_state, save_draft_state
+from draftomen.profile_generation import generate_set_profile
+from draftomen.profile_input_acquisition import (
+    CardMetadataAdapter,
+    SeventeenLandsPublicDraftAdapter,
+    SeventeenLandsRatingsAdapter,
+)
+from draftomen.profile_input_cache import ProfileInputCache
+from draftomen.profile_refresh_execution import load_staged_profile_build_bundle
+from draftomen.refresh_plan import LifecycleMetadata, PlannedEnvironment, RefreshPlan, write_refresh_plan
 from draftomen.set_profile import (
     SetProfile,
     dump_set_profile,
@@ -29,6 +40,7 @@ from draftomen.set_profile import (
 from draftomen.seventeen import (
     QUICK_DRAFT_FORMAT,
     SeventeenLandsError,
+    load_17lands_format_data,
     seventeen_lands_structure_targets_cache_path,
 )
 
@@ -48,6 +60,7 @@ CLI_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 REFRESH_PLAN_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "refresh-plan"
 PROFILE_GENERATION_AT = "2026-08-30T12:00:00+00:00"
+CLI_REFRESH_TIMESTAMP = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
 
 
 def test_package_version_matches_installed_distribution_metadata() -> None:
@@ -94,6 +107,7 @@ def test_tui_parser_uses_tui_command_name(
         ("refresh-data", "Scryfall"),
         ("refresh-structure-targets", "17Lands"),
         ("generate-profile", "Generate"),
+        ("execute-profile-refresh", "Acquire and stage"),
     ],
 )
 def test_subcommands_are_registered_with_help_text(
@@ -111,6 +125,190 @@ def test_subcommands_are_registered_with_help_text(
     assert error.value.code == 0
     assert command in captured.out
     assert expected_help in captured.out
+
+
+def test_execute_profile_refresh_parser_registers_exact_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "execute-profile-refresh",
+            "--plan",
+            "plan.json",
+            "--cache-dir",
+            "cache",
+            "--output-dir",
+            "output",
+            "--offline",
+        ]
+    )
+
+    assert args.plan == Path("plan.json")
+    assert args.cache_dir == Path("cache")
+    assert args.output_dir == Path("output")
+    assert args.offline is True
+
+    base = [
+        "execute-profile-refresh",
+        "--plan",
+        "plan.json",
+        "--cache-dir",
+        "cache",
+        "--output-dir",
+        "output",
+    ]
+    for option in ("--plan", "--cache-dir", "--output-dir"):
+        missing = list(base)
+        position = missing.index(option)
+        del missing[position : position + 2]
+        with pytest.raises(SystemExit):
+            parser.parse_args(missing)
+
+
+def test_execute_profile_refresh_handler_emits_canonical_bytes_and_success(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    plan = object()
+    cache = object()
+    expected = b'{"counts":{"failed":0}}\n'
+    calls: dict[str, object] = {}
+
+    class Result:
+        succeeded = True
+
+        def to_bytes(self) -> bytes:
+            calls["to_bytes"] = calls.get("to_bytes", 0) + 1
+            return expected
+
+    def load(path: Path) -> object:
+        calls["plan"] = path
+        return plan
+
+    def make_cache(root: Path, *, policy: object) -> object:
+        calls["cache_root"] = root
+        calls["policy"] = policy
+        return cache
+
+    def execute(**kwargs: object) -> Result:
+        calls["execute"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(cli, "load_refresh_plan", load)
+    monkeypatch.setattr(cli, "ProfileInputCache", make_cache)
+    monkeypatch.setattr(cli, "execute_profile_refresh_plan", execute)
+
+    exit_code = cli.handle_execute_profile_refresh(
+        SimpleNamespace(
+            plan=tmp_path / "private-plan.json",
+            cache_dir=tmp_path / "private-cache",
+            output_dir=tmp_path / "private-output",
+            offline=True,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.encode() == expected
+    assert captured.err == ""
+    assert calls["plan"] == tmp_path / "private-plan.json"
+    assert calls["cache_root"] == tmp_path / "private-cache"
+    assert calls["policy"] is cli.DEFAULT_PROFILE_REFRESH_CACHE_POLICY
+    assert calls["execute"] == {
+        "plan": plan,
+        "cache": cache,
+        "output_dir": tmp_path / "private-output",
+        "offline": True,
+    }
+    assert calls["to_bytes"] == 1
+
+
+def test_execute_profile_refresh_handler_emits_result_before_failed_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    expected = b'{"counts":{"failed":1,"planned":1}}\n'
+
+    class Result:
+        succeeded = False
+
+        def to_bytes(self) -> bytes:
+            return expected
+
+    monkeypatch.setattr(cli, "load_refresh_plan", lambda path: object())
+    monkeypatch.setattr(cli, "ProfileInputCache", lambda root, *, policy: object())
+    monkeypatch.setattr(cli, "execute_profile_refresh_plan", lambda **kwargs: Result())
+
+    exit_code = cli.handle_execute_profile_refresh(
+        SimpleNamespace(
+            plan=Path("plan.json"),
+            cache_dir=Path("cache"),
+            output_dir=Path("output"),
+            offline=False,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out.encode() == expected
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize(
+    ("stage", "message"),
+    [
+        ("plan", "execute-profile-refresh: invalid plan\n"),
+        ("cache", "execute-profile-refresh: cache error\n"),
+        ("execution", "execute-profile-refresh: execution error\n"),
+    ],
+)
+def test_execute_profile_refresh_handler_errors_are_generic_and_path_free(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    stage: str,
+    message: str,
+) -> None:
+    sentinel = "PRIVATE-EXCEPTION-DETAIL"
+    private_path = tmp_path / "private-plan-sentinel.json"
+    if stage == "plan":
+        monkeypatch.setattr(
+            cli,
+            "load_refresh_plan",
+            lambda path: (_ for _ in ()).throw(ValueError(sentinel)),
+        )
+    else:
+        monkeypatch.setattr(cli, "load_refresh_plan", lambda path: object())
+    if stage == "cache":
+        monkeypatch.setattr(
+            cli,
+            "ProfileInputCache",
+            lambda root, *, policy: (_ for _ in ()).throw(RuntimeError(sentinel)),
+        )
+    else:
+        monkeypatch.setattr(cli, "ProfileInputCache", lambda root, *, policy: object())
+    if stage == "execution":
+        monkeypatch.setattr(
+            cli,
+            "execute_profile_refresh_plan",
+            lambda **kwargs: (_ for _ in ()).throw(RuntimeError(sentinel)),
+        )
+
+    exit_code = cli.handle_execute_profile_refresh(
+        SimpleNamespace(
+            plan=private_path,
+            cache_dir=tmp_path / "private-cache",
+            output_dir=tmp_path / "private-output",
+            offline=False,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert captured.err == message
+    assert str(tmp_path) not in captured.err
+    assert sentinel not in captured.err
 
 
 def test_profile_manifest_url_is_live_watch_opt_in_only() -> None:
@@ -1450,3 +1648,312 @@ def test_plan_profile_refresh_cli_rejects_malformed_lifecycle_url_without_traceb
     assert completed.stderr.strip() == (
         "plan-profile-refresh: lifecycle URL must be an absolute URL"
     )
+
+
+def _cli_refresh_plan() -> RefreshPlan:
+    environments = (
+        PlannedEnvironment(
+            set_code="META",
+            event_format="quickdraft",
+            lifecycle="historical",
+            reasons=("fixture-metadata-only",),
+        ),
+        PlannedEnvironment(
+            set_code="EARLY",
+            event_format="quickdraft",
+            lifecycle="active",
+            reasons=("fixture-early",),
+        ),
+        PlannedEnvironment(
+            set_code="MATURE",
+            event_format="quickdraft",
+            lifecycle="mature",
+            reasons=("fixture-mature",),
+        ),
+    )
+    return RefreshPlan(
+        selection_mode="history",
+        max_environments=len(environments),
+        event_format="quickdraft",
+        environments=environments,
+        inventory_source_url="https://inventory.example.test/expansions.json",
+        inventory_payload_digest="a" * 64,
+        lifecycle=LifecycleMetadata(
+            provider="fixture",
+            source_url="https://lifecycle.example.test/sets.json",
+            version="fixture-v1",
+        ),
+    )
+
+
+def _seed_cli_cache(
+    *,
+    cache: ProfileInputCache,
+    environment: PlannedEnvironment,
+    temporary_dir: Path,
+    include_ratings: bool,
+    include_public_drafts: bool,
+) -> None:
+    fixture_dir = PROFILE_GENERATION_FIXTURE_DIR
+    source_database = CardDatabase.from_json(
+        json.loads((fixture_dir / "card-database.json").read_text(encoding="utf-8"))
+    )
+
+    def fetch_database(*, set_code: str, timeout_seconds: int) -> CardDatabase:
+        del timeout_seconds
+        return replace(
+            source_database,
+            cards={
+                grp_id: replace(card, set_code=set_code)
+                for grp_id, card in source_database.cards.items()
+            },
+            generated_at=CLI_REFRESH_TIMESTAMP,
+        )
+
+    card_adapter = CardMetadataAdapter(fetch_database=fetch_database)
+    card_snapshot = card_adapter.acquire(
+        environment=environment,
+        acquired_at=CLI_REFRESH_TIMESTAMP,
+    )
+    cache.store(
+        source=card_adapter.source_for(environment=environment),
+        source_version=card_snapshot.source_version,
+        input_stream=BytesIO(card_snapshot.payload),
+        expected_sha256=card_snapshot.sha256,
+        acquired_at=card_snapshot.acquired_at,
+    )
+
+    if include_ratings:
+        ratings_template = load_17lands_format_data(
+            set_code="TST",
+            event_format="quickdraft",
+            cache_path=fixture_dir / "ratings.json",
+        )
+
+        def fetch_ratings(
+            *,
+            set_code: str,
+            event_format: str,
+            fetched_at: datetime,
+            timeout_seconds: int,
+        ):
+            del timeout_seconds
+            return replace(
+                ratings_template,
+                set_code=set_code,
+                event_format=event_format,
+                fetched_at=fetched_at,
+            )
+
+        ratings_adapter = SeventeenLandsRatingsAdapter(fetch_ratings=fetch_ratings)
+        ratings_snapshot = ratings_adapter.acquire(
+            environment=environment,
+            acquired_at=CLI_REFRESH_TIMESTAMP,
+        )
+        cache.store(
+            source=ratings_adapter.source_for(environment=environment),
+            source_version=ratings_snapshot.source_version,
+            input_stream=BytesIO(ratings_snapshot.payload),
+            expected_sha256=ratings_snapshot.sha256,
+            acquired_at=ratings_snapshot.acquired_at,
+        )
+
+    if include_public_drafts:
+        draft_fixture = fixture_dir / "mature-data.csv"
+
+        def fetch_public_drafts(
+            *,
+            set_code: str,
+            event_format: str,
+            path: Path,
+            timeout_seconds: int,
+        ) -> None:
+            del event_format, timeout_seconds
+            path.write_bytes(draft_fixture.read_bytes().replace(b"TST", set_code.encode()))
+
+        public_draft_adapter = SeventeenLandsPublicDraftAdapter(
+            fetch_public_drafts=fetch_public_drafts
+        )
+        draft_path = temporary_dir / f"{environment.set_code}-public-drafts.csv"
+        draft_snapshot = public_draft_adapter.acquire(
+            environment=environment,
+            acquired_at=CLI_REFRESH_TIMESTAMP,
+            path=draft_path,
+        )
+        with draft_path.open("rb") as input_stream:
+            cache.store(
+                source=public_draft_adapter.source_for(environment=environment),
+                source_version=draft_snapshot.source_version,
+                input_stream=input_stream,
+                expected_sha256=draft_snapshot.sha256,
+                acquired_at=draft_snapshot.acquired_at,
+            )
+
+
+def _run_execute_profile_refresh_cli(
+    *,
+    plan_path: Path,
+    cache_dir: Path,
+    output_dir: Path,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "draftomen.cli",
+            "execute-profile-refresh",
+            "--plan",
+            str(plan_path),
+            "--cache-dir",
+            str(cache_dir),
+            "--output-dir",
+            str(output_dir),
+            "--offline",
+        ],
+        cwd=CLI_REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_execute_profile_refresh_cli_offline_is_byte_stable_and_path_free(
+    tmp_path: Path,
+) -> None:
+    plan_path = tmp_path / "private-refresh-plan.json"
+    cache_dir = tmp_path / "private-cache"
+    output_dir = tmp_path / "private-output"
+    plan = _cli_refresh_plan()
+    write_refresh_plan(plan_path, plan)
+
+    cache = ProfileInputCache(
+        cache_dir,
+        policy=cli.DEFAULT_PROFILE_REFRESH_CACHE_POLICY,
+        clock=lambda: CLI_REFRESH_TIMESTAMP,
+    )
+    for environment in plan.environments:
+        _seed_cli_cache(
+            cache=cache,
+            environment=environment,
+            temporary_dir=tmp_path,
+            include_ratings=environment.set_code == "MATURE"
+            or environment.set_code == "EARLY",
+            include_public_drafts=environment.set_code == "MATURE",
+        )
+
+    first = _run_execute_profile_refresh_cli(
+        plan_path=plan_path,
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+    )
+    assert first.returncode == 0
+    assert first.stderr == b""
+    execution_bytes = (output_dir / "execution.json").read_bytes()
+    assert first.stdout == execution_bytes
+
+    execution = json.loads(execution_bytes)
+    assert execution["counts"] == {
+        "failed": 0,
+        "metadata_only": 1,
+        "planned": 3,
+        "staged": 3,
+    }
+    assert [item["environment"]["set_code"] for item in execution["environments"]] == [
+        "EARLY",
+        "MATURE",
+        "META",
+    ]
+    stages = {"META": "metadata", "EARLY": "early", "MATURE": "mature"}
+    generator_bytes: dict[str, bytes] = {}
+    for item in execution["environments"]:
+        bundle_dir = output_dir / "bundles" / item["bundle_id"]
+        authority_path = bundle_dir / "bundle.json"
+        assert authority_path.is_file()
+        authority_bytes = authority_path.read_bytes()
+        authority = json.loads(authority_bytes)
+        assert authority["outcome"] == "staged"
+        loaded = load_staged_profile_build_bundle(bundle_dir)
+        stage = stages[item["environment"]["set_code"]]
+        generated = generate_set_profile(
+            **loaded.generator_inputs(),
+            stage=stage,
+            generated_at=CLI_REFRESH_TIMESTAMP,
+        )
+        repeated = generate_set_profile(
+            **loaded.generator_inputs(),
+            stage=stage,
+            generated_at=CLI_REFRESH_TIMESTAMP,
+        )
+        assert generated.to_bytes() == repeated.to_bytes()
+        generator_bytes[item["environment"]["set_code"]] = generated.to_bytes()
+        if stage == "metadata":
+            assert authority["inputs"]["ratings"] is None
+            assert authority["inputs"]["public_drafts"] is None
+            assert "17lands-ratings-cache-missing" in authority["skip_reasons"]
+            assert "17lands-public-drafts-cache-missing" in authority["skip_reasons"]
+        elif stage == "early":
+            assert authority["inputs"]["ratings"] is not None
+            assert authority["inputs"]["public_drafts"] is None
+            assert "17lands-public-drafts-cache-missing" in authority["skip_reasons"]
+        else:
+            assert authority["inputs"]["ratings"] is not None
+            assert authority["inputs"]["public_drafts"] is not None
+
+        for payload in (first.stdout, first.stderr, authority_bytes, execution_bytes):
+            assert str(plan_path).encode() not in payload
+            assert str(cache_dir).encode() not in payload
+            assert str(output_dir).encode() not in payload
+            assert b"Support Creature" not in payload
+            assert b"alpha" not in payload
+            assert b"https://" not in payload
+
+    second = _run_execute_profile_refresh_cli(
+        plan_path=plan_path,
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+    )
+    assert second.returncode == 0
+    assert second.stderr == b""
+    assert second.stdout == execution_bytes
+    assert generator_bytes
+    second_execution = json.loads(second.stdout)
+    for item in second_execution["environments"]:
+        set_code = item["environment"]["set_code"]
+        loaded = load_staged_profile_build_bundle(
+            output_dir / "bundles" / item["bundle_id"]
+        )
+        generated = generate_set_profile(
+            **loaded.generator_inputs(),
+            stage=stages[set_code],
+            generated_at=CLI_REFRESH_TIMESTAMP,
+        )
+        assert generated.to_bytes() == generator_bytes[set_code]
+
+
+def test_execute_profile_refresh_cli_failed_required_source_preserves_results(
+    tmp_path: Path,
+) -> None:
+    plan_path = tmp_path / "private-refresh-plan.json"
+    output_dir = tmp_path / "private-output"
+    write_refresh_plan(plan_path, _cli_refresh_plan())
+
+    completed = _run_execute_profile_refresh_cli(
+        plan_path=plan_path,
+        cache_dir=tmp_path / "empty-cache",
+        output_dir=output_dir,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stderr == b""
+    execution_bytes = (output_dir / "execution.json").read_bytes()
+    assert completed.stdout == execution_bytes
+    execution = json.loads(execution_bytes)
+    assert execution["counts"] == {
+        "failed": 3,
+        "metadata_only": 0,
+        "planned": 3,
+        "staged": 0,
+    }
+    assert len(execution["environments"]) == 3
+    assert all(item["outcome"] == "failed" for item in execution["environments"])
+    assert str(tmp_path).encode() not in completed.stdout
+    assert b"Traceback" not in completed.stderr
