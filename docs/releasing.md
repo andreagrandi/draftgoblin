@@ -9,6 +9,26 @@ terminal workflow. Releases use GitHub Actions and PyPI Trusted Publishing, so
 the repository does not store a long-lived PyPI token. Development releases
 are a separate GitHub prerelease path and never publish to PyPI or Homebrew.
 
+## Hosted profile data operations
+
+Profile assets are static files in the same Astro/Cloudflare website snapshot
+as the rest of the site. A commit merged to `master` is the only deployment
+trigger: the existing Cloudflare Git integration builds and publishes the
+complete `website/dist/` output atomically, including
+`website/public/profiles/` at
+<https://www.draftomen.com/profiles/> and `website/public/profiles-dev/` at
+<https://www.draftomen.com/profiles-dev/>. Profile assets never trigger or
+gate a Python package release, PyPI publication, Homebrew update, native
+bundle release, or application startup, and they are never a runtime default
+URL or bundled profile snapshot.
+
+Follow [`docs/set-profiles.md`](set-profiles.md) for validated object staging,
+manifest construction, pruning, cache headers, retention and legal erasure,
+Cloudflare integration ownership and shutdown, current service limits, data
+minimization, and the two-merge master-only smoke check. Baseline application
+bundling remains owned by #313; this hosting boundary does not absorb that
+work.
+
 ## Release trigger
 
 Normal pushes and merges to `master` run CI but do not publish a stable release.

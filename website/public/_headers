@@ -1,0 +1,11 @@
+/profiles/manifest.json
+  Cache-Control: public, max-age=0, must-revalidate
+
+/profiles/objects/*
+  Cache-Control: public, max-age=31556952, immutable
+
+/profiles-dev/manifest.json
+  Cache-Control: public, max-age=0, must-revalidate
+
+/profiles-dev/objects/*
+  Cache-Control: public, max-age=31556952, immutable

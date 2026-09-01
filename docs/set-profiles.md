@@ -9,8 +9,10 @@ profile loading.
 The producer workflow is explicit and reproducible: it reads caller-selected
 local inputs, writes a validated compressed artifact plus a generation marker,
 and can turn those outputs into a remote manifest record. The client workflow
-is offline-first and network-optional; no profile host or production manifest
-is bundled with Draft Omen.
+is offline-first and network-optional; Draft Omen does not bundle a host,
+production manifest, default remote URL, or profile snapshot. The repository's
+optional hosted publication boundary is documented below and is never implicit
+in the runtime.
 
 ## Generate producer artifacts
 
@@ -225,11 +227,238 @@ remote publication:
    atomically. `load_profile_manifest(path)` and `dump_profile_manifest(...)`
    provide strict local manifest I/O.
 
-Remote publication is intentionally a separate operator/deployment concern.
-Draft Omen does not ship a hosted endpoint, upload job, schedule, signing
-workflow, or production manifest URL. Issue #227 owns hosting and publication
-automation; a producer must arrange serving the manifest and the exact
-artifact URLs before clients can refresh.
+### Hosted publication boundary (current)
+
+Profile hosting is a static-asset operation owned by repository maintainers,
+not profile generation or client startup. Producer and client code do not
+upload, schedule, discover, or backfill profile data. Production and
+development assets are directories in one Astro/Cloudflare website snapshot:
+
+| Environment | Repository source | Public base | Public manifest |
+| --- | --- | --- | --- |
+| Production | `website/public/profiles/` | `https://www.draftomen.com/profiles/` | `https://www.draftomen.com/profiles/manifest.json` |
+| Development | `website/public/profiles-dev/` | `https://www.draftomen.com/profiles-dev/` | `https://www.draftomen.com/profiles-dev/manifest.json` |
+
+The source/output mapping is mechanical:
+
+```text
+website/public/profiles/manifest.json
+  -> website/dist/profiles/manifest.json
+website/public/profiles/objects/<sha256>.json.gz
+  -> website/dist/profiles/objects/<sha256>.json.gz
+website/public/profiles-dev/manifest.json
+  -> website/dist/profiles-dev/manifest.json
+website/public/profiles-dev/objects/<sha256>.json.gz
+  -> website/dist/profiles-dev/objects/<sha256>.json.gz
+```
+
+Copy only genuine output from the validated local producer workflow, never a
+hand-written fixture. Stage generated `artifacts/<gzip_sha256>.json.gz` files
+outside `website/public/` until gzip integrity, profile schema, set/format
+identity, canonical JSON, and generation metadata pass. Hosted paths contain
+no raw rows, source manifests, local paths, draft dumps, or generation
+reports. No payload is committed until publication is ready.
+
+#### Master-only atomic deployment
+
+The existing Cloudflare Git integration runs the ordinary Astro static build
+only for a commit merged to `master`; that merge is the sole website trigger.
+Cloudflare publishes the resulting `website/dist/` through the existing
+Wrangler assets configuration as one complete snapshot. It does not upload
+objects independently or deploy a partial profile directory, and production
+and development cannot have separate publication timing.
+
+There is no profile hook, manual data deployment, branch/preview deployment, or
+alternate publication timing. A failed build leaves the last successful
+snapshot. Hosting does not alter Python, PyPI, Homebrew, native,
+application-startup, or release workflows. Issue #227 discovery, scheduling,
+backfill, and publication automation remain excluded; baseline application
+bundling remains owned by #313.
+
+#### Stage, validate, and publish one transition
+
+Use the explicit producer inputs and commands in
+[Generate producer artifacts](#generate-producer-artifacts), staging outside
+the public directories. Before merging a publication:
+
+1. Validate every genuine artifact's gzip integrity, profile schema,
+   set/format identity, canonical serialization, and generation report.
+2. Hash the exact compressed bytes with SHA-256. The lowercase digest must
+   equal the object filename and `generation.json`'s `gzip_sha256`; recorded
+   `gzip_bytes` and `profile_bytes` must equal the corresponding bytes.
+3. Compare complete bytes when a digest path already exists. Reuse identical
+   bytes; reject different bytes at that path as a collision and never
+   overwrite it.
+4. Copy only validated objects to `objects/<sha256>.json.gz`. Build and
+   validate each environment's `manifest.json` from those objects in the same
+   commit. Every URL must be absolute HTTPS, same-origin with its environment,
+   and exactly `<public-base>objects/<gzip_sha256>.json.gz`; URL digest,
+   filename, all digest/size fields, and fetched bytes must agree.
+5. Prune objects not referenced by the manifest being published. Never prune
+   a referenced object or treat a manifest or `profile-smoke/` marker as an
+   object.
+
+Objects, both manifests, and ordinary website changes must land in one
+master-bound commit: never merge a manifest without its objects or an object
+without a manifest entry. A failed build/validation leaves the prior valid
+generation authoritative. Roll back by reverting the website change through
+the normal review process, not by editing a live file.
+
+#### Focused build and HTTP verification
+
+Validation is temporary and command-driven; no profile-specific test suite
+remains. For each publication, stage runtime-created, genuine valid
+manifest/object pairs in an isolated website copy, not committed fixtures:
+
+```sh
+tmp="$(mktemp -d)"
+cp -a website "$tmp/website"
+# Stage producer-generated valid pairs in both public/profiles/ and
+# public/profiles-dev/ under "$tmp/website".
+npm --prefix "$tmp/website" run build
+cmp "$tmp/website/public/profiles/manifest.json" \
+    "$tmp/website/dist/profiles/manifest.json"
+cmp "$tmp/website/public/profiles-dev/manifest.json" \
+    "$tmp/website/dist/profiles-dev/manifest.json"
+```
+
+For every object named by either manifest, byte-compare its source and
+`dist/<environment>/objects/<sha256>.json.gz` files. Validate both manifests
+with the existing Python loader:
+
+```sh
+uv run python -c '
+import sys
+from draftomen.profile_manifest import load_profile_manifest
+for path in sys.argv[1:]:
+    load_profile_manifest(path)
+' "$tmp/website/public/profiles/manifest.json" \
+  "$tmp/website/public/profiles-dev/manifest.json"
+```
+
+Serve the built copy with the existing Wrangler configuration
+(`npx wrangler dev --config wrangler.jsonc --local` from that copy), fetch both
+manifests and one object per environment, and compare response bytes with the
+built files. Check all four cache rules:
+
+| Path | Required `Cache-Control` |
+| --- | --- |
+| `/profiles/manifest.json` | `public, max-age=0, must-revalidate` |
+| `/profiles/objects/<sha256>.json.gz` | `public, max-age=31556952, immutable` |
+| `/profiles-dev/manifest.json` | `public, max-age=0, must-revalidate` |
+| `/profiles-dev/objects/<sha256>.json.gz` | `public, max-age=31556952, immutable` |
+
+Fetch each public URL (replacing `<sha256>` with a digest named by its
+manifest), compare its response body with the built file, and inspect headers:
+
+```sh
+for url in \
+  https://www.draftomen.com/profiles/manifest.json \
+  https://www.draftomen.com/profiles/objects/<sha256>.json.gz \
+  https://www.draftomen.com/profiles-dev/manifest.json \
+  https://www.draftomen.com/profiles-dev/objects/<sha256>.json.gz
+do
+  curl --fail --silent --show-error --dump-header - \
+    --output /dev/null "$url"
+done
+```
+
+Manifests revalidate; objects are immutable compressed-byte digests. A changed
+object gets a new digest and URL, never a repurposed URL. The smoke namespace
+is disjoint and is not a cache-policy test.
+
+#### Retention and legal erasure
+
+The live tree contains only current manifests and referenced objects. Git and
+Cloudflare deployment history retain prior snapshots under existing retention
+settings for rollback/audit, but archival never overrides erasure. For an
+erasure request, remove the object and every reference, merge the clean
+snapshot to `master`, remove retained Git history where legally required, and
+request purge of Cloudflare edge/deployment copies through existing controls.
+Record completion without erased bytes in an issue, log, or new commit. Raw
+inputs were never uploaded and remain in local provenance systems.
+
+#### Credentials, roles, and shutdown
+
+Repository maintainers own the existing Cloudflare account, website project,
+route, Git integration, access review, incident response, and legal/AUP
+decisions. Operators stage assets in a reviewable pull request; reviewers
+verify mapping, digest/size/cache invariants, limits, and minimization. No new
+Draft Omen hosting secret is needed or permitted.
+
+Public evidence for the existing `cloudflare-workers-and-pages` GitHub App
+verifies that its provider-defined manifest currently requests
+`administration: write`, `checks: write`, `contents: write`,
+`deployments: write`, `pull_requests: write`, and `metadata: read`. This is
+not read-only or least privilege for static hosting. The least-practical
+repository-access control is selecting the installation only for this
+repository; maintainers must verify that selection before publication and stop
+publication or correct the access if it is broader. Maintainers review those
+actual provider-defined scopes, repository selection, terms, and the
+master-only setting at each access review; they must not claim Contents and
+Metadata read-only access.
+
+The integration owner rotates or reconnects the existing grant when
+authorization expires or ownership changes. Verify repository selection,
+provider scopes, master-only trigger, route, and a harmless build, then revoke
+or disconnect the prior grant. Revocation uninstalls/disconnects the
+integration, removes its repository grant, and disables automatic builds. For
+emergency shutdown, pause builds, disable the affected route, and
+revoke/disconnect the grant; retain the last good snapshot only when legally
+and operationally appropriate. Never print or commit credentials.
+
+Maintainers monitor every master build/deployment, reachability and checksums,
+cache headers, file count/largest asset, build minutes/concurrency/timeouts,
+route health, retention/erasure work, and legal/AUP reports. A failing check
+blocks the website merge, never a package, native release, or startup.
+
+#### Service, size, cost, and data boundary
+
+On the current Cloudflare plan, static requests are free and unlimited. There
+is no separate incremental storage charge within 20,000 files per website
+version and 25 MiB per asset, so incremental hosting cost is `$0` within those
+bounds. Build capacity is 3,000 minutes/month, one concurrent build, and a
+20-minute timeout. Maintainers recheck plan terms when the account/provider
+changes; these are not availability guarantees.
+
+Keep the root manifest below the client's 1 MiB limit. Objects are expected to
+be tens to hundreds of KiB compressed; a complete 2018-onward backfill is
+estimated at 5–50 MiB. Expected use is read-only: one small manifest and only
+selected immutable objects, with no uploads or raw-corpus traffic. Estimates
+are below the host's 25 MiB asset limit and client's 64 MiB compressed-object
+and 128 MiB decompressed-profile limits. Raw corpora remain local and are not
+in website file-count/cost estimates. Revisit sizes and request volume from
+observed data, without raising client limits as a hosting workaround. Cloudflare
+terms, AUP, abuse controls, privacy commitments, and availability constraints
+apply.
+
+Hosted payloads are compact derived profile JSON and canonical manifests only:
+no raw rows, local paths, dumps, account names, or user identifiers. Preserve
+source attribution, license, retrieval details, and redistribution permission;
+provenance is evidence of review, not a license grant. Do not publish until
+terms permit redistribution. The canonical attribution and non-endorsement
+rules are in [README branding and compliance](../README.md#branding-and-compliance).
+Investigate complaints promptly, honor legal erasure, and keep all hosted paths
+free of raw inputs and identifiers.
+
+#### Master-only smoke check
+
+Run this harmless check with two ordinary merges to `master`, touching no
+manifest or object path:
+
+1. In the first merge, add only
+   `website/public/profile-smoke/<run-id>.txt`, exactly
+   `draftomen hosting smoke <run-id>\n` (one final newline). After the complete
+   production deployment, fetch
+   `https://www.draftomen.com/profile-smoke/<run-id>.txt` and compare bytes.
+2. In the next master merge, remove that marker and make no profile asset
+   changes. After deployment, retry its URL with bounded delays until it
+   returns `404 Not Found`, and record eventual absence.
+
+The smoke check never creates, rewrites, prunes, or validates profile assets,
+accepts arbitrary paths or credentials, or exposes credentials. If cleanup or
+absence fails, remove only the known marker in the next master merge, redeploy
+the complete snapshot, and repeat the bounded absence check before other work.
 
 ### Provenance and legal responsibility
 
@@ -1096,8 +1325,16 @@ The generator and client do not change pick scoring, deck-building heuristics,
 card-database schemas, or 17Lands cache schemas. The generator reads only
 explicit local inputs; the producer manifest APIs validate and write local
 publication files, while the client downloads only when explicitly configured.
-Neither side hosts, uploads, schedules, signs, or discovers a production
-manifest. Issue #227 owns hosting and publication automation.
-Producers remain responsible for generating evidence, choosing maturity, and
-serving the exact checksummed artifacts described by their manifest; the
-loader only validates, orders, and safely exposes profiles.
+Producer and client code do not upload, schedule, discover, or backfill profile
+data. The current hosting boundary above is limited to the master-only static
+assets under `website/public/profiles/` and `website/public/profiles-dev/`,
+deployed in the ordinary complete Astro/Cloudflare website snapshot.
+
+The broader issue #227 discovery, scheduling, backfill, and publication
+automation remains excluded; it does not own hosting. Native baseline, package,
+and runtime work in issue #313 also remains excluded. The hosting boundary is
+release-independent: it is outside the release, Homebrew, and native workflows;
+it neither triggers nor gates packaging, releases, or startup. There is no
+runtime default URL or bundled profile snapshot. Producers remain responsible
+choosing maturity, and handing off the exact checksummed artifacts described by
+their manifest; the loader only validates, orders, and safely exposes profiles.
