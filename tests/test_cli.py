@@ -108,6 +108,7 @@ def test_tui_parser_uses_tui_command_name(
         ("refresh-structure-targets", "17Lands"),
         ("generate-profile", "Generate"),
         ("execute-profile-refresh", "Acquire and stage"),
+        ("generate-profile-refresh-batch", "Generate profiles"),
     ],
 )
 def test_subcommands_are_registered_with_help_text(
@@ -125,6 +126,42 @@ def test_subcommands_are_registered_with_help_text(
     assert error.value.code == 0
     assert command in captured.out
     assert expected_help in captured.out
+
+
+def test_generate_profile_refresh_batch_parser_registers_exact_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "generate-profile-refresh-batch",
+            "--plan",
+            "plan.json",
+            "--staged-dir",
+            "staged",
+            "--generated-at",
+            PROFILE_GENERATION_AT,
+        ]
+    )
+
+    assert args.plan == Path("plan.json")
+    assert args.staged_dir == Path("staged")
+    assert args.generated_at == datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    assert args.profile_version == "1.0"
+
+    base = [
+        "generate-profile-refresh-batch",
+        "--plan",
+        "plan.json",
+        "--staged-dir",
+        "staged",
+        "--generated-at",
+        PROFILE_GENERATION_AT,
+    ]
+    for option in ("--plan", "--staged-dir", "--generated-at"):
+        missing = list(base)
+        position = missing.index(option)
+        del missing[position : position + 2]
+        with pytest.raises(SystemExit):
+            parser.parse_args(missing)
 
 
 def test_execute_profile_refresh_parser_registers_exact_options() -> None:
@@ -163,6 +200,207 @@ def test_execute_profile_refresh_parser_registers_exact_options() -> None:
         with pytest.raises(SystemExit):
             parser.parse_args(missing)
 
+
+def test_generate_profile_refresh_batch_handler_emits_canonical_bytes_and_success(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    expected = b'{"counts":{"failed":0,"planned":1,"publication_eligible":1}}\n'
+    plan = object()
+    calls: dict[str, object] = {}
+
+    class Result:
+        succeeded = True
+
+        def to_bytes(self) -> bytes:
+            calls["to_bytes"] = calls.get("to_bytes", 0) + 1
+            return expected
+
+    def load(path: Path) -> object:
+        calls["plan_path"] = path
+        return plan
+
+    def generate(**kwargs: object) -> Result:
+        calls["generate"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(cli, "load_refresh_plan", load)
+    monkeypatch.setattr(cli, "generate_staged_profile_batch", generate)
+
+    exit_code = main(
+        argv=[
+            "generate-profile-refresh-batch",
+            "--plan",
+            str(tmp_path / "private-plan.json"),
+            "--staged-dir",
+            str(tmp_path / "private-staged"),
+            "--generated-at",
+            PROFILE_GENERATION_AT,
+            "--profile-version",
+            "2.0",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.encode() == expected
+    assert captured.err == ""
+    assert calls["plan_path"] == tmp_path / "private-plan.json"
+    assert calls["generate"] == {
+        "plan": plan,
+        "staged_dir": tmp_path / "private-staged",
+        "generated_at": datetime(2026, 8, 30, 12, 0, tzinfo=UTC),
+        "profile_version": "2.0",
+    }
+    assert calls["to_bytes"] == 1
+
+
+def test_generate_profile_refresh_batch_handler_emits_report_before_failed_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    expected = b'{"counts":{"failed":1,"planned":1,"publication_eligible":0}}\n'
+
+    class Result:
+        succeeded = False
+
+        def to_bytes(self) -> bytes:
+            return expected
+
+    monkeypatch.setattr(cli, "load_refresh_plan", lambda path: object())
+    monkeypatch.setattr(cli, "generate_staged_profile_batch", lambda **kwargs: Result())
+
+    exit_code = main(
+        argv=[
+            "generate-profile-refresh-batch",
+            "--plan",
+            "plan.json",
+            "--staged-dir",
+            "staged",
+            "--generated-at",
+            PROFILE_GENERATION_AT,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out.encode() == expected
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("stage", ["plan", "batch"])
+def test_generate_profile_refresh_batch_errors_are_generic_and_path_free(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    stage: str,
+) -> None:
+    sentinel = "PRIVATE-EXCEPTION-DETAIL"
+    private_plan = tmp_path / "private-plan-sentinel.json"
+    private_staged = tmp_path / "private-staged-sentinel"
+    if stage == "plan":
+        monkeypatch.setattr(
+            cli,
+            "load_refresh_plan",
+            lambda path: (_ for _ in ()).throw(ValueError(sentinel)),
+        )
+        monkeypatch.setattr(cli, "generate_staged_profile_batch", lambda **kwargs: None)
+        expected_error = "generate-profile-refresh-batch: invalid plan\n"
+    else:
+        monkeypatch.setattr(cli, "load_refresh_plan", lambda path: object())
+        monkeypatch.setattr(
+            cli,
+            "generate_staged_profile_batch",
+            lambda **kwargs: (_ for _ in ()).throw(RuntimeError(sentinel)),
+        )
+        expected_error = "generate-profile-refresh-batch: batch generation error\n"
+
+    exit_code = main(
+        argv=[
+            "generate-profile-refresh-batch",
+            "--plan",
+            str(private_plan),
+            "--staged-dir",
+            str(private_staged),
+            "--generated-at",
+            PROFILE_GENERATION_AT,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert captured.err == expected_error
+    assert str(tmp_path) not in captured.err
+    assert sentinel not in captured.err
+
+
+@pytest.mark.parametrize("selection_mode", ["manual", "active", "history"])
+def test_generate_profile_refresh_batch_cli_accepts_each_selection_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    selection_mode: str,
+) -> None:
+    base_plan = _cli_refresh_plan()
+    if selection_mode == "manual":
+        plan = replace(
+            base_plan,
+            selection_mode="manual",
+            selection_set_code="EARLY",
+            max_environments=None,
+            environments=(next(item for item in base_plan.environments if item.set_code == "EARLY"),),
+        )
+    elif selection_mode == "active":
+        plan = replace(
+            base_plan,
+            selection_mode="active",
+            selection_set_code=None,
+            max_environments=None,
+            environments=tuple(
+                item for item in base_plan.environments if item.lifecycle == "active"
+            ),
+        )
+    else:
+        plan = base_plan
+    plan_path = tmp_path / f"{selection_mode}-plan.json"
+    write_refresh_plan(plan_path, plan)
+    expected = f'{{"selection_mode":"{selection_mode}"}}\n'.encode()
+    calls: list[RefreshPlan] = []
+
+    class Result:
+        succeeded = True
+
+        def to_bytes(self) -> bytes:
+            return expected
+
+    def generate(**kwargs: object) -> Result:
+        candidate = kwargs["plan"]
+        assert isinstance(candidate, RefreshPlan)
+        calls.append(candidate)
+        assert kwargs["staged_dir"] == tmp_path / "staged"
+        assert kwargs["generated_at"] == CLI_REFRESH_TIMESTAMP
+        return Result()
+
+    monkeypatch.setattr(cli, "generate_staged_profile_batch", generate)
+    exit_code = main(
+        argv=[
+            "generate-profile-refresh-batch",
+            "--plan",
+            str(plan_path),
+            "--staged-dir",
+            str(tmp_path / "staged"),
+            "--generated-at",
+            CLI_REFRESH_TIMESTAMP.isoformat(),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.encode() == expected
+    assert captured.err == ""
+    assert [item.selection_mode for item in calls] == [selection_mode]
 
 def test_execute_profile_refresh_handler_emits_canonical_bytes_and_success(
     monkeypatch: pytest.MonkeyPatch,
@@ -1816,6 +2054,35 @@ def _run_execute_profile_refresh_cli(
     )
 
 
+def _run_generate_profile_refresh_batch_cli(
+    *,
+    plan_path: Path,
+    staged_dir: Path,
+    generated_at: datetime = CLI_REFRESH_TIMESTAMP,
+    profile_version: str | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    command = [
+        sys.executable,
+        "-m",
+        "draftomen.cli",
+        "generate-profile-refresh-batch",
+        "--plan",
+        str(plan_path),
+        "--staged-dir",
+        str(staged_dir),
+        "--generated-at",
+        generated_at.isoformat(),
+    ]
+    if profile_version is not None:
+        command.extend(["--profile-version", profile_version])
+    return subprocess.run(
+        command,
+        cwd=CLI_REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+    )
+
+
 def test_execute_profile_refresh_cli_offline_is_byte_stable_and_path_free(
     tmp_path: Path,
 ) -> None:
@@ -1957,3 +2224,157 @@ def test_execute_profile_refresh_cli_failed_required_source_preserves_results(
     assert all(item["outcome"] == "failed" for item in execution["environments"])
     assert str(tmp_path).encode() not in completed.stdout
     assert b"Traceback" not in completed.stderr
+
+
+@pytest.mark.parametrize("selection_mode", ["manual", "active", "history"])
+def test_generate_profile_refresh_batch_cli_generates_each_selection_mode(
+    tmp_path: Path,
+    selection_mode: str,
+) -> None:
+    base_plan = _cli_refresh_plan()
+    by_code = {item.set_code: item for item in base_plan.environments}
+    if selection_mode == "manual":
+        plan = replace(
+            base_plan,
+            selection_mode="manual",
+            selection_set_code="EARLY",
+            max_environments=None,
+            environments=(by_code["EARLY"],),
+        )
+    elif selection_mode == "active":
+        plan = replace(
+            base_plan,
+            selection_mode="active",
+            selection_set_code=None,
+            max_environments=None,
+            environments=(by_code["EARLY"],),
+        )
+    else:
+        plan = replace(
+            base_plan,
+            selection_mode="history",
+            selection_set_code=None,
+            max_environments=2,
+            environments=(by_code["META"], by_code["MATURE"]),
+        )
+
+    plan_path = tmp_path / f"{selection_mode}-plan.json"
+    cache_dir = tmp_path / f"{selection_mode}-cache"
+    staged_dir = tmp_path / f"{selection_mode}-staged"
+    write_refresh_plan(plan_path, plan)
+    cache = ProfileInputCache(
+        cache_dir,
+        policy=cli.DEFAULT_PROFILE_REFRESH_CACHE_POLICY,
+        clock=lambda: CLI_REFRESH_TIMESTAMP,
+    )
+    for environment in plan.environments:
+        _seed_cli_cache(
+            cache=cache,
+            environment=environment,
+            temporary_dir=tmp_path,
+            include_ratings=environment.lifecycle in {"active", "mature"},
+            include_public_drafts=environment.lifecycle == "mature",
+        )
+
+    staged = _run_execute_profile_refresh_cli(
+        plan_path=plan_path,
+        cache_dir=cache_dir,
+        output_dir=staged_dir,
+    )
+    assert staged.returncode == 0
+    assert staged.stderr == b""
+
+    generated = _run_generate_profile_refresh_batch_cli(
+        plan_path=plan_path,
+        staged_dir=staged_dir,
+    )
+    assert generated.returncode == 0
+    assert generated.stderr == b""
+    report = json.loads(generated.stdout)
+    assert report["selection_mode"] == selection_mode
+    assert report["counts"] == {
+        "failed": 0,
+        "planned": len(plan.environments),
+        "publication_eligible": len(plan.environments),
+    }
+    assert [item["outcome"] for item in report["environments"]] == [
+        "publication-eligible"
+    ] * len(plan.environments)
+
+
+def test_generate_profile_refresh_batch_cli_is_deterministic_and_preserves_partial_results(
+    tmp_path: Path,
+) -> None:
+    base_plan = _cli_refresh_plan()
+    failed = PlannedEnvironment(
+        set_code="FAIL",
+        event_format="quickdraft",
+        lifecycle="active",
+        reasons=("fixture-failure",),
+    )
+    plan = replace(
+        base_plan,
+        max_environments=4,
+        environments=(*base_plan.environments, failed),
+    )
+    plan_path = tmp_path / "private-refresh-plan.json"
+    cache_dir = tmp_path / "private-cache"
+    staged_dir = tmp_path / "private-staged"
+    write_refresh_plan(plan_path, plan)
+    cache = ProfileInputCache(
+        cache_dir,
+        policy=cli.DEFAULT_PROFILE_REFRESH_CACHE_POLICY,
+        clock=lambda: CLI_REFRESH_TIMESTAMP,
+    )
+    for environment in plan.environments:
+        if environment.set_code == "FAIL":
+            continue
+        _seed_cli_cache(
+            cache=cache,
+            environment=environment,
+            temporary_dir=tmp_path,
+            include_ratings=environment.lifecycle in {"active", "mature"},
+            include_public_drafts=environment.lifecycle == "mature",
+        )
+
+    staged = _run_execute_profile_refresh_cli(
+        plan_path=plan_path,
+        cache_dir=cache_dir,
+        output_dir=staged_dir,
+    )
+    assert staged.returncode == 1
+    assert staged.stderr == b""
+
+    first = _run_generate_profile_refresh_batch_cli(
+        plan_path=plan_path,
+        staged_dir=staged_dir,
+    )
+    second = _run_generate_profile_refresh_batch_cli(
+        plan_path=plan_path,
+        staged_dir=staged_dir,
+    )
+
+    assert first.returncode == 1
+    assert second.returncode == 1
+    assert first.stderr == b""
+    assert second.stderr == b""
+    assert first.stdout == second.stdout
+    report = json.loads(first.stdout)
+    assert report["counts"] == {"failed": 1, "planned": 4, "publication_eligible": 3}
+    outcomes = {
+        item["environment"]["set_code"]: item["outcome"]
+        for item in report["environments"]
+    }
+    assert outcomes == {
+        "EARLY": "publication-eligible",
+        "FAIL": "failed",
+        "MATURE": "publication-eligible",
+        "META": "publication-eligible",
+    }
+    for payload in (first.stdout, first.stderr, second.stdout, second.stderr):
+        assert str(plan_path).encode() not in payload
+        assert str(cache_dir).encode() not in payload
+        assert str(staged_dir).encode() not in payload
+        assert b"Support Creature" not in payload
+        assert b"fixture-secret" not in payload
+        assert b"https://" not in payload

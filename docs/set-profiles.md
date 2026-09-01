@@ -440,7 +440,7 @@ The command uses the network-backed
 offline runs, `--inventory-file` accepts that endpoint's exact JSON list shape:
 
 ```json
-["TST", "NEW"]
+["TST", "NEW", "OLD"]
 ```
 
 Lifecycle is a separate, explicit operator input. 17Lands does not publish
@@ -468,34 +468,36 @@ diagnostics. They do not discard valid 17Lands inventory entries.
 Select exactly one planning mode and always provide an event format:
 
 ```sh
-# One known inventory environment.
+# One known inventory environment (manual selection).
 uv run draftomen-tui plan-profile-refresh \
   --set-code NEW --event-format PremierDraft \
   --inventory-file "$PWD/inputs/expansions.json" \
   --lifecycle-file "$PWD/inputs/arena-lifecycle.json" \
-  --dry-run
+  --output-plan "$PWD/refresh-plan-manual.json"
 
 # Every environment explicitly classified active.
 uv run draftomen-tui plan-profile-refresh \
   --active --event-format PremierDraft \
-  --lifecycle-url https://schedule.example.test/arena.json \
-  --dry-run
+  --inventory-file "$PWD/inputs/expansions.json" \
+  --lifecycle-file "$PWD/inputs/arena-lifecycle.json" \
+  --output-plan "$PWD/refresh-plan-active.json"
 
 # At most two explicitly historical environments.
 uv run draftomen-tui plan-profile-refresh \
-  --max-environments 2 --event-format PremierDraft \
+  --history --max-environments 2 --event-format PremierDraft \
   --inventory-file "$PWD/inputs/expansions.json" \
   --lifecycle-file "$PWD/inputs/arena-lifecycle.json" \
-  --output-plan "$PWD/refresh-plan.json"
+  --output-plan "$PWD/refresh-plan-history.json"
 ```
 
-The command prints canonical compact JSON with sorted keys, deterministic
-environment order and reasons, and one trailing newline. `--output-plan` writes
-the same bytes atomically. A history selection includes only entries classified
-`historical` and applies the explicit bound; an active selection includes only
-entries classified `active`. A manual selection requires the set code to be in
-the 17Lands inventory, while its lifecycle classification remains explicit
-metadata (and may be reported as unknown). No mode infers a lifecycle stage.
+With `--dry-run`, the command prints canonical compact JSON with sorted keys,
+deterministic environment order and reasons, and one trailing newline.
+`--output-plan` writes the same bytes atomically.
+A history selection includes only entries classified `historical` and applies
+the explicit bound; an active selection includes only entries classified
+`active`. A manual selection requires the set code to be in the 17Lands
+inventory, while its lifecycle classification remains explicit metadata (and
+may be reported as unknown). No mode infers a lifecycle stage.
 
 ## Execute a profile refresh
 
@@ -666,11 +668,149 @@ license notices, and obtain any permissions required for redistribution. The
 executor is strictly no-network in offline mode and explicitly excludes
 profile generation and remote publication.
 
+## Run a local profile-refresh batch
+
+The operator workflow has three separate commands: plan the environments,
+execute the plan to stage verified input bundles, then generate the batch from
+that staged execution. The plan is the authority for manual, active, or
+bounded-history selection; execution and batch generation do not rediscover
+inventory or lifecycle metadata. Keep the inventory, lifecycle document,
+plans, cache, and staged output on local storage. Supplying
+`--inventory-file` and `--lifecycle-file` keeps planning local as well; without
+those options, planning may use its network-backed inventory or lifecycle URL
+inputs.
+
+The three local plan modes can be prepared as separate canonical plan files:
+
+```sh
+PLAN_DIR="$PWD/.draftomen/profile-plans"
+CACHE_DIR="$PWD/.draftomen/profile-input-cache"
+STAGED_DIR="$PWD/.draftomen/profile-refresh"
+GENERATED_AT="2026-08-30T12:00:00+00:00"
+
+mkdir -p "$PLAN_DIR" "$CACHE_DIR"
+
+# Manual: one known inventory environment.
+uv run draftomen-tui plan-profile-refresh \
+  --set-code NEW --event-format PremierDraft \
+  --inventory-file "$PWD/inputs/expansions.json" \
+  --lifecycle-file "$PWD/inputs/arena-lifecycle.json" \
+  --output-plan "$PLAN_DIR/manual.json"
+
+# Active: every inventory environment explicitly classified active.
+uv run draftomen-tui plan-profile-refresh \
+  --active --event-format PremierDraft \
+  --inventory-file "$PWD/inputs/expansions.json" \
+  --lifecycle-file "$PWD/inputs/arena-lifecycle.json" \
+  --output-plan "$PLAN_DIR/active.json"
+
+# Bounded history: at most two explicitly historical environments.
+uv run draftomen-tui plan-profile-refresh \
+  --history --max-environments 2 --event-format PremierDraft \
+  --inventory-file "$PWD/inputs/expansions.json" \
+  --lifecycle-file "$PWD/inputs/arena-lifecycle.json" \
+  --output-plan "$PLAN_DIR/history.json"
+```
+
+`--dry-run` prints the same canonical plan bytes instead of writing
+`--output-plan`; use the written form when handing the plan to the next
+command. The local lifecycle document must classify entries used by active or
+history selection explicitly. Manual selection still requires its set code to
+be in the inventory; its lifecycle classification may be unknown. Active
+selection includes only entries classified `active`, and history selection
+includes only entries classified `historical` up to the positive
+`--max-environments` bound.
+
+Execute each plan into its own staged directory. The optional `--offline`
+switch below is an execution switch, not a batch switch: it requires verified
+cache entries and prevents acquisition or network access. Omit it when the
+executor is allowed to acquire missing inputs, then retain the resulting cache
+and staged authority for later local replays.
+
+```sh
+# The first run must omit --offline so the executor can acquire and cache the
+# inputs; add --offline only for later cache-only replays.
+for mode in manual active history; do
+  uv run draftomen-tui execute-profile-refresh \
+    --plan "$PLAN_DIR/$mode.json" \
+    --cache-dir "$CACHE_DIR" \
+    --output-dir "$STAGED_DIR/$mode"
+done
+```
+
+Finally, run the read-only batch generation command once for each staged
+execution:
+
+```sh
+for mode in manual active history; do
+  uv run draftomen-tui generate-profile-refresh-batch \
+    --plan "$PLAN_DIR/$mode.json" \
+    --staged-dir "$STAGED_DIR/$mode" \
+    --generated-at "$GENERATED_AT"
+done
+```
+
+`--generated-at` is required and must be timezone-aware ISO-8601. The optional
+`--profile-version` defaults to `1.0`; pass it explicitly when a different
+profile artifact version is required. Batch generation reads only the
+canonical plan and the existing staged execution authority and bundles. It
+does not acquire inputs, access the profile-input cache, invoke adapters, or
+access the network, and it has no `--offline` option. It also does not run
+GitHub Actions, publish a profile or manifest, or write artifacts or reports.
+Eligible validated profile, gzip, and generation-report payloads remain in
+process memory for later in-process callers; the staged directory is unchanged.
+
+Stage selection is performed independently for each staged environment from
+its available ratings and public-draft evidence. A batch may therefore contain
+metadata, early, and mature profiles together; lifecycle metadata never
+promotes a generation stage.
+
+The batch command writes one canonical, compact JSON report to stdout, with
+sorted keys and one trailing newline. Its top-level report contains the batch
+`schema_version`, the plan SHA-256, the plan `selection_mode`, the staging
+run's `execution_mode` (`online` or `offline`), the aggregate `counts`,
+ordered per-environment results, and a `versions` object holding
+`generator_version`, `profile_generation_schema_version`,
+`profile_generation_execution_schema_version`, `set_profile_schema_version`,
+`public_dump_manifest_schema_version`, and `statistics_version`. Each
+publication-eligible environment includes its selected stage and bounded
+observed samples, safe logical source metadata for every input that produced
+the profile (name and digest for the card-database and ratings inputs, plus
+attribution and license for public-draft sources), card-game and pair-game
+counts, skip/error totals and reason counts, and profile, gzip, and
+generation-report SHA-256 and byte-size pairs. Failed environments retain
+their safe identity and finite outcome, phase, and reason (and any bounded
+stage selection); environments the refresh executor never staged are labeled
+`refresh-execution` / `refresh-execution-failed` and carry the executor's
+recorded skip-reason counts. One failure does not discard eligible sibling
+results. Results remain in canonical plan order.
+
+The report is privacy-safe: it contains no raw datasets or payload bytes,
+secrets, local paths, source URLs or retrieval metadata, exception text,
+diagnostics, card names, generated timestamp, or profile version. Raw input
+objects remain local evidence in the cache and staged bundles; batch generation
+does not publish or copy them. A complete report is emitted for per-environment
+failures and the command exits `0` only when every planned environment is
+`publication-eligible`; any failed environment exits `1`. Fatal plan,
+authority, or batch-input errors emit only generic, path-free stderr and exit
+`1` (argument syntax errors retain `2`).
+
+For deterministic repeats, keep the canonical plan bytes, staged input bytes,
+profile version, generator configuration, stage thresholds, and timezone-aware
+`--generated-at` unchanged. Repeating the batch then produces byte-identical
+report bytes and identical eligible payload bytes; the report itself does not
+include `generated_at` or `profile_version`.
+
+
 ## Select a profile-generation stage
 
 After staging, load the bundle and select a stage from its role-keyed source
 reports. The selector consumes only `bundle.ratings_source` and
-`bundle.public_draft_source`; it does not read raw rows or local paths:
+`bundle.public_draft_source`; it does not read raw rows or local paths.
+
+The batch CLI performs this selection and the validated generation for every
+staged environment; the following is the equivalent lower-level library path
+for callers that need to inspect one bundle.
 
 ```python
 from draftomen.profile_generation_stage_policy import select_profile_generation_stage

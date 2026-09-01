@@ -317,6 +317,7 @@ def load_staged_profile_build_bundle(
     bundle_path: PathInput,
     *,
     environment: PlannedEnvironment | None = None,
+    expected_plan_sha256: str | None = None,
 ) -> ProfileBuildBundle:
     """Strictly verify and load one moved staged bundle; public-draft paths
     are runtime-only and never read from authority JSON."""
@@ -358,6 +359,8 @@ def load_staged_profile_build_bundle(
     if value["executor_version"] != PROFILE_REFRESH_EXECUTOR_VERSION:
         raise ProfileRefreshExecutionError("unsupported executor version")
     plan_sha256 = _valid_hash(value["plan_sha256"], "plan SHA-256")
+    if expected_plan_sha256 is not None and plan_sha256 != expected_plan_sha256:
+        raise ProfileRefreshExecutionError("staged bundle does not match requested plan")
     mode = _mode_value(value["mode"])
     outcome = _enum_value(value["outcome"], ProfileRefreshEnvironmentOutcome)
     if outcome is not ProfileRefreshEnvironmentOutcome.STAGED:
