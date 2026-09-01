@@ -3,7 +3,7 @@
 ## [Unreleased]
 - Record the production HOB/PremierDraft metadata snapshot audit evidence from the #319 producer run; retain the gzip payload locally for publication. (#319)
 - Publish the first production HOB/PremierDraft metadata-only profile snapshot through content-addressed website assets. (#320)
-- Add the temporary production hosting smoke marker for deployment verification. (#320)
+- Complete the production hosting marker add/fetch/remove verification lifecycle. (#320)
 - Add deterministic `generate-profile-refresh-batch` generation from staged
   refresh plans with isolated environment outcomes, privacy-safe reports, and
   no-network, no-publication execution. (#307)
