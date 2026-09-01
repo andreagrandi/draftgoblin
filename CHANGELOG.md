@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Record the production HOB/PremierDraft metadata snapshot audit evidence from the #319 producer run; retain the gzip payload locally for publication. (#319)
 - Add deterministic `generate-profile-refresh-batch` generation from staged
   refresh plans with isolated environment outcomes, privacy-safe reports, and
   no-network, no-publication execution. (#307)
