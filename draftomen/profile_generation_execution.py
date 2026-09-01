@@ -13,7 +13,7 @@ from datetime import datetime
 from enum import Enum
 import hashlib
 import json
-from typing import Any, TypeAlias
+from typing import Any, Mapping, TypeAlias
 
 from draftomen.profile_generation import (
     DEFAULT_PROFILE_GENERATION_CONFIG,
@@ -64,6 +64,7 @@ class ProfileGenerationEnvironmentOutcome(str, Enum):
 class ProfileGenerationFailurePhase(str, Enum):
     """The finite execution phase at which a bounded failure occurred."""
 
+    REFRESH_EXECUTION = "refresh-execution"
     STAGED_BUNDLE_LOAD = "staged-bundle-load"
     STAGE_SELECTION = "stage-selection"
     GENERATION = "generation"
@@ -73,6 +74,7 @@ class ProfileGenerationFailurePhase(str, Enum):
 class ProfileGenerationFailureReason(str, Enum):
     """Finite, path-free failure reasons exposed by this service."""
 
+    REFRESH_EXECUTION_FAILED = "refresh-execution-failed"
     STAGED_BUNDLE_LOAD_FAILED = "staged-bundle-load-failed"
     STAGE_SELECTION_FAILED = "stage-selection-failed"
     GENERATION_FAILED = "generation-failed"
@@ -123,6 +125,7 @@ class ProfileGenerationEnvironmentResult:
     validated: ValidatedProfileGeneration | None = None
     failure_phase: ProfileGenerationFailurePhase | str | None = None
     failure_reason: ProfileGenerationFailureReason | str | None = None
+    input_sources: tuple[Mapping[str, str], ...] = ()
     schema_version: int = PROFILE_GENERATION_EXECUTION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -151,6 +154,14 @@ class ProfileGenerationEnvironmentResult:
         if len(diagnostics) > _MAX_DIAGNOSTICS:
             raise ProfileGenerationExecutionError("profile generation diagnostics exceed the bound")
         object.__setattr__(self, "diagnostics", diagnostics)
+
+        input_sources = tuple(self.input_sources)
+        for item in input_sources:
+            if not isinstance(item, Mapping) or any(
+                not isinstance(key, str) or not isinstance(value, str) for key, value in item.items()
+            ):
+                raise ProfileGenerationExecutionError("profile generation input sources are invalid")
+        object.__setattr__(self, "input_sources", input_sources)
 
         for name in ("diagnostic_total", "diagnostics_omitted"):
             value = getattr(self, name)
@@ -239,6 +250,7 @@ class ProfileGenerationEnvironmentResult:
             except (TypeError, ValueError) as error:
                 raise ProfileGenerationExecutionError("profile generation failure is invalid") from error
             expected_reason = {
+                ProfileGenerationFailurePhase.REFRESH_EXECUTION: ProfileGenerationFailureReason.REFRESH_EXECUTION_FAILED,
                 ProfileGenerationFailurePhase.STAGED_BUNDLE_LOAD: ProfileGenerationFailureReason.STAGED_BUNDLE_LOAD_FAILED,
                 ProfileGenerationFailurePhase.STAGE_SELECTION: ProfileGenerationFailureReason.STAGE_SELECTION_FAILED,
                 ProfileGenerationFailurePhase.GENERATION: ProfileGenerationFailureReason.GENERATION_FAILED,
@@ -339,6 +351,7 @@ def generate_staged_environment_profile(
     profile_version: str = "1.0",
     config: ProfileGenerationConfig = DEFAULT_PROFILE_GENERATION_CONFIG,
     thresholds: ProfileGenerationStageThresholds = DEFAULT_PROFILE_GENERATION_STAGE_THRESHOLDS,
+    expected_plan_sha256: str | None = None,
 ) -> ProfileGenerationEnvironmentResult:
     """Generate and validate exactly one staged environment profile."""
 
@@ -346,7 +359,9 @@ def generate_staged_environment_profile(
         raise ProfileGenerationExecutionError("environment must be a PlannedEnvironment")
 
     try:
-        bundle = load_staged_profile_build_bundle(bundle_path, environment=environment)
+        bundle = load_staged_profile_build_bundle(
+            bundle_path, environment=environment, expected_plan_sha256=expected_plan_sha256
+        )
     except Exception:  # noqa: BLE001 - convert all local failures to bounded output
         return _failure(
             environment=environment,
@@ -409,6 +424,20 @@ def generate_staged_environment_profile(
         )
 
     report = generation.report
+    input_sources = tuple(
+        {
+            "role": role,
+            "name": source_report.source.name,
+            "sha256": source_report.sha256 or "",
+            "source_version": source_report.source_version or "",
+        }
+        for role, source_report in (
+            ("card_database", bundle.card_metadata),
+            ("seventeen_lands_ratings", bundle.ratings_source),
+            ("seventeen_lands_public_drafts", bundle.public_draft_source),
+        )
+        if source_report is not None
+    )
     try:
         return ProfileGenerationEnvironmentResult(
             environment=environment,
@@ -421,6 +450,7 @@ def generate_staged_environment_profile(
             error_count=sum(report.error_reasons.values()),
             generation=generation,
             validated=validated,
+            input_sources=input_sources,
         )
     except Exception:  # noqa: BLE001 - malformed success contracts become bounded failures
         return _failure(
