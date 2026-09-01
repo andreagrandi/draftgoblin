@@ -7,6 +7,7 @@
 - Add deterministic profile-generation stage selection from staged ratings and
   public-draft availability with immutable thresholds and privacy-safe records.
   (#301)
+- Add deterministic single-environment profile generation from staged inputs with publication eligibility only after existing schema, identity, size, and checksum validation, plus affected-card diagnostics, valid metadata fallback, and bounded failure records without partial artifacts. (#304)
 
 - Tighten agent skill guidance: single full-length waits for delegated
   implementation slices, size-based implementation readiness with board-time

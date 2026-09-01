@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 import gzip
 import hashlib
@@ -310,6 +310,25 @@ def _valid_generation() -> publication.ProfileGenerationResult:
         card_database=_database(),
         config=_config(),
     )
+
+def test_validate_profile_generation_returns_immutable_canonical_payload() -> None:
+    generation = _valid_generation()
+
+    validated = publication.validate_profile_generation(
+        generation=generation,
+        set_code="tst",
+        event_format="quickdraft",
+        stage="metadata",
+    )
+
+    assert isinstance(validated, publication.ValidatedProfileGeneration)
+    assert validated.profile_bytes == generation.profile_bytes
+    assert validated.gzip_bytes == generation.gzip_bytes
+    assert validated.report_bytes == generation.report.to_bytes()
+    with pytest.raises(FrozenInstanceError):
+        validated.profile_bytes = b""
+
+
 
 
 @pytest.mark.parametrize(

@@ -52,6 +52,20 @@ class ProfilePublicationError(RuntimeError):
     """Raised when local profile generation or publication cannot be completed."""
 
 
+@dataclass(frozen=True, slots=True)
+class ValidatedProfileGeneration:
+    """Canonical bytes that passed profile publication validation."""
+
+    profile_bytes: bytes
+    gzip_bytes: bytes
+    report_bytes: bytes
+
+    def __post_init__(self) -> None:
+        for field_name in ("profile_bytes", "gzip_bytes", "report_bytes"):
+            if not isinstance(getattr(self, field_name), bytes):
+                raise TypeError(f"{field_name} must be bytes.")
+
+
 _SOURCE_CHECKSUM_ERROR = "The selected draft source does not match its SHA-256 pin."
 _SOURCE_VERIFY_ERROR = "Could not verify the selected local draft source."
 _EARLY_EVIDENCE_ERROR = (
@@ -141,7 +155,7 @@ def profile_manifest_artifact_from_publication(
         report = generation.report
         if not isinstance(report, ProfileGenerationReport):
             raise ProfilePublicationError("publication result contains an invalid generation report.")
-        _validate_generation(
+        validated = validate_profile_generation(
             generation=generation,
             set_code=profile.set_code,
             event_format=profile.event_format,
@@ -347,12 +361,14 @@ def generate_local_profile_artifacts(
             draft_source_name=None if selected_source is None else selected_source.name,
             config=config,
         )
-        gzip_bytes, report_bytes = _validate_generation(
+        validated = validate_profile_generation(
             generation=generation,
             set_code=normalized_set,
             event_format=normalized_format,
             stage=normalized_stage,
         )
+        gzip_bytes = validated.gzip_bytes
+        report_bytes = validated.report_bytes
     except PublicDumpChecksumError as error:
         raise ProfilePublicationError(_SOURCE_CHECKSUM_ERROR) from error
     except (ProfileGenerationError, SetProfileError) as error:
@@ -481,13 +497,13 @@ def _select_source(
     return selected
 
 
-def _validate_generation(
+def validate_profile_generation(
     *,
     generation: ProfileGenerationResult,
     set_code: str,
     event_format: str,
     stage: str,
-) -> tuple[bytes, bytes]:
+) -> ValidatedProfileGeneration:
     if not isinstance(generation, ProfileGenerationResult):
         raise ProfilePublicationError("Profile generation returned an invalid result.")
     profile_bytes = generation.profile_bytes
@@ -536,7 +552,11 @@ def _validate_generation(
     ):
         raise ProfilePublicationError("Generation report checksums or sizes do not reconcile.")
     report_bytes = _validated_report_bytes(report=report)
-    return gzip_bytes, report_bytes
+    return ValidatedProfileGeneration(
+        profile_bytes=profile_bytes,
+        gzip_bytes=gzip_bytes,
+        report_bytes=report_bytes,
+    )
 
 
 def _validated_report_bytes(*, report: ProfileGenerationReport) -> bytes:
@@ -616,9 +636,11 @@ def _atomic_write(*, path: Path, payload: bytes) -> None:
 __all__ = [
     "ProfilePublicationError",
     "ProfilePublicationResult",
+    "ValidatedProfileGeneration",
     "build_profile_manifest",
     "generate_local_profile_artifacts",
     "profile_manifest_artifact_from_publication",
     "publish_profile_manifest",
+    "validate_profile_generation",
 ]
 
