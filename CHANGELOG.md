@@ -43,8 +43,9 @@
   classification plus approval-gated epic decomposition and dependency linking.
 - Add issue-226's remote set-profile manifest/client workflow with
   offline-first cached loading, explicit live/manual refresh, validation,
-  last-good recovery, and compact maturity/outcome status; hosting and
-  publication automation remain owned by #227. (#226)
+  last-good recovery, and compact maturity/outcome status; discovery, scheduling,
+  backfill, and publication automation remain owned by #227; hosting is provided
+  by #285. (#226)
 - Fix `generate-profile --format quickdraft` to accept pinned ratings caches
   with `QuickDraft` metadata in any casing while preserving normalized profile
   identity.
