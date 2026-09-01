@@ -78,6 +78,7 @@ from draftomen.refresh_plan import (
     load_refresh_plan,
     write_refresh_plan,
 )
+from draftomen.profile_batch_generation import generate_staged_profile_batch
 from draftomen.profile_input_cache import ProfileInputCache
 from draftomen.profile_refresh_execution import (
     DEFAULT_PROFILE_REFRESH_CACHE_POLICY,
@@ -753,6 +754,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow only verified cached inputs; never access the network.",
     )
     execute_parser.set_defaults(handler=handle_execute_profile_refresh)
+    batch_parser = subparsers.add_parser(
+        name="generate-profile-refresh-batch",
+        help="Generate profiles deterministically from a staged refresh execution.",
+        description=(
+            "Generate profiles deterministically from a canonical refresh plan "
+            "and its staged execution authority."
+        ),
+    )
+    batch_parser.add_argument(
+        "--plan",
+        required=True,
+        type=Path,
+        help="Canonical refresh plan JSON.",
+    )
+    batch_parser.add_argument(
+        "--staged-dir",
+        required=True,
+        type=Path,
+        help="Directory containing staged profile bundles and execution authority.",
+    )
+    batch_parser.add_argument(
+        "--generated-at",
+        required=True,
+        type=_parse_generated_at,
+        help="Timezone-aware ISO-8601 generation timestamp.",
+    )
+    batch_parser.add_argument(
+        "--profile-version",
+        default="1.0",
+        help="Profile schema version to embed (default: 1.0).",
+    )
+    batch_parser.set_defaults(handler=handle_generate_profile_refresh_batch)
     return parser
 
 
@@ -926,13 +959,56 @@ def handle_execute_profile_refresh(args: argparse.Namespace) -> int:
             offline=bool(args.offline),
         )
         payload = result.to_bytes()
+    except Exception:  # noqa: BLE001 - CLI errors are intentionally path-free.
+        print("execute-profile-refresh: execution error", file=sys.stderr)
+        return 1
+
+    # The report is written outside the execution try block so a mid-write
+    # failure cannot masquerade as an execution error alongside partial JSON.
+    try:
         stream = getattr(sys.stdout, "buffer", None)
         if stream is None:
             sys.stdout.write(payload.decode("utf-8"))
         else:
             stream.write(payload)
     except Exception:  # noqa: BLE001 - CLI errors are intentionally path-free.
-        print("execute-profile-refresh: execution error", file=sys.stderr)
+        print("execute-profile-refresh: report write error", file=sys.stderr)
+        return 1
+
+    return 0 if result.succeeded else 1
+
+
+def handle_generate_profile_refresh_batch(args: argparse.Namespace) -> int:
+    """Generate every environment in a staged profile-refresh execution."""
+
+    try:
+        plan = load_refresh_plan(args.plan)
+    except Exception:  # noqa: BLE001 - CLI errors are intentionally path-free.
+        print("generate-profile-refresh-batch: invalid plan", file=sys.stderr)
+        return 1
+
+    try:
+        result = generate_staged_profile_batch(
+            plan=plan,
+            staged_dir=args.staged_dir,
+            generated_at=args.generated_at,
+            profile_version=args.profile_version,
+        )
+        payload = result.to_bytes()
+    except Exception:  # noqa: BLE001 - CLI errors are intentionally path-free.
+        print("generate-profile-refresh-batch: batch generation error", file=sys.stderr)
+        return 1
+
+    # The report is written outside the generation try block so a mid-write
+    # failure cannot masquerade as a generation error alongside partial JSON.
+    try:
+        stream = getattr(sys.stdout, "buffer", None)
+        if stream is None:
+            sys.stdout.write(payload.decode("utf-8"))
+        else:
+            stream.write(payload)
+    except Exception:  # noqa: BLE001 - CLI errors are intentionally path-free.
+        print("generate-profile-refresh-batch: report write error", file=sys.stderr)
         return 1
 
     return 0 if result.succeeded else 1

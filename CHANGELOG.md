@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+- Add deterministic `generate-profile-refresh-batch` generation from staged
+  refresh plans with isolated environment outcomes, privacy-safe reports, and
+  no-network, no-publication execution. (#307)
 - Add `execute-profile-refresh` to stage portable, content-addressed profile
   inputs from strict plans with bounded cache reuse, offline replay, and
   privacy-safe execution authorities. (#290)
