@@ -11,6 +11,7 @@ import pytest
 
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.profile_generation import generate_set_profile
+from draftomen.profile_generation_stage_policy import select_profile_generation_stage
 from draftomen.profile_input_acquisition import (
     CardMetadataAdapter,
     ProfileBuildBundle,
@@ -187,6 +188,55 @@ def test_three_environment_plan_loads_and_generates_explicit_stages(
             "metadata-only" if stage == "metadata" else stage
         )
         assert generated.to_bytes() == repeated.to_bytes()
+
+
+@pytest.mark.parametrize(
+    ("include_ratings", "include_public_drafts", "expected_stage"),
+    (
+        (False, False, "metadata"),
+        (True, False, "early"),
+        (True, True, "mature"),
+    ),
+)
+def test_staged_bundle_selector_uses_loaded_role_reports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_ratings: bool,
+    include_public_drafts: bool,
+    expected_stage: str,
+) -> None:
+    environment = _environment()
+
+    def acquire(**kwargs: object) -> ProfileInputAcquisitionResult:
+        acquired_environment = kwargs["environment"]
+        assert isinstance(acquired_environment, PlannedEnvironment)
+        if not include_ratings and not include_public_drafts:
+            return _acquisition(acquired_environment, include_evidence=False)
+        return _acquisition_with_optional_inputs(
+            acquired_environment,
+            include_ratings=include_ratings,
+            include_public_drafts=include_public_drafts,
+        )
+
+    monkeypatch.setattr(execution, "acquire_profile_build_bundle", acquire)
+    result = execution.execute_profile_refresh_plan(
+        plan=_plan(),
+        cache=_cache(tmp_path),
+        output_dir=tmp_path / "output",
+        offline=True,
+        clock=lambda: NOW,
+    )
+    assert result.succeeded
+
+    bundle = execution.load_staged_profile_build_bundle(
+        tmp_path / "output" / "bundles" / result.environments[0].bundle_id,
+        environment=environment,
+    )
+    selection = select_profile_generation_stage(
+        ratings_report=bundle.ratings_source,
+        public_draft_report=bundle.public_draft_source,
+    )
+    assert selection.stage.value == expected_stage
 
 
 def _cache(tmp_path: Path) -> ProfileInputCache:
