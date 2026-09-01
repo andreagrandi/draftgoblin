@@ -4,6 +4,12 @@
 - Add deterministic `generate-profile-refresh-batch` generation from staged
   refresh plans with isolated environment outcomes, privacy-safe reports, and
   no-network, no-publication execution. (#307)
+- Adopt the master-only Cloudflare website static-asset contract for hosted
+  profiles: production and development paths share complete website
+  deployments, validated digest-addressed objects, explicit cache and
+  retention/legal-erasure boundaries, and a two-merge smoke check. Hosting
+  remains independent of stable releases, native releases, PyPI, Homebrew, and
+  application startup. (#285)
 - Add `execute-profile-refresh` to stage portable, content-addressed profile
   inputs from strict plans with bounded cache reuse, offline replay, and
   privacy-safe execution authorities. (#290)
