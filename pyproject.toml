@@ -90,6 +90,7 @@ files = [
     "draftomen/profile_input_cache.py",
     "draftomen/profile_manifest.py",
     "draftomen/profile_publication.py",
+    "draftomen/profile_refresh_execution.py",
     "draftomen/profile_statistics.py",
     "draftomen/public_dump.py",
     "draftomen/qt_adapter.py",

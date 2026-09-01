@@ -254,10 +254,11 @@ contract.
 
 The library-only `draftomen.profile_input_cache` boundary stores immutable
 profile-input bytes without downloading or interpreting them. It is deliberately
-separate from the set-profile artifact cache and has no source adapters,
-network policy, refresh workflow, CLI defaults, migration, or publication
-behavior. A caller supplies a logical `ProfileInputSource`, an explicit
-`source_version`, and a binary stream:
+separate from the set-profile artifact cache. The execute workflow supplies
+source adapters, network policy, and CLI defaults around this boundary; the
+cache itself has no source adapters, refresh workflow, migration, or
+publication behavior. A caller supplies a logical `ProfileInputSource`, an
+explicit `source_version`, and a binary stream:
 
 ```python
 from datetime import timedelta
@@ -495,6 +496,175 @@ the same bytes atomically. A history selection includes only entries classified
 entries classified `active`. A manual selection requires the set code to be in
 the 17Lands inventory, while its lifecycle classification remains explicit
 metadata (and may be reported as unknown). No mode infers a lifecycle stage.
+
+## Execute a profile refresh
+
+`execute-profile-refresh` consumes one canonical plan produced by
+`plan-profile-refresh`; it does not rediscover inventory, interpret lifecycle
+dates, generate a profile, or publish a profile manifest. Save the bytes from
+`plan-profile-refresh --output-plan` (or the canonical JSON printed by
+`--dry-run`) and hand that file to the executor:
+
+```sh
+uv run draftomen-tui plan-profile-refresh \
+  --set-code TST --event-format PremierDraft \
+  --inventory-file "$PWD/inputs/expansions.json" \
+  --lifecycle-file "$PWD/inputs/arena-lifecycle.json" \
+  --output-plan "$PWD/inputs/refresh-plan.json"
+
+uv run draftomen-tui execute-profile-refresh \
+  --plan "$PWD/inputs/refresh-plan.json" \
+  --cache-dir "$PWD/.draftomen/profile-input-cache" \
+  --output-dir "$PWD/.draftomen/profile-refresh"
+
+# Strictly no-network replay from verified cache entries:
+uv run draftomen-tui execute-profile-refresh \
+  --plan "$PWD/inputs/refresh-plan.json" \
+  --cache-dir "$PWD/.draftomen/profile-input-cache" \
+  --output-dir "$PWD/.draftomen/profile-refresh-offline" \
+  --offline
+```
+
+The executor strictly loads the plan with `load_refresh_plan` (including its
+canonical schema, ordering, identity, and size checks), constructs
+`ProfileInputCache(cache_dir, policy=DEFAULT_PROFILE_REFRESH_CACHE_POLICY)`,
+and processes environments sequentially in plan order. The default cache policy
+is exactly `freshness_ttl=7 days`, `max_entry_bytes=128 * 1024 * 1024`
+(`134,217,728` bytes), `max_total_bytes=512 * 1024 * 1024`
+(`536,870,912` bytes), `max_records=256`, and
+`max_versions_per_source=3`.
+
+The output layout is:
+
+```text
+<output-dir>/
+├── bundles/
+│   └── <bundle_id>/
+│       ├── objects/
+│       │   └── <sha256>.bin
+│       └── bundle.json
+└── execution.json
+```
+
+Each role object is at the exact relative path
+`bundles/<bundle_id>/objects/<sha256>.bin`; `bundle.json` and
+`execution.json` are the bundle and run authorities for those objects.
+
+Every planned environment contributes exactly one result in plan order.
+`bundle.json` is canonical JSON (sorted keys, compact separators, one final
+newline) with exactly these top-level fields:
+
+`schema_version`, `executor_version`, `bundle_id`, `plan_sha256`, `mode`,
+`environment`, `outcome`, `inputs`, `sources`, and `skip_reasons`.
+`environment` contains exactly `event_format`, `lifecycle`, `reasons`, and
+`set_code`. `inputs` and `sources` each contain exactly the roles
+`card_database`, `ratings`, and `public_drafts`. An input is null when that
+role is unavailable; otherwise card metadata and ratings contain exactly
+`source_name`, `sha256`, and `content_bytes`, while public drafts contain
+exactly `source_name`, `sha256`, `content_bytes`, `attribution`, and `license`.
+`source_name` is the bounded logical `ProfileInputSource.name`, never a path or
+URL, and must equal the corresponding parsed source report. Each source report
+contains exactly `acquired_at`, `acquisition_outcome`, `cache_lookup_outcome`,
+`cache_store_outcome`, `content_bytes`, `diagnostics`, `sample_availability`,
+`sha256`, `source`, and `source_version`. `source` contains exactly
+`event_format`, `name`, and `set_code`; sample availability is exactly
+`card_count`, `rating_rows` plus `rating_samples`, or `draft_rows`
+according to the role. Digests, sizes, source versions, UTC acquisition
+timestamps, cache outcomes, bounded diagnostics, and stable skip reasons are
+recorded only when permitted by those schemas.
+
+`execution.json` and `ProfileRefreshExecutionResult.to_bytes()` have identical
+canonical bytes. Their exact top-level fields are `schema_version`,
+`executor_version`, `plan_sha256`, `mode`, `counts`, and `environments`.
+`counts` contains exactly `failed`, `metadata_only`, `planned`, and `staged`.
+Each environment entry contains exactly `available_input_roles`, `bundle_id`,
+`environment`, `outcome`, and `skip_reasons`; the aggregate counts are
+reconciled from those entries. The command writes these bytes to stdout and
+also atomically writes them to `<output-dir>/execution.json`.
+
+Staging writes and verifies each content-addressed object before writing
+`bundle.json`; a temporary prepared bundle is atomically installed only after
+its authority is complete. Successful staging removes unreferenced temporary
+objects before commit. The loader verifies every object referenced by `inputs`
+and ignores unreferenced object entries, so extra bytes cannot affect the
+reconstructed bundle; safe cleanup belongs to successful staging and
+post-commit handling. Use one executor writer for a given cache and output
+directory: cache mutations require a single writer process, and no
+inter-process lock, lease, retry, or stale-lock recovery is provided. A
+prepared successful bundle atomically replaces any current bundle only after
+it is complete, including online-to-offline reruns. Content-addressed object
+bytes are immutable, but bundle authority is current-run state. A required
+failure can replace the current authority with a failed marker; if that
+replacement fails, the prior authority remains. A failed authority is not
+loadable. Cache object retention and orphan cleanup are governed separately by
+`prune()` and the invalidation rules above.
+
+Use `load_staged_profile_build_bundle(<bundle-directory>)` to verify object
+digests, sizes, canonical models, role pins, and the environment, then pass
+`bundle.generator_inputs()` to the unchanged explicit generator:
+
+```python
+from draftomen.profile_generation import generate_set_profile
+from draftomen.profile_refresh_execution import load_staged_profile_build_bundle
+
+bundle = load_staged_profile_build_bundle(bundle_directory)
+generated = generate_set_profile(
+    **bundle.generator_inputs(),
+    stage="metadata",       # choose "early" or "mature" explicitly when eligible
+    generated_at=fixed_timestamp,
+)
+```
+
+Execution never chooses or falls back to a generation stage and never calls
+generation. Metadata-only bundles are valid. Missing, corrupt, unavailable,
+or independently failed ratings and public-draft inputs become null optional
+roles with source outcomes and stable skip reasons; a valid required card
+object still stages and sibling environments continue. If required card
+acquisition or staging fails, that environment receives a failed authority and
+the remaining environments still run. Exit status is `0` only when every
+environment is staged (including metadata-only and optional degradation), and
+`1` for any failed environment or bounded plan, cache, execution, or authority
+error. Argparse syntax errors retain exit status `2`. Per-environment failures
+still emit the complete execution result; bounded errors never expose paths or
+raw exception text.
+
+Without `--offline`, fresh verified cache entries are reused; stale entries
+receive at most one adapter attempt, and a verified stale entry remains usable
+when that attempt fails. Missing or corrupt entries are refreshed online when
+possible; otherwise the role is unavailable. With `--offline`, no adapter is
+invoked and no network is accessed: only verified entries, including stale
+ones, may be reused. Missing or corrupt required metadata fails that
+environment; missing or corrupt optional roles are skipped. Repeating an
+online run with the same canonical plan and cache offline therefore makes no
+fetch calls and preserves the verified input object digests and, for the same
+explicit generator stage and fixed `generated_at`, generator bytes. The
+offline authority records `mode=offline`, so authority metadata need not be
+byte-identical.
+
+Each source is attempted at most once per environment and execution is
+sequential; adapters perform no retries or backoff. The default adapters pass
+the positive 60-second request timeout. A complete cache-miss environment
+uses at most two Scryfall requests for card metadata, two 17Lands requests for
+ratings, and one 17Lands public-draft download; cache hits reduce that bound.
+Operators must observe provider rate limits and terms. The cache bounds input
+storage to one shared object per digest, at most 128 MiB per object, 512 MiB
+total, 256 records, and three versions per source; staged output adds one
+verified object per available role and environment.
+
+The authorities, execution output, and diagnostics are privacy-safe: they
+contain no local or relative paths, URLs or headers, credentials or secrets,
+exception text, raw source rows or row values, draft identifiers, or card
+names. Within the staged bundle, public-draft row bytes appear only in the
+pinned input object needed by the generator; the loader reconstructs its
+runtime path from the bundle directory and never reads a serialized path.
+Keep that object and the profile-input cache as local raw evidence: the
+executor does not publish either one. Public-draft authority records the
+required attribution and license (the default adapter uses `Public draft data:
+17Lands` and `CC BY 4.0`). These fields are provenance, not a rights grant:
+operators must verify applicable 17Lands terms, preserve attribution and
+license notices, and obtain any permissions required for redistribution. The
+executor is strictly no-network in offline mode and explicitly excludes
+profile generation and remote publication.
 
 ## Schema version 1
 
