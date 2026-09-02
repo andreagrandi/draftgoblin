@@ -1,5 +1,6 @@
 # Changelog
 
+- Generate the validated HOB QuickDraft metadata-only profile snapshot with canonical provenance, lifecycle, licensing, and deterministic replay evidence. (#325)
 ## [Unreleased]
 - Record the production HOB/PremierDraft metadata snapshot audit evidence from the #319 producer run; retain the gzip payload locally for publication. (#319)
 - Publish the first production HOB/PremierDraft metadata-only profile snapshot through content-addressed website assets. (#320)
