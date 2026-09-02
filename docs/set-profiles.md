@@ -10,9 +10,74 @@ The producer workflow is explicit and reproducible: it reads caller-selected
 local inputs, writes a validated compressed artifact plus a generation marker,
 and can turn those outputs into a remote manifest record. The client workflow
 is offline-first and network-optional; Draft Omen does not bundle a host,
-production manifest, default remote URL, or profile snapshot. The repository's
-optional hosted publication boundary is documented below and is never implicit
-in the runtime.
+production manifest, or default remote URL. Native applications do bundle one
+validated baseline profile snapshot as a read-only module resource. The
+repository's optional hosted publication boundary is documented below and is
+never implicit in the runtime.
+
+## Bundled native baseline
+
+Every native application bundle carries the same pinned HOB QuickDraft
+metadata-only profile:
+
+| Field | Pinned value |
+| --- | --- |
+| `set_code` | `hob` |
+| `format` | `quickdraft` |
+| `profile_version` | `1.0` |
+| `maturity` | `metadata-only` |
+| `schema_version` | `1` |
+| `generated_at` | `2026-09-02T06:18:05.694266+00:00` |
+| module resource | `draftomen/baseline_profiles/hob-quickdraft.json` |
+| profile bytes | `270` |
+| profile SHA-256 | `b95f64f7775cf5c20beb83531062a49bceff695fd9d9fb0e1d4132fce4396dd2` |
+
+The runtime exports these pins as `BUNDLED_PROFILE_SET_CODE="hob"`,
+`BUNDLED_PROFILE_EVENT_FORMAT="quickdraft"`, `BUNDLED_PROFILE_BYTES=270`, and
+`BUNDLED_PROFILE_SHA256="b95f64f7775cf5c20beb83531062a49bceff695fd9d9fb0e1d4132fce4396dd2"`.
+The checked-in payload is canonical UTF-8 JSON with its final newline and
+contains `artifact=set-profile`, `provider=draftomen-profile-generator`, and
+`revision=1`. It is validated producer output for issue #325, not hand-written
+or synthesized at native build time. Producer provenance remains authoritative
+for the source URL or path, retrieval timestamp, input and artifact digests,
+generator/version, attribution, and licensing; raw rows and local source files
+are not bundled.
+
+At runtime the resource resolves relative to the installed `draftomen` module,
+never to the current working directory or application-data directory. For an
+exact `hob`/`quickdraft` request, loading requires:
+
+1. exactly `270` bytes and the pinned lowercase SHA-256 digest;
+2. strict schema-version `1`, identity, metadata, and `metadata-only`
+   validation;
+3. byte-for-byte canonical re-serialization, with a non-generic result.
+
+The only bundled-resource rejection diagnostics are
+`rejected-bundled:missing`, `rejected-bundled:checksum-or-size`, and
+`rejected-bundled:invalid`. `load_cached()` orders candidates as valid
+non-generic flat cache, valid historical cache (migrated under existing rules),
+the matching bundled baseline, a matching `last_valid_profile`, and finally
+the generic profile. A corrupt or otherwise rejected baseline therefore cannot
+be selected accidentally.
+
+The bundled file is read-only evidence: loading it performs no network access,
+never copies it into application data, and never writes, renames, deletes, or
+mutates the module resource. A fresh offline install can use it without a
+profile-cache entry. An explicitly configured hosted manifest with a valid
+newer artifact installs the flat cache and supersedes the baseline on later
+loads under the existing anti-regression rules. Equal identity is `unchanged`;
+older maturity or timestamp, and same-timestamp conflicts, are
+`stale-manifest`. Invalid manifests or artifacts, network failures, and failed
+commits retain the usable profile and never mutate the bundle. No default URL or
+implicit network activity is introduced.
+
+### Baseline ownership and update procedure
+
+Update this baseline only from a validated producer run: preserve provenance,
+canonicalize and validate the target identity, record the exact byte count and
+SHA-256, and update the identity and digest constants with the resource. Native
+packaging must keep both platform mappings pointed at that path and verify final
+artifacts. Website hosting and hosted refresh remain a separate boundary.
 
 ## Generate producer artifacts
 
@@ -1331,10 +1396,9 @@ assets under `website/public/profiles/` and `website/public/profiles-dev/`,
 deployed in the ordinary complete Astro/Cloudflare website snapshot.
 
 The broader issue #227 discovery, scheduling, backfill, and publication
-automation remains excluded; it does not own hosting. Native baseline, package,
-and runtime work in issue #313 also remains excluded. The hosting boundary is
-release-independent: it is outside the release, Homebrew, and native workflows;
-it neither triggers nor gates packaging, releases, or startup. There is no
-runtime default URL or bundled profile snapshot. Producers remain responsible
-choosing maturity, and handing off the exact checksummed artifacts described by
-their manifest; the loader only validates, orders, and safely exposes profiles.
+automation remains excluded and does not own hosting. Issue #313's native work
+is limited to the pinned resource, local precedence, and compiled verification;
+it adds no hosting, default URL, or implicit network activity. Website hosting
+does not trigger or gate native packaging, releases, startup, PyPI, or Homebrew.
+Producers choose maturity and hand off the checksummed artifacts described by
+their manifest; the loader only validates, orders, and exposes profiles.

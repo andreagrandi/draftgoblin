@@ -54,6 +54,11 @@ PROFILE_MANIFEST_TTL_SECONDS = 24 * 60 * 60
 PROFILE_MANIFEST_MAX_BYTES = 1 * 1024 * 1024
 PROFILE_ARTIFACT_MAX_GZIP_BYTES = 64 * 1024 * 1024
 PROFILE_ARTIFACT_MAX_PROFILE_BYTES = 128 * 1024 * 1024
+BUNDLED_PROFILE_SET_CODE = "hob"
+BUNDLED_PROFILE_EVENT_FORMAT = "quickdraft"
+BUNDLED_PROFILE_BYTES = 270
+BUNDLED_PROFILE_SHA256 = "b95f64f7775cf5c20beb83531062a49bceff695fd9d9fb0e1d4132fce4396dd2"
+_DEFAULT_BUNDLED_PROFILE_PATH = Path(__file__).resolve().parent / "baseline_profiles" / "hob-quickdraft.json"
 
 
 class ProfileClientError(RuntimeError):
@@ -170,6 +175,7 @@ class ProfileClient:
         manifest_max_bytes: int = PROFILE_MANIFEST_MAX_BYTES,
         max_gzip_bytes: int = PROFILE_ARTIFACT_MAX_GZIP_BYTES,
         max_profile_bytes: int = PROFILE_ARTIFACT_MAX_PROFILE_BYTES,
+        bundled_profile_path: PathInput | None = None,
     ) -> None:
         self.app_dir = Path(app_data_dir() if app_dir is None else app_dir).expanduser()
         self.manifest_url = None if manifest_url is None else _validate_url(manifest_url)
@@ -185,6 +191,9 @@ class ProfileClient:
         self.manifest_max_bytes = _positive_int(manifest_max_bytes, "manifest_max_bytes")
         self.max_gzip_bytes = _positive_int(max_gzip_bytes, "max_gzip_bytes")
         self.max_profile_bytes = _positive_int(max_profile_bytes, "max_profile_bytes")
+        self.bundled_profile_path = Path(
+            _DEFAULT_BUNDLED_PROFILE_PATH if bundled_profile_path is None else bundled_profile_path
+        ).expanduser()
 
     def profile_path(self, set_code: str, event_format: str) -> Path:
         """Return the existing flat authoritative set-profile cache path."""
@@ -255,6 +264,16 @@ class ProfileClient:
                 source=f"legacy-migrated-{profile.maturity.value}",
                 diagnostics=tuple(diagnostics),
             )
+        if normalized_set == BUNDLED_PROFILE_SET_CODE and normalized_format == BUNDLED_PROFILE_EVENT_FORMAT:
+            profile, diagnostic = _load_bundled_profile(self.bundled_profile_path)
+            if profile is not None:
+                return SetProfileLoadResult(
+                    profile=profile,
+                    source="bundled-metadata-only",
+                    diagnostics=tuple(diagnostics),
+                )
+            if diagnostic is not None:
+                diagnostics.append(diagnostic)
 
         if last_valid_profile is not None:
             try:
@@ -863,6 +882,29 @@ def _artifact_failure_outcome(error: ProfileClientError) -> ProfileRefreshOutcom
     )
 
 
+def _load_bundled_profile(path: Path) -> tuple[SetProfile | None, str | None]:
+    try:
+        payload = path.read_bytes()
+    except FileNotFoundError:
+        return None, "rejected-bundled:missing"
+    except OSError:
+        return None, "rejected-bundled:invalid"
+
+    if len(payload) != BUNDLED_PROFILE_BYTES or hashlib.sha256(payload).hexdigest() != BUNDLED_PROFILE_SHA256:
+        return None, "rejected-bundled:checksum-or-size"
+    try:
+        profile = load_set_profile(
+            path,
+            expected_set_code=BUNDLED_PROFILE_SET_CODE,
+            expected_format=BUNDLED_PROFILE_EVENT_FORMAT,
+        )
+        if profile.to_bytes() != payload or profile.maturity is ProfileMaturity.GENERIC:
+            return None, "rejected-bundled:invalid"
+    except (OSError, TypeError, ValueError):
+        return None, "rejected-bundled:invalid"
+    return profile, None
+
+
 def _load_local_profile(path: Path, set_code: str, event_format: str) -> SetProfile | None:
     try:
         profile = load_set_profile(path, expected_set_code=set_code, expected_format=event_format)
@@ -929,6 +971,10 @@ def _error_code(error: BaseException) -> str:
 
 
 __all__ = [
+    "BUNDLED_PROFILE_BYTES",
+    "BUNDLED_PROFILE_EVENT_FORMAT",
+    "BUNDLED_PROFILE_SET_CODE",
+    "BUNDLED_PROFILE_SHA256",
     "PROFILE_ARTIFACT_MAX_GZIP_BYTES",
     "PROFILE_ARTIFACT_MAX_PROFILE_BYTES",
     "PROFILE_CLIENT_TIMEOUT_SECONDS",

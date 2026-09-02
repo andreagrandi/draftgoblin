@@ -5,6 +5,7 @@ Select the live application provider or deterministic mock provider explicitly.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -33,7 +34,14 @@ from draftomen.qt_adapter import (
 )
 from draftomen.qt_mock import MockSessionAdapter
 from draftomen.session import LiveSession, SnapshotPublisher
-from draftomen.profile_client import ProfileClient
+from draftomen.profile_client import (
+    BUNDLED_PROFILE_BYTES,
+    BUNDLED_PROFILE_EVENT_FORMAT,
+    BUNDLED_PROFILE_SET_CODE,
+    BUNDLED_PROFILE_SHA256,
+    ProfileClient,
+    ProfileNetworkPolicy,
+)
 from draftomen.seventeen import (
     DownloadProgressCallback,
     SeventeenLandsData,
@@ -105,6 +113,11 @@ def _parser(*, forced_provider: ProviderName | None = None) -> argparse.Argument
     parser.add_argument("--log-path", type=Path, default=None)
     parser.add_argument("--app-dir", type=Path, default=None, help=argparse.SUPPRESS)
     parser.add_argument(
+        "--verify-bundled-profile",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--bulk-file",
         type=Path,
         default=None,
@@ -141,6 +154,55 @@ def _parser(*, forced_provider: ProviderName | None = None) -> argparse.Argument
     return parser
 
 
+def _preflight_bundled_profile(*, app_dir: Path | None) -> bool:
+    """Verify the bundled baseline through the offline client.
+    The selected flat cache path must remain absent throughout verification.
+    """
+    cache_path: Path | None = None
+    try:
+        client = ProfileClient(
+            app_dir=app_dir,
+            network_policy=ProfileNetworkPolicy.OFFLINE,
+        )
+        cache_path = client.profile_path(
+            BUNDLED_PROFILE_SET_CODE,
+            BUNDLED_PROFILE_EVENT_FORMAT,
+        )
+        if cache_path.exists() or cache_path.is_symlink():
+            raise RuntimeError("the flat bundled-profile cache already exists")
+
+        bundled_bytes = client.bundled_profile_path.read_bytes()
+        if len(bundled_bytes) != BUNDLED_PROFILE_BYTES:
+            raise RuntimeError("bundled profile byte count does not match")
+        bundled_digest = hashlib.sha256(bundled_bytes).hexdigest()
+        if bundled_digest != BUNDLED_PROFILE_SHA256:
+            raise RuntimeError("bundled profile digest does not match")
+
+        loaded = client.load_cached(
+            BUNDLED_PROFILE_SET_CODE,
+            BUNDLED_PROFILE_EVENT_FORMAT,
+        )
+        if cache_path.exists() or cache_path.is_symlink():
+            raise RuntimeError("offline profile load created the flat cache")
+        if loaded.source != "bundled-metadata-only":
+            raise RuntimeError("offline profile load did not use bundled metadata")
+        profile = loaded.profile
+        if (
+            profile.set_code != BUNDLED_PROFILE_SET_CODE
+            or profile.event_format != BUNDLED_PROFILE_EVENT_FORMAT
+            or profile.maturity.value != "metadata-only"
+        ):
+            raise RuntimeError("bundled profile identity does not match")
+        if profile.to_bytes() != bundled_bytes:
+            raise RuntimeError("loaded bundled profile bytes do not match")
+        if profile.fingerprint != BUNDLED_PROFILE_SHA256:
+            raise RuntimeError("loaded bundled profile digest does not match")
+        return True
+    except Exception as error:  # noqa: BLE001 - preflight must fail closed.
+        print(f"Bundled profile verification failed: {error}", file=sys.stderr)
+        return False
+
+
 def _live_session_factory(
     *,
     log_path: Path | None,
@@ -150,7 +212,7 @@ def _live_session_factory(
     profile_manifest_url: str | None = None,
     profile_client: ProfileClient | None = None,
 ) -> SessionFactory:
-    if profile_client is None and profile_manifest_url is not None:
+    if profile_client is None:
         profile_client = ProfileClient(
             app_dir=app_dir,
             manifest_url=profile_manifest_url,
@@ -213,13 +275,9 @@ def _build_provider(*, args: argparse.Namespace) -> SessionAdapter:
     if args.poll_interval <= 0:
         raise ValueError("--poll-interval must be greater than zero.")
     profile_manifest_url = getattr(args, "profile_manifest_url", None)
-    profile_client = (
-        None
-        if profile_manifest_url is None
-        else ProfileClient(
-            app_dir=args.app_dir,
-            manifest_url=profile_manifest_url,
-        )
+    profile_client = ProfileClient(
+        app_dir=args.app_dir,
+        manifest_url=profile_manifest_url,
     )
     return LiveSessionAdapter(
         session_factory=_live_session_factory(
@@ -301,6 +359,11 @@ def run_gui(
     args = _parser(forced_provider=forced_provider).parse_args(argv)
     if forced_provider is not None:
         args.provider = forced_provider
+
+    if args.verify_bundled_profile and not _preflight_bundled_profile(
+        app_dir=args.app_dir,
+    ):
+        return 1
 
     QQuickStyle.setStyle("Fusion")
     application = QGuiApplication([sys.argv[0]])

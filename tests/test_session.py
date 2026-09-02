@@ -12,7 +12,11 @@ from types import SimpleNamespace
 import pytest
 
 import draftomen.session as session_module
-from draftomen.profile_client import ProfileRefreshOutcome, ProfileRefreshResult
+from draftomen.profile_client import (
+    ProfileClient,
+    ProfileRefreshOutcome,
+    ProfileRefreshResult,
+)
 from draftomen.audit import load_draft_audit_records
 from draftomen.backtest import (
     BacktestPickResult as DomainBacktestPickResult,
@@ -887,6 +891,43 @@ class _ProfileClientStub:
         else:
             source = f"local-{profile.maturity.value}"
         return SimpleNamespace(profile=profile, source=source)
+
+
+
+
+def test_live_session_cold_start_loads_bundled_profile_without_network(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    assert not app_dir.exists()
+    network_calls: list[object] = []
+
+    def unexpected_network_call(*args: object, **kwargs: object) -> None:
+        network_calls.append((args, kwargs))
+        raise AssertionError("bundled profile cold start must remain offline")
+
+    client = ProfileClient(
+        app_dir=app_dir,
+        opener=unexpected_network_call,
+    )
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=app_dir,
+        profile_client=client,
+    )
+
+    session._set_active_set_code(set_code="hob")
+    state = session.snapshot.set_profile
+
+    assert state.set_code == "HOB"
+    assert state.event_format == QUICK_DRAFT_FORMAT
+    assert state.maturity == "metadata-only"
+    assert state.profile_version == "1.0"
+    assert state.source == "bundled-metadata-only"
+    assert state.phase is DataLoadPhase.READY
+    assert network_calls == []
+    assert session.profile_refresh_request() is None
+    assert not client.profile_path("hob", QUICK_DRAFT_FORMAT).exists()
 
 
 def test_live_session_profile_activation_is_local_first_and_queues_one_request(
