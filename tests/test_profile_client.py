@@ -13,6 +13,10 @@ from typing import Any
 import pytest
 
 from draftomen.profile_client import (
+    BUNDLED_PROFILE_BYTES,
+    BUNDLED_PROFILE_EVENT_FORMAT,
+    BUNDLED_PROFILE_SET_CODE,
+    BUNDLED_PROFILE_SHA256,
     ProfileClient,
     ProfileClientError,
     ProfileNetworkPolicy,
@@ -27,6 +31,8 @@ from draftomen.set_profile import (
     load_set_profile,
     set_profile_path,
 )
+
+BASELINE_PATH = Path(__file__).parents[1] / "draftomen" / "baseline_profiles" / "hob-quickdraft.json"
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "set-profiles"
@@ -69,6 +75,22 @@ def _profile(*, version: str = "1.0-semantic", generated_at: str = "2026-08-29T0
     value = json.loads((FIXTURE_DIR / "semantic-only.json").read_text(encoding="utf-8"))
     value["profile_version"] = version
     value["generated_at"] = generated_at
+    return SetProfile.from_json(value)
+
+
+def _bundled_profile() -> SetProfile:
+    return load_set_profile(
+        BASELINE_PATH,
+        expected_set_code=BUNDLED_PROFILE_SET_CODE,
+        expected_format=BUNDLED_PROFILE_EVENT_FORMAT,
+    )
+
+
+def _bundled_variant(*, profile_version: str, generated_at: str) -> SetProfile:
+    value = _bundled_profile().to_json()
+    value["profile_version"] = profile_version
+    value["generated_at"] = generated_at
+    value["source"] = {"provider": "test"}
     return SetProfile.from_json(value)
 
 
@@ -117,6 +139,154 @@ def _opener_for(payloads: dict[str, bytes], calls: list[str] | None = None):
         return _Response(payloads[url], url=url)
 
     return opener
+
+
+def test_bundled_baseline_is_selected_offline_without_network_or_cache_write(tmp_path: Path) -> None:
+    baseline_before = BASELINE_PATH.read_bytes()
+    calls: list[str] = []
+    client = ProfileClient(
+        tmp_path,
+        network_policy=ProfileNetworkPolicy.OFFLINE,
+        opener=_opener_for({}, calls),
+    )
+
+    loaded = client.load_cached("HOB", "QuickDraft")
+    refreshed = client.refresh("HOB", "QuickDraft")
+
+    assert len(baseline_before) == BUNDLED_PROFILE_BYTES
+    assert hashlib.sha256(baseline_before).hexdigest() == BUNDLED_PROFILE_SHA256
+    assert loaded.profile == _bundled_profile()
+    assert loaded.source == "bundled-metadata-only"
+    assert refreshed.profile == loaded.profile
+    assert refreshed.outcome is ProfileRefreshOutcome.CACHED
+    assert calls == []
+    assert not client.profile_path("HOB", "QuickDraft").exists()
+    assert BASELINE_PATH.read_bytes() == baseline_before
+
+
+def test_flat_cache_precedes_bundled_baseline(tmp_path: Path) -> None:
+    local = _bundled_variant(profile_version="2.0", generated_at="2026-09-03T02:00:00+00:00")
+    path = set_profile_path(set_code="HOB", event_format="QuickDraft", app_dir=tmp_path)
+    dump_set_profile(local, path)
+
+    result = ProfileClient(tmp_path).load_cached("HOB", "QuickDraft")
+
+    assert result.profile == local
+    assert result.source == "local-metadata-only"
+    assert result.diagnostics == ()
+
+
+def test_historical_cache_precedes_bundled_baseline_and_is_migrated(tmp_path: Path) -> None:
+    historical = _bundled_variant(profile_version="2.0", generated_at="2026-09-03T02:00:00+00:00")
+    legacy = tmp_path / "profiles" / "hob-quickdraft.json"
+    dump_set_profile(historical, legacy)
+
+    client = ProfileClient(tmp_path)
+    result = client.load_cached("HOB", "QuickDraft")
+
+    assert result.profile == historical
+    assert result.source == "legacy-migrated-metadata-only"
+    assert client.profile_path("HOB", "QuickDraft").read_bytes() == historical.to_bytes()
+
+
+def test_nonmatching_identity_does_not_inspect_or_diagnose_bundled_path(tmp_path: Path) -> None:
+    bundled_path = tmp_path / "bundle.json"
+    result = ProfileClient(tmp_path, bundled_profile_path=bundled_path).load_cached("TST", "QuickDraft")
+
+    assert result.profile.maturity is ProfileMaturity.GENERIC
+    assert result.source == "generic"
+    assert not any(item.startswith("rejected-bundled:") for item in result.diagnostics)
+    assert not bundled_path.exists()
+
+
+def test_missing_bundled_baseline_is_rejected(tmp_path: Path) -> None:
+    bundled_path = tmp_path / "missing.json"
+
+    result = ProfileClient(tmp_path, bundled_profile_path=bundled_path).load_cached("HOB", "QuickDraft")
+
+    assert result.profile.maturity is ProfileMaturity.GENERIC
+    assert result.source == "generic"
+    assert result.diagnostics == ("rejected-bundled:missing",)
+
+
+@pytest.mark.parametrize(
+    ("payload", "diagnostic"),
+    [
+        (b"not-json", "rejected-bundled:checksum-or-size"),
+        (_profile().to_bytes(), "rejected-bundled:checksum-or-size"),
+        (BASELINE_PATH.read_bytes() + b" ", "rejected-bundled:checksum-or-size"),
+    ],
+    ids=("corrupt", "wrong-target", "digest-mismatched"),
+)
+def test_invalid_bundled_baseline_is_rejected_without_fallback_leaks(
+    tmp_path: Path,
+    payload: bytes,
+    diagnostic: str,
+) -> None:
+    bundled_path = tmp_path / "bundle.json"
+    bundled_path.write_bytes(payload)
+
+    result = ProfileClient(tmp_path, bundled_profile_path=bundled_path).load_cached("HOB", "QuickDraft")
+
+    assert result.profile.maturity is ProfileMaturity.GENERIC
+    assert result.source == "generic"
+    assert result.diagnostics == (diagnostic,)
+
+
+def test_pinned_bundled_baseline_rejects_strict_validation_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def return_generic(*_args: object, **_kwargs: object) -> SetProfile:
+        return SetProfile.generic(set_code=BUNDLED_PROFILE_SET_CODE, event_format=BUNDLED_PROFILE_EVENT_FORMAT)
+
+    monkeypatch.setattr("draftomen.profile_client.load_set_profile", return_generic)
+    result = ProfileClient(tmp_path).load_cached("HOB", "QuickDraft")
+
+    assert result.profile.maturity is ProfileMaturity.GENERIC
+    assert result.source == "generic"
+    assert result.diagnostics == ("rejected-bundled:invalid",)
+
+
+def test_matching_last_valid_profile_follows_rejected_bundled_baseline(tmp_path: Path) -> None:
+    bundled_path = tmp_path / "bundle.json"
+    bundled_path.write_bytes(b"not-json")
+    last_valid = _bundled_variant(profile_version="2.0", generated_at="2026-09-03T02:00:00+00:00")
+
+    result = ProfileClient(tmp_path, bundled_profile_path=bundled_path).load_cached(
+        "HOB",
+        "QuickDraft",
+        last_valid_profile=last_valid,
+    )
+
+    assert result.profile == last_valid
+    assert result.source == "last-valid"
+    assert result.diagnostics == ("rejected-bundled:checksum-or-size",)
+
+
+def test_hosted_refresh_supersedes_bundled_baseline_without_mutating_resource(tmp_path: Path) -> None:
+    bundled_path = tmp_path / "bundle.json"
+    bundled_before = BASELINE_PATH.read_bytes()
+    bundled_path.write_bytes(bundled_before)
+    refreshed = _bundled_variant(profile_version="2.0", generated_at="2026-09-03T02:00:00+00:00")
+    artifact, packed = _artifact(refreshed)
+    calls: list[str] = []
+    client = ProfileClient(
+        tmp_path,
+        manifest_url=MANIFEST_URL,
+        opener=_opener_for({MANIFEST_URL: _manifest(artifact), ARTIFACT_URL: packed}, calls),
+        bundled_profile_path=bundled_path,
+        clock=_FrozenClock(datetime.fromisoformat("2026-09-03T12:00:00+00:00")),
+        manifest_ttl_seconds=0,
+    )
+
+    result = client.refresh("HOB", "QuickDraft", force=True)
+
+    assert result.outcome is ProfileRefreshOutcome.UPDATED
+    assert result.profile == refreshed
+    assert client.profile_path("HOB", "QuickDraft").read_bytes() == refreshed.to_bytes()
+    assert bundled_path.read_bytes() == bundled_before
+    assert calls == [MANIFEST_URL, ARTIFACT_URL]
 
 
 def test_load_cached_is_local_only_and_offline_zero_network(tmp_path: Path) -> None:

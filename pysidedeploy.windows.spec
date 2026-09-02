@@ -24,7 +24,7 @@ plugins = imageformats,platforms,platformthemes,styles
 
 [nuitka]
 mode = onefile
-extra_args = --quiet --noinclude-qt-translations --company-name="Draft Omen" --product-name="Draft Omen" --file-version=0.3.1 --product-version=0.3.1 --file-description="An unofficial Quick Draft assistant for MTG Arena"
+extra_args = --quiet --noinclude-qt-translations --include-data-files=draftomen/baseline_profiles/hob-quickdraft.json=draftomen/baseline_profiles/hob-quickdraft.json --company-name="Draft Omen" --product-name="Draft Omen" --file-version=0.3.1 --product-version=0.3.1 --file-description="An unofficial Quick Draft assistant for MTG Arena"
 macos.permissions =
 
 # Fonts: none are bundled. The application intentionally uses Qt's system fixed

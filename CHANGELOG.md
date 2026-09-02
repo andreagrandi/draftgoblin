@@ -2,6 +2,9 @@
 
 - Generate the validated HOB QuickDraft metadata-only profile snapshot with canonical provenance, lifecycle, licensing, and deterministic replay evidence. (#325)
 ## [Unreleased]
+- Bundle the immutable HOB/QuickDraft metadata-only baseline in native
+  applications with validated offline fallback and hosted refresh
+  supersession. (#313)
 - Record the production HOB/PremierDraft metadata snapshot audit evidence from the #319 producer run; retain the gzip payload locally for publication. (#319)
 - Publish the first production HOB/PremierDraft metadata-only profile snapshot through content-addressed website assets. (#320)
 - Complete the production hosting marker add/fetch/remove verification lifecycle. (#320)

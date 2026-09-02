@@ -16,9 +16,12 @@ from draftomen.carddb import CardDatabase
 from draftomen.pool import load_draft_state
 from draftomen.qt_gui import (
     APPLICATION_NAME,
+    _build_provider,
     _configure_application_metadata,
     _live_session_factory,
     _parser,
+    _preflight_bundled_profile,
+    run_gui,
 )
 
 
@@ -149,7 +152,76 @@ def test_live_gui_profile_manifest_flag_injects_configured_client(
         poll_interval=0.01,
     )
     offline_session = offline_factory(lambda snapshot: None)
-    assert getattr(offline_session, "_profile_client") is None
+    offline_profile_client = getattr(offline_session, "_profile_client")
+    assert offline_profile_client is not None
+    assert offline_profile_client.manifest_url is None
+    assert offline_session.profile_refresh_request() is None
+
+
+def test_verify_bundled_profile_flag_is_hidden_and_parsed() -> None:
+    parser = _parser()
+
+    args = parser.parse_args(["--verify-bundled-profile"])
+
+    assert args.verify_bundled_profile is True
+    assert "--verify-bundled-profile" not in parser.format_help()
+
+
+def test_bundled_profile_preflight_is_offline_and_cacheless(tmp_path: Path) -> None:
+    app_dir = tmp_path / "app"
+
+    assert _preflight_bundled_profile(app_dir=app_dir) is True
+    assert not (app_dir / "set-profiles" / "hob-quickdraft.json").exists()
+
+
+def test_verify_bundled_profile_failure_exits_before_gui_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "draftomen.qt_gui._preflight_bundled_profile",
+        lambda *, app_dir: False,
+    )
+
+    def unexpected_gui_setup(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("GUI setup should not run after preflight failure")
+
+    class UnexpectedStyle:
+        @staticmethod
+        def setStyle(style: str) -> None:
+            del style
+            raise AssertionError("GUI setup should not run after preflight failure")
+
+    monkeypatch.setattr("draftomen.qt_gui.QQuickStyle", UnexpectedStyle)
+    monkeypatch.setattr("draftomen.qt_gui.QGuiApplication", unexpected_gui_setup)
+
+    assert run_gui(argv=["--verify-bundled-profile"], forced_provider="mock") == 1
+
+
+def test_live_gui_reuses_default_profile_client_in_adapter_and_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingAdapter:
+        def __init__(
+            self,
+            *,
+            session_factory: object,
+            profile_client: object,
+            poll_interval_ms: int,
+            startup_scan: bool,
+        ) -> None:
+            del poll_interval_ms, startup_scan
+            self.session_factory = session_factory
+            self.profile_client = profile_client
+
+    monkeypatch.setattr("draftomen.qt_gui.LiveSessionAdapter", RecordingAdapter)
+    args = _parser().parse_args(["--app-dir", str(tmp_path / "app")])
+
+    adapter = _build_provider(args=args)
+    session = adapter.session_factory(lambda snapshot: None)  # type: ignore[attr-defined]
+
+    assert adapter.profile_client is session._profile_client  # type: ignore[attr-defined]
 
 
 def test_qml_settings_renders_card_and_ratings_update_fallback_and_value() -> None:

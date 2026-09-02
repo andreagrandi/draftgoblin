@@ -49,9 +49,23 @@ Qt inputs used by the adapter:
   icons generated from that checked-in logo. These native icon files are
   checked-in source inputs, not CI build products; regenerate them from the
   logo with deterministic fixed-size PNG variants when branding changes.
+- bundled profile: the immutable `draftomen/baseline_profiles/hob-quickdraft.json`
+  resource, kept at its module-relative destination for `ProfileClient`.
 
 Both specs keep PySide6's default unused QML plugin exclusions explicit:
 `QtCharts`, `QtQuick3D`, `QtSensors`, `QtTest`, and `QtWebEngine`.
+
+### Baseline profile data-file mapping
+
+Both platform specs include this identical, explicit Nuitka mapping:
+
+```text
+--include-data-files=draftomen/baseline_profiles/hob-quickdraft.json=draftomen/baseline_profiles/hob-quickdraft.json
+```
+
+The byte-for-byte source/destination preserves the module-relative lookup in
+installed bundles. It is a read-only native input and does not create a default
+hosted URL or alter the checked-in baseline.
 
 `NavigationRail.qml` resolves the logo relative to the bundled QML directory.
 The pyside6-deploy QML data-directory input preserves the QML and assets
@@ -150,6 +164,14 @@ runtime before the application's smoke timer starts; the bounded timeout still
 fails a bundle that does not exit.
 Mock mode avoids network, Arena logs, card downloads, and machine-specific
 runtime caches, so the bundle can be visually inspected without live services.
+
+### Bundled-baseline smoke
+
+The smoke helper launches the actual compiled executable with the hidden
+`--verify-bundled-profile` flag. That preflight validates the pinned resource's
+canonical bytes, size, digest, schema, and HOB/QuickDraft identity offline, while
+asserting that no profile-cache entry is written. The native workflow runs this
+check against the final mounted macOS app and Windows executable.
 
 ## GitHub Actions artifacts and tagged releases
 
@@ -257,3 +279,12 @@ packaging: Python wheels and source distributions continue to publish to
 PyPI, and Homebrew continues to run after `publish` using its existing
 workflow. The GitHub Release adds persistent native assets; it does not replace
 the PyPI or Homebrew publication paths.
+
+## Independence boundaries
+
+Bundled-baseline embedding is a native packaging concern only: it does not
+publish profiles, change website hosting, or add a default URL or startup
+network request. Hosted refresh remains explicitly configured and independent.
+
+Baseline updates do not gate release timing; PyPI, Homebrew, and existing native
+workflow jobs remain separate.

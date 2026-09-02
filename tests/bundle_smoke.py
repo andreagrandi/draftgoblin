@@ -39,13 +39,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     executable = _resolve_bundle_executable(bundle_path=bundle_path)
 
     with TemporaryDirectory(prefix="draftomen-bundle-smoke-") as temporary_dir:
+        app_directory = Path(temporary_dir) / "app"
         command = [
             str(executable),
             "--provider",
             "mock",
             "--smoke-test",
+            "--verify-bundled-profile",
             "--app-dir",
-            str(Path(temporary_dir) / "app"),
+            str(app_directory),
         ]
         environment = _clean_environment(environment=os.environ)
         subprocess.run(
@@ -55,6 +57,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             env=environment,
             timeout=args.timeout,
         )
+        profile_cache_path = app_directory / "set-profiles" / "hob-quickdraft.json"
+        if profile_cache_path.exists() or profile_cache_path.is_symlink():
+            raise RuntimeError(
+                "Bundled profile smoke test mutated the flat profile cache: "
+                f"{profile_cache_path}"
+            )
 
     return 0
 

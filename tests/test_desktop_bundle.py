@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import configparser
+import gzip
+import hashlib
+import json
 import plistlib
 import shlex
 import tomllib
 from pathlib import Path
 
 import pytest
+
+from draftomen.set_profile import load_set_profile
 
 from tests import bundle_smoke
 from tests.bundle_smoke import _resolve_bundle_executable
@@ -27,6 +32,21 @@ EXPECTED_EXCLUDED_QML_PLUGINS = {
 }
 EXPECTED_PRODUCT_NAME = "Draft Omen"
 EXPECTED_BUNDLE_IDENTIFIER = "io.github.andreagrandi.draftomen"
+
+
+BASELINE_PROFILE_RESOURCE = "draftomen/baseline_profiles/hob-quickdraft.json"
+BASELINE_PROFILE_PATH = PROJECT_ROOT / BASELINE_PROFILE_RESOURCE
+BASELINE_PROFILE_MAPPING = f"--include-data-files={BASELINE_PROFILE_RESOURCE}={BASELINE_PROFILE_RESOURCE}"
+SELECTED_GZIP_SHA256 = "3ea8e91d02b63a724016ec5dd45b5d1b53ff0aecdad1feda6e495c588d831447"
+SELECTED_SOURCE_BYTES = 12997
+SELECTED_SOURCE_SHA256 = "362fb91ba62f3d5a324eb21371102a6e9b9835be88553ed69a076a741fcb7302"
+SELECTED_GZIP_PATH = (
+    PROJECT_ROOT
+    / "profile-snapshots"
+    / "hob-quickdraft"
+    / SELECTED_GZIP_SHA256
+    / f"{SELECTED_GZIP_SHA256}.json.gz"
+)
 
 
 def _read_spec(*, path: Path) -> configparser.ConfigParser:
@@ -60,13 +80,32 @@ def test_bundle_smoke_main_configures_launch_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The bundle smoke timeout is strict by default and configurable for CI."""
+    """The smoke command uses an isolated app directory and strict timeout."""
 
     bundle_path = tmp_path / "Draftomen.exe"
     bundle_path.write_bytes(b"executable")
     calls: list[dict[str, object]] = []
+    app_directories: list[Path] = []
 
     def fake_run(**kwargs: object) -> None:
+        command = kwargs["args"]
+        assert isinstance(command, list)
+        assert command[:-1] == [
+            str(bundle_path.resolve()),
+            "--provider",
+            "mock",
+            "--smoke-test",
+            "--verify-bundled-profile",
+            "--app-dir",
+        ]
+        app_directory = Path(command[-1])
+        assert app_directory.name == "app"
+        assert app_directory.parent.is_dir()
+        assert app_directory.parent.name.startswith("draftomen-bundle-smoke-")
+        cache_path = app_directory / "set-profiles" / "hob-quickdraft.json"
+        assert not cache_path.exists()
+        assert not cache_path.is_symlink()
+        app_directories.append(app_directory)
         calls.append(kwargs)
 
     monkeypatch.setattr(bundle_smoke.subprocess, "run", fake_run)
@@ -74,6 +113,31 @@ def test_bundle_smoke_main_configures_launch_timeout(
     assert bundle_smoke.main([str(bundle_path)]) == 0
     assert bundle_smoke.main([str(bundle_path), "--timeout", "300"]) == 0
     assert [call["timeout"] for call in calls] == [60, 300]
+    assert len(app_directories) == 2
+    assert len({path.parent for path in app_directories}) == 2
+
+
+def test_bundle_smoke_main_rejects_flat_profile_cache_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful bundle launch must not populate the flat profile cache."""
+
+    bundle_path = tmp_path / "Draftomen.exe"
+    bundle_path.write_bytes(b"executable")
+
+    def fake_run(**kwargs: object) -> None:
+        command = kwargs["args"]
+        assert isinstance(command, list)
+        app_directory = Path(command[-1])
+        cache_path = app_directory / "set-profiles" / "hob-quickdraft.json"
+        cache_path.parent.mkdir(parents=True)
+        cache_path.write_bytes(b"unexpected cache entry")
+
+    monkeypatch.setattr(bundle_smoke.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="mutated the flat profile cache"):
+        bundle_smoke.main([str(bundle_path)])
 
 
 def test_macos_bundle_resolution_uses_plist_executable(tmp_path: Path) -> None:
@@ -254,3 +318,95 @@ def test_project_metadata_includes_package_sources_logo_and_no_fonts() -> None:
 
     assert (PROJECT_ROOT / "draftomen/assets/draftomen.icns").read_bytes()[:4] == b"icns"
     assert (PROJECT_ROOT / "draftomen/assets/draftomen.ico").read_bytes()[:4] == b"\x00\x00\x01\x00"
+
+
+def test_bundled_profile_provenance_and_packaging_are_deterministic(tmp_path: Path) -> None:
+    """The selected baseline retains deterministic provenance and packaging
+    identity across source metadata and native deployment inputs.
+    """
+
+    generation_path = SELECTED_GZIP_PATH.parent / "generation.json"
+    source_path = SELECTED_GZIP_PATH.parent / "source.json"
+    generation_bytes = generation_path.read_bytes()
+    generation = json.loads(generation_bytes)
+    source_bytes = source_path.read_bytes()
+    source = json.loads(source_bytes)
+    assert len(source_bytes) == SELECTED_SOURCE_BYTES
+    assert hashlib.sha256(source_bytes).hexdigest() == SELECTED_SOURCE_SHA256
+    generation_checksums = generation["checksums"]
+    source_artifacts = source["artifacts"]
+    source_gzip = source_artifacts["gzip"]
+    source_profile = source_artifacts["profile"]
+    source_generation = source_artifacts["generation"]
+    source_environment = source["batch"]["document"]["environments"][0]
+
+    assert SELECTED_GZIP_PATH.is_file()
+    assert SELECTED_GZIP_PATH.parent.parent.name == "hob-quickdraft"
+    assert SELECTED_GZIP_PATH.parent.name == SELECTED_GZIP_SHA256
+    assert SELECTED_GZIP_PATH.name == f"{SELECTED_GZIP_SHA256}.json.gz"
+    assert len(generation_bytes) == source["generation_bytes"] == source_generation["bytes"]
+    assert hashlib.sha256(generation_bytes).hexdigest() == source["generation_sha256"] == source_generation["sha256"]
+
+    gzip_bytes = SELECTED_GZIP_PATH.read_bytes()
+    assert SELECTED_GZIP_PATH.stat().st_size == generation["gzip_bytes"] == source_gzip["bytes"]
+    assert hashlib.sha256(gzip_bytes).hexdigest() == SELECTED_GZIP_SHA256
+    assert generation["gzip_sha256"] == generation_checksums["gzip"] == source_gzip["sha256"]
+    assert source_environment["artifacts"]["gzip"] == source_gzip
+
+    profile_bytes = gzip.decompress(gzip_bytes)
+    profile_document = json.loads(profile_bytes)
+    assert len(profile_bytes) == generation["profile_bytes"] == source_profile["bytes"]
+    assert (
+        hashlib.sha256(profile_bytes).hexdigest()
+        == generation["profile_sha256"]
+        == generation_checksums["profile"]
+        == source_profile["sha256"]
+    )
+    assert source_environment["artifacts"]["profile"] == source_profile
+    assert profile_bytes == BASELINE_PROFILE_PATH.read_bytes()
+
+    assert profile_document["set_code"] == generation["set_code"] == "hob"
+    assert profile_document["format"] == generation["event_format"] == "quickdraft"
+    assert profile_document["generated_at"] == generation["generated_at"]
+    assert profile_document["maturity"] == "metadata-only"
+    identity = source["identity"]
+    assert identity["canonical_set_code"] == profile_document["set_code"]
+    assert identity["canonical_event_format"] == profile_document["format"]
+    assert identity["external_set_code"] == "HOB"
+    assert identity["external_event_format"] == "QuickDraft"
+
+    raw_profile_path = tmp_path / "hob-quickdraft.json"
+    raw_profile_path.write_bytes(profile_bytes)
+    profile = load_set_profile(
+        raw_profile_path,
+        expected_set_code="hob",
+        expected_format="quickdraft",
+    )
+    assert profile.set_code == "hob"
+    assert profile.event_format == "quickdraft"
+    assert profile.to_bytes() == profile_bytes
+
+    with (PROJECT_ROOT / "pyproject.toml").open(mode="rb") as project_file:
+        project_config = tomllib.load(project_file)
+    project_tools = project_config["tool"]
+    pyside_files = project_tools["pyside6-project"]["files"]
+    assert BASELINE_PROFILE_RESOURCE in pyside_files
+    package_data_entries = [
+        entry
+        for entries in project_tools["setuptools"]["package-data"].values()
+        for entry in entries
+    ]
+    assert not any("baseline_profiles" in entry for entry in package_data_entries)
+
+    spec_mappings = {
+        platform: tuple(
+            argument
+            for argument in shlex.split(_read_spec(path=spec_path)["nuitka"]["extra_args"])
+            if argument.startswith("--include-data-files=")
+        )
+        for platform, spec_path in SPEC_PATHS.items()
+    }
+    assert spec_mappings == {
+        "macos": (BASELINE_PROFILE_MAPPING,),
+        "windows": (BASELINE_PROFILE_MAPPING,),
+    }
