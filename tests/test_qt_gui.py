@@ -216,7 +216,14 @@ def test_live_gui_reuses_default_profile_client_in_adapter_and_factory(
             self.profile_client = profile_client
 
     monkeypatch.setattr("draftomen.qt_gui.LiveSessionAdapter", RecordingAdapter)
-    args = _parser().parse_args(["--app-dir", str(tmp_path / "app")])
+    args = _parser().parse_args(
+        [
+            "--app-dir",
+            str(tmp_path / "app"),
+            "--log-path",
+            str(tmp_path / "Player.log"),
+        ]
+    )
 
     adapter = _build_provider(args=args)
     session = adapter.session_factory(lambda snapshot: None)  # type: ignore[attr-defined]
