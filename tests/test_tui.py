@@ -2090,7 +2090,8 @@ async def _assert_card_metadata_load_starts_on_detected_set(
         assert allow_network
         calls.append((set_code, allow_network))
         started.set()
-        release.wait(timeout=5.0)
+        if not release.wait(timeout=30.0):
+            raise TimeoutError("Test did not release card-data loader.")
         return selected_database
 
     app = _tui_app(
