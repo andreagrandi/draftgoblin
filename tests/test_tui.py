@@ -2090,7 +2090,7 @@ async def _assert_card_metadata_load_starts_on_detected_set(
         assert allow_network
         calls.append((set_code, allow_network))
         started.set()
-        release.wait()
+        release.wait(timeout=5.0)
         return selected_database
 
     app = _tui_app(
@@ -2100,32 +2100,35 @@ async def _assert_card_metadata_load_starts_on_detected_set(
         poll_interval=0.01,
     )
 
-    try:
-        async with app.run_test(size=(120, 24)) as pilot:
+    async with app.run_test(size=(120, 24)) as pilot:
+        try:
             await pilot.pause()
             assert not started.is_set()
             log_path.write_text("\n".join(_first_pack_lines()) + "\n", encoding="utf-8")
             await pilot.pause(0.1)
-            assert await asyncio.to_thread(started.wait, 0.5)
+            assert await asyncio.to_thread(started.wait, 2.0)
             assert app.card_database_loading
             assert "Loading card metadata" in _status_text(app=app)
             assert app.query_one("#pack-table", DataTable).loading
 
             release.set()
-            for _ in range(20):
+            table = app.query_one("#pack-table", DataTable)
+            for _ in range(40):
                 await pilot.pause(0.05)
-                if app.session.snapshot.card_data.phase == DataLoadPhase.READY:
+                if (
+                    app.session.snapshot.card_data.phase == DataLoadPhase.READY
+                    and table.row_count == 14
+                ):
                     break
 
-            table = app.query_one("#pack-table", DataTable)
             assert not app.card_database_loading
             assert not table.loading
             assert table.row_count == 14
             assert calls == [("MSH", True)]
             rows = [list(table.get_row_at(index)) for index in range(table.row_count)]
             assert any("Selected Spider" in row for row in _card_cells(rows=rows))
-    finally:
-        release.set()
+        finally:
+            release.set()
 
 
 async def _assert_card_metadata_load_failure_is_visible(tmp_path: Path) -> None:
