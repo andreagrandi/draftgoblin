@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
@@ -26,6 +27,7 @@ from draftomen.set_profile import (
     load_set_profile,
     set_profile_path,
 )
+from draftomen.session import DataLoadPhase
 from draftomen.watch import PlainLogWatcher
 
 FIXTURE_LOG_PATH = Path(__file__).parent / "fixtures" / "quick-draft-msh-player.log"
@@ -77,6 +79,81 @@ def test_plain_watch_processes_appended_lines_incrementally(tmp_path: Path) -> N
 
     assert pick_output == "Chosen card: Fixture Spider [G] (grpId 105097)\n\n"
     assert watcher.poll_once() == ""
+
+
+def test_plain_watch_loads_selected_card_data_during_poll_and_formats_current_db(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+    started = Event()
+    release = Event()
+    calls: list[tuple[str, bool]] = []
+    database = _fixture_card_database()
+    selected_card = replace(database.cards[105097], name="Selected Spider")
+    selected_database = replace(
+        database,
+        cards={**database.cards, 105097: selected_card},
+    )
+
+    def loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        calls.append((set_code, allow_network))
+        started.set()
+        release.wait(timeout=5.0)
+        return selected_database
+
+    watcher = PlainLogWatcher(
+        log_path=log_path,
+        app_dir=tmp_path / "app",
+        set_card_data_loader=loader,
+        poll_interval=0.01,
+    )
+    assert calls == []
+    fixture_lines = FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+
+    _append_lines(path=log_path, lines=fixture_lines[:7])
+    output: list[str] = []
+    poll_thread = Thread(target=lambda: output.append(watcher.poll_once()))
+    poll_thread.start()
+    try:
+        assert started.wait(timeout=1.0)
+        assert poll_thread.is_alive()
+        assert calls == [("MSH", True)]
+        release.set()
+        poll_thread.join(timeout=5.0)
+        assert not poll_thread.is_alive()
+        assert "Selected Spider (grpId 105097)" in output[0]
+        assert watcher.session.card_database is selected_database
+    finally:
+        release.set()
+        watcher.close()
+
+
+def test_plain_watch_surfaces_selected_card_data_failure(tmp_path: Path) -> None:
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+
+    def loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        assert set_code == "MSH"
+        assert allow_network
+        raise RuntimeError("card cache unavailable")
+
+    watcher = PlainLogWatcher(
+        log_path=log_path,
+        app_dir=tmp_path / "app",
+        set_card_data_loader=loader,
+        poll_interval=0.01,
+    )
+    try:
+        _append_lines(
+            path=log_path,
+            lines=FIXTURE_LOG_PATH.read_text(encoding="utf-8").splitlines()[:3],
+        )
+        output = watcher.poll_once()
+        assert "Card metadata failed to load: card cache unavailable" in output
+        assert watcher.session.snapshot.card_data.phase == DataLoadPhase.FAILED
+    finally:
+        watcher.close()
 
 
 def test_plain_watch_renders_accountless_draft_event_without_crashing(
@@ -511,7 +588,14 @@ def test_plain_watch_account_switch_announces_and_separates_state(
 
 
 def _fixture_card_database() -> CardDatabase:
-    return build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+    database = build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+    return replace(
+        database,
+        cards={
+            grp_id: replace(card, set_code="msh")
+            for grp_id, card in database.cards.items()
+        },
+    )
 
 
 def _failing_ratings_loader(set_code: str) -> NoReturn:

@@ -164,7 +164,6 @@ def test_replay_with_schema_five_incomplete_scryfall_card_stays_offline(
 
     monkeypatch.setattr("draftomen.carddb.download_mtgjson_set_cards", fail_mtgjson)
     monkeypatch.setattr("draftomen.seventeen.augment_card_database_from_ratings", fail_mtgjson)
-    monkeypatch.setattr("draftomen.cli.metadata_augmenting_ratings_loader", fail_mtgjson)
 
     exit_code = main(
         argv=[

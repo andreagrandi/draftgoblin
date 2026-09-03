@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import http.client
+import io
 import json
 import threading
 from dataclasses import FrozenInstanceError, replace
@@ -22,6 +23,7 @@ from draftomen.backtest import (
     BacktestPickResult as DomainBacktestPickResult,
     BacktestReport as DomainBacktestReport,
 )
+from draftomen.card_data_client import CardDataClient
 from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.cardimages import CardImageError, CardImageService
 from draftomen.events import (
@@ -109,6 +111,7 @@ from draftomen.set_profile import (
     load_set_profile,
     set_profile_path,
 )
+from draftomen.set_card_data import SetCardData
 from draftomen.splash import SplashState
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -2088,27 +2091,35 @@ def test_live_session_card_data_load_failure_and_retry_publish_complete_states(
     attempts = 0
     published: list[LiveSessionSnapshot] = []
 
-    def card_database_loader() -> CardDatabase:
+    def card_data_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        assert set_code == "TST"
+        assert allow_network is True
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise RuntimeError("card cache unavailable")
         return replace(
-            _fixture_card_database(),
+            _fixture_set_card_database(set_code="TST"),
             generated_at=datetime(2026, 8, 23, 12, 0, tzinfo=UTC),
         )
 
     session = LiveSession(
         log_path=tmp_path / "Player.log",
+        set_card_data_loader=card_data_loader,
         app_dir=tmp_path / "app",
-        card_database_loader=card_database_loader,
         snapshot_publisher=published.append,
     )
 
     assert session.snapshot.card_data.phase == DataLoadPhase.IDLE
 
-    failed = session.load_card_data()
-
+    session._consume_detected_event(
+        event=QuickDraftDetectedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            account_id=None,
+        )
+    )
+    failed = session.snapshot
     assert failed.card_data.phase == DataLoadPhase.FAILED
     assert failed.card_data.last_successful_update is None
     assert failed.progress is None
@@ -2131,12 +2142,67 @@ def test_live_session_card_data_load_failure_and_retry_publish_complete_states(
     assert ready.errors == ()
 
 
-def test_live_session_resumes_deferred_ratings_after_card_data_becomes_ready(
+def test_live_session_reopens_network_for_same_named_detection_after_local_retry(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, bool]] = []
+    attempts = 0
+    database = _fixture_set_card_database(set_code="TST")
+
+    def card_data_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        nonlocal attempts
+        calls.append((set_code, allow_network))
+        attempts += 1
+        if attempts < 3:
+            raise RuntimeError("card cache unavailable")
+        return database
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        set_card_data_loader=card_data_loader,
+        app_dir=tmp_path / "app",
+    )
+    detected = QuickDraftDetectedEvent(
+        event_name="QuickDraft_TST_20260823",
+        set_code="TST",
+        account_id=None,
+    )
+    session._consume_detected_event(event=detected)
+    assert calls == [("TST", True)]
+
+    session._consume_detected_event(event=detected)
+    assert calls == [("TST", True)]
+
+    session._consume_event(
+        event=DraftStartedEvent(
+            event_name=detected.event_name,
+            set_code=detected.set_code,
+            course_id="course-tst",
+            account_id=None,
+        ),
+        state=None,
+    )
+    assert calls == [("TST", True), ("TST", False)]
+    assert session.snapshot.card_data.phase == DataLoadPhase.FAILED
+
+    session._consume_detected_event(event=detected)
+
+    assert calls == [("TST", True), ("TST", False), ("TST", True)]
+    assert session.snapshot.card_data.phase == DataLoadPhase.READY
+
+
+def test_live_session_loads_set_card_data_before_ratings(
     tmp_path: Path,
 ) -> None:
     factory_calls: list[CardDatabase] = []
     cache_checks: list[str] = []
     rating_loads: list[str] = []
+    card_data_loads: list[tuple[str, bool]] = []
+    database = _fixture_set_card_database(set_code="TST")
+
+    def card_data_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        card_data_loads.append((set_code, allow_network))
+        return database
 
     def ratings_loader_factory(database: CardDatabase) -> RatingsLoader:
         factory_calls.append(database)
@@ -2151,39 +2217,362 @@ def test_live_session_resumes_deferred_ratings_after_card_data_becomes_ready(
         cache_checks.append(set_code)
         return True
 
-    database = _fixture_card_database()
     session = LiveSession(
         log_path=tmp_path / "Player.log",
         app_dir=tmp_path / "app",
-        card_database_loader=lambda: database,
+        set_card_data_loader=card_data_loader,
         ratings_loader_factory=ratings_loader_factory,
         ratings_cache_checker=cache_checker,
     )
-    waiting = session.process_lines(
-        lines=(
-            _auth_line(account_id="account-1", screen_name="Player"),
-            _course_line(
-                event_name="QuickDraft_TST_20260823",
-                course_id="draft-tst",
-            ),
+
+    session._consume_detected_event(
+        event=QuickDraftDetectedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            account_id=None,
         )
     )
 
-    assert waiting.card_data.phase == DataLoadPhase.IDLE
-    assert waiting.ratings.phase == DataLoadPhase.IDLE
-    assert waiting.ratings.set_code == "TST"
-    assert factory_calls == []
-    assert cache_checks == []
-    assert rating_loads == []
-
-    ready = session.load_card_data()
-
+    assert card_data_loads == [("TST", True)]
     assert factory_calls == [database]
     assert cache_checks == ["TST"]
     assert rating_loads == ["TST"]
-    assert ready.card_data.phase == DataLoadPhase.READY
-    assert ready.ratings.phase == DataLoadPhase.READY
-    assert ready.ratings.set_code == "TST"
+    assert session.snapshot.card_data.phase == DataLoadPhase.READY
+    assert session.snapshot.ratings.phase == DataLoadPhase.READY
+    assert session.snapshot.ratings.set_code == "TST"
+
+
+def test_live_session_avoids_duplicate_card_load_and_reloads_on_set_change(
+    tmp_path: Path,
+) -> None:
+    database_by_set = {
+        "TST": _fixture_set_card_database(set_code="TST"),
+        "MSH": _fixture_set_card_database(set_code="MSH"),
+    }
+    calls: list[tuple[str, bool]] = []
+
+    def card_data_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        calls.append((set_code, allow_network))
+        return database_by_set[set_code]
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        set_card_data_loader=card_data_loader,
+    )
+    first = QuickDraftDetectedEvent(
+        event_name="QuickDraft_TST_20260823",
+        set_code="TST",
+        account_id=None,
+    )
+    session._consume_detected_event(event=first)
+    session._consume_detected_event(event=first)
+    session._consume_detected_event(
+        event=QuickDraftDetectedEvent(
+            event_name="QuickDraft_TST_20260824",
+            set_code="TST",
+            account_id=None,
+        )
+    )
+    session._consume_detected_event(
+        event=QuickDraftDetectedEvent(
+            event_name="QuickDraft_MSH_20260824",
+            set_code="MSH",
+            account_id=None,
+        )
+    )
+
+    assert calls == [("TST", True), ("MSH", True)]
+    assert session.card_database is database_by_set["MSH"]
+
+
+def test_live_session_late_card_recovery_is_local_and_pack_never_loads(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, bool]] = []
+    database = _fixture_set_card_database(set_code="TST")
+
+    def card_data_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        calls.append((set_code, allow_network))
+        return database
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        set_card_data_loader=card_data_loader,
+    )
+    session._consume_event(
+        event=DraftStartedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            course_id="course-tst",
+            account_id=None,
+        ),
+        state=None,
+    )
+    session._consume_event(
+        event=PackOfferedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            pack_number=0,
+            pick_number=0,
+            offered_grp_ids=(),
+            pool_grp_ids=(),
+            account_id=None,
+        ),
+        state=None,
+    )
+
+    assert calls == [("TST", False)]
+    assert session.card_database is database
+
+
+def test_live_session_recovered_state_uses_offline_card_data_and_closes_fence(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    state = _draft_state(
+        account_id="recovered-account",
+        screen_name="Recovered",
+        draft_id="recovered-draft",
+        updated_at="2026-08-30T10:00:00+00:00",
+        pool_grp_ids=(104894,),
+    )
+    save_draft_state(state=state, app_dir=app_dir)
+    calls: list[tuple[str, bool]] = []
+    database = _fixture_set_card_database(set_code="TST")
+
+    def card_data_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        calls.append((set_code, allow_network))
+        if allow_network:
+            raise AssertionError("recovered card-data load must be local-only")
+        return database
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        set_card_data_loader=card_data_loader,
+        app_dir=app_dir,
+    )
+
+    recovered = session.dispatch(
+        command=ChooseAccount(account_id="recovered-account")
+    )
+
+    assert calls == [("TST", False)]
+    assert session._card_data_network_open is False
+    assert recovered.card_data.phase == DataLoadPhase.READY
+    assert recovered.active_account == AccountIdentity(
+        account_id="recovered-account",
+        screen_name="Recovered",
+    )
+    assert recovered.draft is not None
+
+
+def test_live_session_recovery_resets_local_attempt_for_new_set(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    recovered_state = replace(
+        _draft_state(
+            account_id="account-b",
+            screen_name="Beta",
+            draft_id="draft-b",
+            updated_at="2026-08-30T10:00:00+00:00",
+            pool_grp_ids=(104894,),
+        ),
+        set_code="MSH",
+    )
+    save_draft_state(state=recovered_state, app_dir=app_dir)
+    calls: list[tuple[str, bool]] = []
+
+    def card_data_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        calls.append((set_code, allow_network))
+        return _fixture_set_card_database(set_code=set_code)
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        set_card_data_loader=card_data_loader,
+        app_dir=app_dir,
+    )
+    session._consume_event(
+        event=DraftStartedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            course_id="course-a",
+            account_id="account-a",
+        ),
+        state=None,
+    )
+    assert calls == [("TST", False)]
+
+    recovered = session.dispatch(command=ChooseAccount(account_id="account-b"))
+
+    assert calls == [("TST", False), ("MSH", False)]
+    assert recovered.active_account == AccountIdentity(
+        account_id="account-b",
+        screen_name="Beta",
+    )
+    assert recovered.card_data.phase == DataLoadPhase.READY
+
+
+def test_live_session_detection_snapshot_restores_active_account(
+    tmp_path: Path,
+) -> None:
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        card_database=_fixture_card_database(),
+        app_dir=tmp_path / "app",
+    )
+
+    session._consume_detected_event(
+        event=QuickDraftDetectedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            account_id="account-a",
+        )
+    )
+    assert session.snapshot.active_account == AccountIdentity(
+        account_id="account-a",
+        screen_name=None,
+    )
+
+    session._consume_detected_event(
+        event=QuickDraftDetectedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            account_id="account-b",
+        )
+    )
+    assert session.snapshot.active_account == AccountIdentity(
+        account_id="account-b",
+        screen_name=None,
+    )
+
+
+def test_live_session_rejects_wrong_set_database_without_installing_it(
+    tmp_path: Path,
+) -> None:
+    source = _fixture_card_database()
+    wrong = replace(
+        source,
+        cards={
+            grp_id: replace(card, set_code="msh")
+            for grp_id, card in source.cards.items()
+        },
+    )
+    calls: list[tuple[str, bool]] = []
+
+    def card_data_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        calls.append((set_code, allow_network))
+        return wrong
+
+    session = LiveSession(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        set_card_data_loader=card_data_loader,
+    )
+    session._consume_detected_event(
+        event=QuickDraftDetectedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            account_id=None,
+        )
+    )
+
+    assert calls == [("TST", True)]
+    assert session.card_database is None
+    assert session.snapshot.card_data.phase == DataLoadPhase.FAILED
+    assert session.snapshot.errors[0].error_id == "card-data"
+
+
+class _SessionCardDataResponse:
+    def __init__(self, payload: bytes, *, url: str) -> None:
+        self._stream = io.BytesIO(payload)
+        self.url = url
+        self.status = 200
+
+    def read(self, size: int = -1) -> bytes:
+        return self._stream.read(size)
+
+    def geturl(self) -> str:
+        return self.url
+
+    def close(self) -> None:
+        return None
+
+
+def test_live_session_card_data_client_cold_load_then_offline_cache_hit(
+    tmp_path: Path,
+) -> None:
+    source = _fixture_card_database()
+    database = replace(
+        source,
+        cards={
+            grp_id: replace(card, set_code="tst")
+            for grp_id, card in source.cards.items()
+        },
+    )
+    payload = SetCardData.from_card_database(
+        database,
+        set_code="tst",
+        set_name="Test Set",
+    ).to_gzip_bytes()
+    base_url = "https://cards.example.test/card-data/"
+    request_urls: list[str] = []
+
+    def opener(request: object, *, timeout: float) -> _SessionCardDataResponse:
+        del timeout
+        request_urls.append(request.full_url)
+        return _SessionCardDataResponse(
+            payload,
+            url=request.full_url,
+        )
+
+    app_dir = tmp_path / "app"
+    first = LiveSession(
+        log_path=tmp_path / "first.log",
+        app_dir=app_dir,
+        set_card_data_loader=CardDataClient(
+            app_dir=app_dir,
+            base_url=base_url,
+            opener=opener,
+        ).load,
+    )
+    first._consume_detected_event(
+        event=QuickDraftDetectedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            account_id=None,
+        )
+    )
+
+    assert request_urls == [f"{base_url}tst.json.gz"]
+    assert first.card_database is not None
+
+    def fail_opener(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("offline cache hit must not open the network")
+
+    second = LiveSession(
+        log_path=tmp_path / "second.log",
+        app_dir=app_dir,
+        set_card_data_loader=CardDataClient(
+            app_dir=app_dir,
+            base_url=base_url,
+            opener=fail_opener,
+        ).load,
+    )
+    second._consume_event(
+        event=DraftStartedEvent(
+            event_name="QuickDraft_TST_20260823",
+            set_code="TST",
+            course_id="course-tst",
+            account_id=None,
+        ),
+        state=None,
+    )
+
+    assert second.snapshot.card_data.phase == DataLoadPhase.READY
+    assert second.card_database is not None
 
 
 def test_inactive_ratings_worker_caches_result_without_publishing_stale_state(
@@ -3965,6 +4354,17 @@ def _fixture_card_database(*, with_image_uris: bool = False) -> CardDatabase:
             )
             for grp_id in offered_grp_ids
         }
+    )
+
+
+def _fixture_set_card_database(*, set_code: str) -> CardDatabase:
+    database = _fixture_card_database()
+    return replace(
+        database,
+        cards={
+            grp_id: replace(card, set_code=set_code.casefold())
+            for grp_id, card in database.cards.items()
+        },
     )
 
 

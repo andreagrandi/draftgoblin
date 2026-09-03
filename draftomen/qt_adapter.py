@@ -759,15 +759,10 @@ class _LiveSessionWorker(QObject):
             if self._stop_requested:
                 self.stop()
                 return
-            if hasattr(self._session, "load_card_data"):
-                self._session.load_card_data()
-            if self._stop_requested:
-                self.stop()
-                return
             if self._startup_scan:
                 self._session.scan_startup_files(
                     include_previous=True,
-                    include_pre_draft_detection=False,
+                    include_pre_draft_detection=True,
                 )
             if self._stop_requested:
                 self.stop()

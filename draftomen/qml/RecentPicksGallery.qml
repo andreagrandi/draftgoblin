@@ -221,7 +221,7 @@ Item {
     Rectangle {
         id: previewCard
         objectName: "recentPickPreview"
-        parent: Overlay.overlay
+        parent: root.Window.window ? root.Window.window.contentItem : root
         z: 100
         property bool modal: false
         property real previewWidth: Math.min(

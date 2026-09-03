@@ -600,13 +600,35 @@ def download_scryfall_card_database(
     Scryfall does not require an API key, only normal API headers.
     """
 
+    return build_card_database_from_scryfall_cards(
+        cards=iter_scryfall_default_cards(timeout_seconds=timeout_seconds)
+    )
+
+
+def iter_scryfall_default_cards(
+    *,
+    bulk_file: PathInput | None = None,
+    timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+) -> Iterator[Mapping[str, Any]]:
+    """Yield Scryfall's default-card records from one local or remote source.
+
+    Local JSONL (including ``.jsonl.gz``) files are entirely offline.  The
+    remote path performs exactly one bulk metadata request and one compressed
+    default-cards download, preserving the streaming behavior of the original
+    downloader.
+    """
+
+    if bulk_file is not None:
+        path = Path(bulk_file)
+        with _open_text_bulk_file(path=path) as source:
+            yield from _iter_jsonl_objects(lines=source, source=str(path))
+        return
+
     bulk_items = _fetch_bulk_data_items(timeout_seconds=timeout_seconds)
     download_uri = _default_cards_download_uri(bulk_items=bulk_items)
-    return build_card_database_from_scryfall_cards(
-        cards=_iter_scryfall_jsonl_url(
-            url=download_uri,
-            timeout_seconds=timeout_seconds,
-        )
+    yield from _iter_scryfall_jsonl_url(
+        url=download_uri,
+        timeout_seconds=timeout_seconds,
     )
 
 

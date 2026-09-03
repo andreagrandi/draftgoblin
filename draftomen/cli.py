@@ -26,11 +26,18 @@ from draftomen.benchmark import (
 from draftomen.carddb import (
     CardDatabase,
     CardDatabaseError,
+    HTTP_TIMEOUT_SECONDS,
     build_card_database_from_bulk_file,
     card_database_cache_path,
     load_card_database,
     load_or_refresh_card_database,
     refresh_card_database,
+)
+from draftomen.card_data_client import CardDataClient, CardDataClientError
+from draftomen.card_data_export import (
+    SetDataExportError,
+    prepare_set_data_export,
+    publish_set_data_export,
 )
 from draftomen.set_profile import (
     SetProfileError,
@@ -95,8 +102,6 @@ from draftomen.seventeen import (
     has_cached_17lands_data,
     load_cached_17lands_data,
     load_or_refresh_17lands_data,
-    metadata_augmenting_ratings_loader,
-    metadata_augmenting_ratings_progress_loader,
     refresh_17lands_structure_targets,
     seventeen_lands_structure_targets_cache_path,
 )
@@ -210,6 +215,51 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     watch_parser.set_defaults(handler=handle_watch)
+    export_parser = subparsers.add_parser(
+        name="export-set-data",
+        help="Export canonical per-set Arena card metadata.",
+        description=(
+            "Export validated static card-data artifacts from the 17Lands "
+            "expansion inventory and Scryfall default-cards data."
+        ),
+    )
+    export_parser.add_argument(
+        "set",
+        nargs="?",
+        default=None,
+        metavar="SET",
+        help="Exact set code or full set name (case-insensitive).",
+    )
+    export_parser.add_argument(
+        "--inventory-file",
+        type=Path,
+        metavar="PATH",
+        default=None,
+        help="Local 17Lands /data/expansions JSON file instead of one request.",
+    )
+    export_parser.add_argument(
+        "--bulk-file",
+        type=Path,
+        metavar="PATH",
+        default=None,
+        help="Local Scryfall default-cards JSONL(.gz) file instead of downloading.",
+    )
+    export_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        metavar="PATH",
+        default=Path("website/public/card-data"),
+        help="Artifact output directory (default: website/public/card-data).",
+    )
+    export_parser.add_argument(
+        "--timeout",
+        type=_parse_positive_timeout,
+        metavar="POSITIVE_INT",
+        default=HTTP_TIMEOUT_SECONDS,
+        help=f"HTTP timeout in seconds (default: {HTTP_TIMEOUT_SECONDS}).",
+    )
+    export_parser.set_defaults(handler=handle_export_set_data)
+
 
     replay_parser = subparsers.add_parser(
         name="replay",
@@ -814,6 +864,19 @@ def _parse_generated_at(value: str) -> datetime:
         ) from error
 
 
+def _parse_positive_timeout(value: str) -> int:
+    """Parse a strictly positive integer timeout for export commands."""
+
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            "--timeout must be a positive integer."
+        ) from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("--timeout must be a positive integer.")
+    return parsed
+
 def handle_generate_profile(args: argparse.Namespace) -> int:
     """Generate and publish one validated local profile artifact."""
 
@@ -1021,6 +1084,60 @@ def format_version() -> str:
 
     return f"draftomen-tui {__version__}\n\n{DISCLAIMER}"
 
+def handle_export_set_data(args: argparse.Namespace) -> int:
+    """Prepare and publish one or all static per-set card-data artifacts."""
+
+    try:
+        plan = prepare_set_data_export(
+            selector=args.set,
+            output_dir=args.output_dir,
+            inventory_file=args.inventory_file,
+            bulk_file=args.bulk_file,
+            timeout_seconds=args.timeout,
+        )
+        if args.set is not None:
+            candidate = plan.pending[0]
+            path = publish_set_data_export(candidate=candidate)
+            print(
+                f"wrote {candidate.identity.set_code.upper()} - "
+                f"{candidate.identity.set_name} -> {path}",
+                flush=True,
+            )
+            return 0
+
+        print(
+            f"total={plan.total} already-valid={len(plan.already_valid)} "
+            f"pending={len(plan.pending)}",
+            flush=True,
+        )
+        for candidate in plan.pending:
+            print(
+                f"{candidate.identity.set_code.upper()} - {candidate.identity.set_name}",
+                flush=True,
+            )
+        for candidate in plan.pending:
+            path = publish_set_data_export(candidate=candidate)
+            print(
+                f"wrote {candidate.identity.set_code.upper()} - "
+                f"{candidate.identity.set_name} -> {path}",
+                flush=True,
+            )
+        return 0
+    except KeyboardInterrupt:
+        return 130
+    except (
+        SetDataExportError,
+        CardDatabaseError,
+        OSError,
+        SeventeenLandsError,
+        TypeError,
+        ValueError,
+        UnicodeError,
+    ) as error:
+        print(f"export-set-data failed: {error}", file=sys.stderr)
+        return 1
+
+
 
 def handle_watch(args: argparse.Namespace) -> int:
     """Handle live Player.log watching.
@@ -1038,6 +1155,13 @@ def handle_watch(args: argparse.Namespace) -> int:
         return 2
 
     try:
+        database: CardDatabase | None = None
+        set_card_data_loader = None
+        if args.bulk_file is not None:
+            database = build_card_database_from_bulk_file(path=args.bulk_file)
+        else:
+            set_card_data_loader = CardDataClient(app_dir=args.app_dir).load
+
         profile_client = (
             None
             if args.profile_manifest_url is None
@@ -1048,24 +1172,18 @@ def handle_watch(args: argparse.Namespace) -> int:
             )
         )
         if args.plain:
-            database = _load_watch_card_database(args=args)
-            ratings_loader = metadata_augmenting_ratings_loader(
-                database=database,
-                load_ratings=lambda set_code: load_or_refresh_17lands_data(
-                    set_code=set_code,
-                    app_dir=args.app_dir,
-                ),
-                app_dir=args.app_dir,
-                persist_database=args.bulk_file is None,
-            )
             return run_plain_watch(
                 log_path=log_path,
                 card_database=database,
+                set_card_data_loader=set_card_data_loader,
                 app_dir=args.app_dir,
                 poll_interval=args.poll_interval,
                 once=args.once,
                 startup_scan=args.startup_scan,
-                ratings_loader=ratings_loader,
+                ratings_loader=lambda set_code: load_or_refresh_17lands_data(
+                    set_code=set_code,
+                    app_dir=args.app_dir,
+                ),
                 splash_enabled=(
                     True if args.splash_enabled is None else args.splash_enabled
                 ),
@@ -1087,19 +1205,13 @@ def handle_watch(args: argparse.Namespace) -> int:
 
         return run_tui_watch(
             log_path=log_path,
-            card_database_loader=lambda: _load_watch_card_database(args=args),
+            card_database=database,
+            set_card_data_loader=set_card_data_loader,
             app_dir=args.app_dir,
             poll_interval=args.poll_interval,
             once=args.once,
             startup_scan=args.startup_scan,
-            ratings_progress_loader_factory=lambda database: (
-                metadata_augmenting_ratings_progress_loader(
-                    database=database,
-                    load_ratings=load_ratings,
-                    app_dir=args.app_dir,
-                    persist_database=args.bulk_file is None,
-                )
-            ),
+            ratings_progress_loader=load_ratings,
             ratings_cache_checker=lambda set_code: has_cached_17lands_data(
                 set_code=set_code,
                 app_dir=args.app_dir,
@@ -1111,6 +1223,7 @@ def handle_watch(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         return 130
     except (
+        CardDataClientError,
         CardDatabaseError,
         DeckBuilderError,
         DraftAuditError,
@@ -1122,18 +1235,6 @@ def handle_watch(args: argparse.Namespace) -> int:
     ) as error:
         print(f"watch failed: {error}", file=sys.stderr)
         return 1
-
-
-
-def _load_watch_card_database(*, args: argparse.Namespace) -> CardDatabase:
-    """Load watch card metadata, refreshing automatically when missing.
-    Users can still pass a local bulk file for deterministic tests.
-    """
-
-    if args.bulk_file is not None:
-        return build_card_database_from_bulk_file(path=args.bulk_file)
-
-    return load_or_refresh_card_database(app_dir=args.app_dir)
 
 
 def handle_replay(args: argparse.Namespace) -> int:

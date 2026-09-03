@@ -1,3 +1,6 @@
+/card-data/*
+  Cache-Control: public, max-age=0, must-revalidate
+
 /profiles/manifest.json
   Cache-Control: public, max-age=0, must-revalidate
 

@@ -109,6 +109,7 @@ def test_tui_parser_uses_tui_command_name(
         ("generate-profile", "Generate"),
         ("execute-profile-refresh", "Acquire and stage"),
         ("generate-profile-refresh-batch", "Generate profiles"),
+        ("export-set-data", "Export"),
     ],
 )
 def test_subcommands_are_registered_with_help_text(
@@ -126,6 +127,226 @@ def test_subcommands_are_registered_with_help_text(
     assert error.value.code == 0
     assert command in captured.out
     assert expected_help in captured.out
+
+def test_export_set_data_parser_defaults_and_options() -> None:
+    parser = build_parser()
+
+    defaults = parser.parse_args(args=["export-set-data"])
+    assert defaults.set is None
+    assert defaults.inventory_file is None
+    assert defaults.bulk_file is None
+    assert defaults.output_dir == Path("website/public/card-data")
+    assert defaults.timeout == cli.HTTP_TIMEOUT_SECONDS
+
+    args = parser.parse_args(
+        args=[
+            "export-set-data",
+            "tst",
+            "--inventory-file",
+            "inventory.json",
+            "--bulk-file",
+            "bulk.jsonl.gz",
+            "--output-dir",
+            "out",
+            "--timeout",
+            "17",
+        ]
+    )
+    assert args.set == "tst"
+    assert args.inventory_file == Path("inventory.json")
+    assert args.bulk_file == Path("bulk.jsonl.gz")
+    assert args.output_dir == Path("out")
+    assert args.timeout == 17
+
+
+@pytest.mark.parametrize("timeout", ["0", "-1", "not-an-int"])
+def test_export_set_data_parser_rejects_invalid_timeout(timeout: str) -> None:
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args(args=["export-set-data", "--timeout", timeout])
+
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("selector", ["TST", "test set"])
+def test_export_set_data_single_mode_resolves_selector_and_publishes(
+    selector: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = SimpleNamespace(set_code="tst", set_name="Test Set")
+    candidate = SimpleNamespace(
+        identity=identity,
+        target_path=tmp_path / "tst.json.gz",
+        gzip_bytes=b"canonical",
+    )
+    calls: list[dict[str, object]] = []
+    published: list[object] = []
+
+    def fake_prepare(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return SimpleNamespace(total=1, already_valid=(), pending=(candidate,))
+
+    def fake_publish(*, candidate: object) -> Path:
+        published.append(candidate)
+        return tmp_path / "tst.json.gz"
+
+    monkeypatch.setattr(cli, "prepare_set_data_export", fake_prepare)
+    monkeypatch.setattr(cli, "publish_set_data_export", fake_publish)
+
+    assert (
+        main(
+            argv=[
+                "export-set-data",
+                selector,
+                "--output-dir",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+
+    assert calls == [
+        {
+            "selector": selector,
+            "output_dir": tmp_path,
+            "inventory_file": None,
+            "bulk_file": None,
+            "timeout_seconds": cli.HTTP_TIMEOUT_SECONDS,
+        }
+    ]
+    assert published == [candidate]
+    assert capsys.readouterr().out == (
+        "wrote TST - Test Set -> " + str(tmp_path / "tst.json.gz") + "\n"
+    )
+
+
+def test_export_set_data_all_mode_lists_every_pending_set_before_publishing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = tuple(
+        SimpleNamespace(
+            identity=SimpleNamespace(set_code=code, set_name=name),
+            target_path=tmp_path / f"{code}.json.gz",
+            gzip_bytes=b"canonical",
+        )
+        for code, name in (("aaa", "Alpha"), ("bbb", "Beta"))
+    )
+    published: list[object] = []
+    output_seen_before_publish: list[str] = []
+
+    prepare_calls: list[dict[str, object]] = []
+
+    def fake_prepare(**kwargs: object) -> object:
+        prepare_calls.append(kwargs)
+        return SimpleNamespace(total=2, already_valid=(), pending=candidates)
+
+    monkeypatch.setattr(cli, "prepare_set_data_export", fake_prepare)
+
+    def fake_publish(*, candidate: object) -> Path:
+        output_seen_before_publish.append(capsys.readouterr().out)
+        published.append(candidate)
+        return candidate.target_path  # type: ignore[union-attr]
+
+    monkeypatch.setattr(cli, "publish_set_data_export", fake_publish)
+
+    assert main(argv=["export-set-data"]) == 0
+
+    assert published == list(candidates)
+    assert prepare_calls[0]["output_dir"] == Path("website/public/card-data")
+    assert output_seen_before_publish[0] == (
+        "total=2 already-valid=0 pending=2\nAAA - Alpha\nBBB - Beta\n"
+    )
+    assert output_seen_before_publish[1] == (
+        "wrote AAA - Alpha -> " + str(tmp_path / "aaa.json.gz") + "\n"
+    )
+    assert capsys.readouterr().out == (
+        "wrote BBB - Beta -> " + str(tmp_path / "bbb.json.gz") + "\n"
+    )
+
+
+def test_export_set_data_all_mode_valid_rerun_reports_no_pending_without_publishing(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published = False
+
+    monkeypatch.setattr(
+        cli,
+        "prepare_set_data_export",
+        lambda **kwargs: SimpleNamespace(
+            total=2,
+            already_valid=(
+                SimpleNamespace(set_code="aaa", set_name="Alpha"),
+                SimpleNamespace(set_code="bbb", set_name="Beta"),
+            ),
+            pending=(),
+        ),
+    )
+
+    def fake_publish(*, candidate: object) -> Path:
+        nonlocal published
+        published = True
+        raise AssertionError("no-pending plans must not publish")
+
+    monkeypatch.setattr(cli, "publish_set_data_export", fake_publish)
+
+    assert main(argv=["export-set-data"]) == 0
+    assert published is False
+    assert capsys.readouterr().out == "total=2 already-valid=2 pending=0\n"
+
+
+def test_export_set_data_failure_is_concise_and_returns_one(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_prepare(**kwargs: object) -> object:
+        raise cli.SetDataExportError("source data unavailable")
+
+    monkeypatch.setattr(cli, "prepare_set_data_export", fail_prepare)
+
+    assert main(argv=["export-set-data"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "export-set-data failed: source data unavailable\n"
+
+
+def test_export_set_data_interrupt_preserves_earlier_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = tuple(
+        SimpleNamespace(
+            identity=SimpleNamespace(set_code=code, set_name=name),
+            target_path=tmp_path / f"{code}.json.gz",
+            gzip_bytes=b"canonical",
+        )
+        for code, name in (("aaa", "Alpha"), ("bbb", "Beta"))
+    )
+    published: list[object] = []
+
+    monkeypatch.setattr(
+        cli,
+        "prepare_set_data_export",
+        lambda **kwargs: SimpleNamespace(
+            total=2,
+            already_valid=(),
+            pending=candidates,
+        ),
+    )
+
+    def fake_publish(*, candidate: object) -> Path:
+        published.append(candidate)
+        if len(published) == 2:
+            raise KeyboardInterrupt
+        return candidate.target_path  # type: ignore[union-attr]
+
+    monkeypatch.setattr(cli, "publish_set_data_export", fake_publish)
+
+    assert main(argv=["export-set-data"]) == 130
+    assert published == list(candidates)
 
 
 def test_generate_profile_refresh_batch_parser_registers_exact_options() -> None:
@@ -903,10 +1124,6 @@ def test_watch_mana_icons_flag_is_explicit_tui_opt_in(
 
     monkeypatch.setattr(cli, "run_tui_watch", fake_run_tui_watch)
 
-    def fail_if_loaded_before_tui(*, args: object) -> CardDatabase:
-        raise AssertionError("card metadata loaded before the TUI started")
-
-    monkeypatch.setattr(cli, "_load_watch_card_database", fail_if_loaded_before_tui)
     log_path = tmp_path / "Player.log"
     log_path.write_text("", encoding="utf-8")
 
@@ -926,8 +1143,9 @@ def test_watch_mana_icons_flag_is_explicit_tui_opt_in(
 
     assert exit_code == 0
     assert default_args.mana_icons is False
-    assert callable(captured["card_database_loader"])
-    assert callable(captured["ratings_progress_loader_factory"])
+    assert isinstance(captured["card_database"], CardDatabase)
+    assert captured["set_card_data_loader"] is None
+    assert callable(captured["ratings_progress_loader"])
     assert callable(captured["ratings_cache_checker"])
     assert captured["mana_icons_enabled"] is True
 
@@ -943,10 +1161,6 @@ def test_watch_tui_ratings_loader_forwards_refresh_flag(
         captured.update(kwargs)
         return 0
 
-    def fake_metadata_loader_factory(**kwargs: object) -> object:
-        captured["load_ratings"] = kwargs["load_ratings"]
-        return kwargs["load_ratings"]
-
     def fake_load_or_refresh(
         *,
         set_code: str,
@@ -958,11 +1172,6 @@ def test_watch_tui_ratings_loader_forwards_refresh_flag(
         return object()
 
     monkeypatch.setattr(cli, "run_tui_watch", fake_run_tui_watch)
-    monkeypatch.setattr(
-        cli,
-        "metadata_augmenting_ratings_progress_loader",
-        fake_metadata_loader_factory,
-    )
     monkeypatch.setattr(cli, "load_or_refresh_17lands_data", fake_load_or_refresh)
     log_path = tmp_path / "Player.log"
     log_path.write_text("", encoding="utf-8")
@@ -981,12 +1190,56 @@ def test_watch_tui_ratings_loader_forwards_refresh_flag(
         == 0
     )
 
-    factory = captured["ratings_progress_loader_factory"]
-    load_ratings = factory(CardDatabase(cards={}))  # type: ignore[operator]
-    load_ratings("TST", lambda progress: None, refresh=False)  # type: ignore[operator]
-    load_ratings("TST", lambda progress: None, refresh=True)  # type: ignore[operator]
+    loader = captured["ratings_progress_loader"]
+    assert callable(loader)
+    loader("TST", lambda progress: None, refresh=False)  # type: ignore[operator]
+    loader("TST", lambda progress: None, refresh=True)  # type: ignore[operator]
 
     assert refresh_values == [False, True]
+    assert "ratings_progress_loader_factory" not in captured
+
+def test_watch_plain_passes_raw_ratings_loader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    ratings = object()
+
+    def fake_run_plain_watch(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    def fake_load_or_refresh(
+        *,
+        set_code: str,
+        app_dir: Path | None = None,
+    ) -> object:
+        assert set_code == "TST"
+        return ratings
+
+    monkeypatch.setattr(cli, "run_plain_watch", fake_run_plain_watch)
+    monkeypatch.setattr(cli, "load_or_refresh_17lands_data", fake_load_or_refresh)
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+
+    assert (
+        main(
+            argv=[
+                "watch",
+                "--plain",
+                "--log-path",
+                str(log_path),
+                "--bulk-file",
+                str(SCRYFALL_BULK_SAMPLE_PATH),
+            ]
+        )
+        == 0
+    )
+
+    loader = captured["ratings_loader"]
+    assert callable(loader)
+    assert loader("TST") is ratings  # type: ignore[operator]
+
 
 
 def test_build_pool_file_selects_pair_offline(
@@ -1299,45 +1552,93 @@ def test_no_subcommand_defaults_to_watch(
     assert getattr(calls[0], "startup_scan") is True
 
 
-def test_watch_fetches_missing_card_database(
+def test_watch_defaults_to_set_card_data_client_without_startup_load(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    calls: list[Path | None] = []
+    calls: list[tuple[Path | None, str, bool]] = []
+    captured: dict[str, object] = {}
 
-    def fake_load_or_refresh_card_database(*, app_dir: Path | None = None) -> CardDatabase:
-        calls.append(app_dir)
-        return CardDatabase(cards={})
+    class FakeCardDataClient:
+        def __init__(self, *, app_dir: Path | None = None) -> None:
+            calls.append((app_dir, "init", False))
 
-    monkeypatch.setattr(
-        cli,
-        "load_or_refresh_card_database",
-        fake_load_or_refresh_card_database,
-    )
+        def load(self, set_code: str, *, allow_network: bool) -> CardDatabase:
+            calls.append((None, set_code, allow_network))
+            return CardDatabase(cards={})
+
+    def fake_run_tui_watch(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "CardDataClient", FakeCardDataClient)
+    monkeypatch.setattr(cli, "run_tui_watch", fake_run_tui_watch)
     log_path = tmp_path / "Player.log"
     log_path.write_text("", encoding="utf-8")
     app_dir = tmp_path / "app"
 
-    exit_code = main(
-        argv=[
-            "watch",
-            "--log-path",
-            str(log_path),
-            "--plain",
-            "--app-dir",
-            str(app_dir),
-            "--once",
-        ]
+    assert (
+        main(
+            argv=[
+                "watch",
+                "--log-path",
+                str(log_path),
+                "--app-dir",
+                str(app_dir),
+                "--once",
+            ]
+        )
+        == 0
     )
 
-    captured = capsys.readouterr()
+    assert calls == [(app_dir, "init", False)]
+    assert captured["card_database"] is None
+    loader = captured["set_card_data_loader"]
+    assert callable(loader)
+    assert loader("TST", allow_network=True).cards == {}  # type: ignore[operator]
+    assert calls[-1] == (None, "TST", True)
 
-    assert exit_code == 0
-    assert calls == [app_dir]
-    assert "Mode: plain-text" in captured.out
-    assert captured.err == ""
 
+def test_watch_bulk_file_uses_direct_database_without_hosted_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = CardDatabase(cards={})
+    captured: dict[str, object] = {}
+
+    def fail_client(**kwargs: object) -> NoReturn:
+        raise AssertionError("hosted card client must not be constructed for --bulk-file")
+
+    def fake_build(*, path: Path) -> CardDatabase:
+        assert path == SCRYFALL_BULK_SAMPLE_PATH
+        return database
+
+    def fake_run_plain_watch(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "CardDataClient", fail_client)
+    monkeypatch.setattr(cli, "build_card_database_from_bulk_file", fake_build)
+    monkeypatch.setattr(cli, "run_plain_watch", fake_run_plain_watch)
+    log_path = tmp_path / "Player.log"
+    log_path.write_text("", encoding="utf-8")
+
+    assert (
+        main(
+            argv=[
+                "watch",
+                "--plain",
+                "--log-path",
+                str(log_path),
+                "--bulk-file",
+                str(SCRYFALL_BULK_SAMPLE_PATH),
+            ]
+        )
+        == 0
+    )
+
+    assert captured["card_database"] is database
+    assert captured["set_card_data_loader"] is None
 
 
 def _write_build_bulk_file(*, directory: Path) -> Path:

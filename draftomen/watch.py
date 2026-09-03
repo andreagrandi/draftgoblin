@@ -31,11 +31,13 @@ from draftomen.replay import (
     format_pick_made_event,
 )
 from draftomen.session import (
+    DataLoadPhase,
     LiveSession,
     LiveSessionEvent,
     OperationKind,
     ProfileRefreshRequest,
     RequestBuild,
+    SetCardDataLoader,
 )
 from draftomen.seventeen import SeventeenLandsData
 
@@ -52,7 +54,8 @@ class PlainLogWatcher:
         self,
         *,
         log_path: PathInput,
-        card_database: CardDatabase,
+        card_database: CardDatabase | None = None,
+        set_card_data_loader: SetCardDataLoader | None = None,
         app_dir: PathInput | None = None,
         profile_client: ProfileClient | None = None,
         poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -60,7 +63,12 @@ class PlainLogWatcher:
         ratings_loader: RatingsLoader | None = None,
         splash_enabled: bool = True,
     ) -> None:
-        self.card_database = card_database
+        if card_database is None and set_card_data_loader is None:
+            raise ValueError("card_database or set_card_data_loader is required.")
+        if card_database is not None and set_card_data_loader is not None:
+            raise ValueError(
+                "card_database and set_card_data_loader are mutually exclusive."
+            )
         self.splash_enabled = splash_enabled
         self._events: list[LiveSessionEvent] = []
         self._profile_client = profile_client
@@ -76,9 +84,12 @@ class PlainLogWatcher:
         )
         self._closed = False
         self._last_profile_status: str | None = None
+        self._selected_card_data = set_card_data_loader is not None
+        self._last_card_data_status: str | None = None
         self.session = LiveSession(
             log_path=log_path,
             card_database=card_database,
+            set_card_data_loader=set_card_data_loader,
             app_dir=app_dir,
             poll_interval=poll_interval,
             previous_log_path=previous_log_path,
@@ -214,7 +225,10 @@ class PlainLogWatcher:
         This is opt-in recovery for a watch session started mid-draft.
         """
         self._events.clear()
-        self.session.scan_startup_files(include_previous=include_previous)
+        self.session.scan_startup_files(
+            include_previous=include_previous,
+            include_pre_draft_detection=True,
+        )
         self._schedule_profile_refresh()
         return self._render_published_events()
 
@@ -227,17 +241,35 @@ class PlainLogWatcher:
         self.session.process_lines(lines=lines)
         self._schedule_profile_refresh()
         return self._render_published_events()
+
     def _render_published_events(self) -> str:
         output_lines: list[str] = []
         for published in self._events:
             output_lines.extend(self._format_event(published=published))
 
         self._events.clear()
+        card_data_status = self._card_data_status_text()
+        if (
+            card_data_status is not None
+            and card_data_status != self._last_card_data_status
+        ):
+            output_lines.append(card_data_status)
+        self._last_card_data_status = card_data_status
+
         profile_status = self._profile_status_text()
         if profile_status is not None and profile_status != self._last_profile_status:
             output_lines.append(profile_status)
             self._last_profile_status = profile_status
         return _join_output_lines(lines=output_lines)
+
+    def _card_data_status_text(self) -> str | None:
+        if not self._selected_card_data:
+            return None
+        state = self.session.snapshot.card_data
+        if state.phase != DataLoadPhase.FAILED:
+            return None
+        return f"Status: {state.message}"
+
     def _profile_status_text(self) -> str | None:
         state = self.session.snapshot.set_profile
         if state.set_code is None:
@@ -247,6 +279,14 @@ class PlainLogWatcher:
         if state.refresh_outcome is not None:
             status += f" ({state.refresh_outcome})"
         return f"Status: {status}"
+
+    def _presentation_card_database(self) -> CardDatabase:
+        """Return the session's currently selected database for rendering."""
+
+        database = self.session.card_database
+        if database is None:
+            raise RuntimeError("Card metadata is not ready.")
+        return database
 
 
     def _format_event(self, *, published: LiveSessionEvent) -> list[str]:
@@ -281,11 +321,13 @@ class PlainLogWatcher:
 
         if isinstance(event, PackOfferedEvent):
             if published.scored_pack is None:
+                if self.session.snapshot.card_data.phase == DataLoadPhase.FAILED:
+                    return []
                 raise RuntimeError("Shared live session did not score the offered pack.")
-
+            card_database = self._presentation_card_database()
             pack_lines = format_pack_offered_event(
                 event=event,
-                card_database=self.card_database,
+                card_database=card_database,
                 scored_pack=published.scored_pack,
             )
             account_label = _account_label(
@@ -303,9 +345,11 @@ class PlainLogWatcher:
             return lines
 
         if isinstance(event, PickMadeEvent):
+            if self.session.snapshot.card_data.phase == DataLoadPhase.FAILED:
+                return []
             lines = format_pick_made_event(
                 event=event,
-                card_database=self.card_database,
+                card_database=self._presentation_card_database(),
             )
             lines.append("")
             return lines
@@ -313,7 +357,10 @@ class PlainLogWatcher:
         if isinstance(event, DraftCompletedEvent):
             lines = format_draft_completed_event(event=event)
             lines.append("")
-            if published.snapshot.draft is not None:
+            if (
+                published.snapshot.draft is not None
+                and self.session.snapshot.card_data.phase != DataLoadPhase.FAILED
+            ):
                 lines.extend(self._format_build_sheet(published=published))
             return lines
 
@@ -362,7 +409,8 @@ class PlainLogWatcher:
 def run_plain_watch(
     *,
     log_path: PathInput,
-    card_database: CardDatabase,
+    card_database: CardDatabase | None = None,
+    set_card_data_loader: SetCardDataLoader | None = None,
     app_dir: PathInput | None = None,
     output: TextIO | None = None,
     poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -383,6 +431,7 @@ def run_plain_watch(
     watcher = PlainLogWatcher(
         log_path=log_path,
         card_database=card_database,
+        set_card_data_loader=set_card_data_loader,
         app_dir=app_dir,
         poll_interval=poll_interval,
         ratings_loader=ratings_loader,

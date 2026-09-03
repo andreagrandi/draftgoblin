@@ -8,12 +8,44 @@ profile loading.
 
 The producer workflow is explicit and reproducible: it reads caller-selected
 local inputs, writes a validated compressed artifact plus a generation marker,
-and can turn those outputs into a remote manifest record. The client workflow
-is offline-first and network-optional; Draft Omen does not bundle a host,
-production manifest, or default remote URL. Native applications do bundle one
-validated baseline profile snapshot as a read-only module resource. The
-repository's optional hosted publication boundary is documented below and is
-never implicit in the runtime.
+and can turn those outputs into a remote manifest record. The profile client
+workflow is offline-first and network-optional; Draft Omen does not bundle a
+profile host, production manifest, or default profile URL. Native applications
+do bundle one validated baseline profile snapshot as a read-only module
+resource. The repository's optional hosted publication boundary is documented
+below and is never implicit in the runtime.
+
+## Static card-data artifacts
+Set card metadata is a separate schema-versioned (schema version `1`) artifact
+from set profiles and from 17Lands statistics. The exporter writes canonical
+gzip JSON to
+`website/public/card-data/<lowercase-set-code>.json.gz`; the hosted base URL is
+`https://www.draftomen.com/card-data/`. Each artifact contains only the
+declared set's printed Scryfall card fields, identities, and image data. It
+does not contain 17Lands ratings or statistics.
+
+Run `draftomen-tui export-set-data SET` for one exact case-insensitive set code
+or full name, or omit `SET` to discover all eligible sets. No-argument
+discovery requires at least 200 distinct Arena card identities per set and
+excludes paper-only, Cube, Chaos, and Remix sets. Discovery makes one
+`/data/expansions` request to 17Lands and acquires Scryfall default-cards data
+once. Supplying `--inventory-file PATH` and `--bulk-file PATH` uses local
+copies instead. Before publication, all pending candidates are validated; the
+all-set command publishes in set-code order and reruns skip only strict valid
+siblings, so an interrupted run resumes at the first pending set.
+
+Live mode detects the set from the draft before loading card data. Its selected
+artifact is cached at the application-data
+`card-data/<lowercase-set-code>.json.gz` path (normally
+`~/.draftomen/card-data/<set-code>.json.gz`). A valid cache is reused in
+cache-only operation; otherwise the runtime fetches the selected artifact from
+the default hosted URL. No card-data network request occurs after
+`DraftStartedEvent`.
+
+In the TUI, press `r` to retry a recoverable card-data error. Network repair is
+available only before draft start; after `DraftStartedEvent`, retries use the
+local cache only.
+
 
 ## Bundled native baseline
 

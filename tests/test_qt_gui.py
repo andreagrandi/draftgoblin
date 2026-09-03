@@ -12,7 +12,7 @@ pytest.importorskip("PySide6")
 
 from draftomen import __version__
 from draftomen.audit import load_draft_audit_records
-from draftomen.carddb import CardDatabase
+from draftomen.carddb import CardDatabase, CardInfo
 from draftomen.pool import load_draft_state
 from draftomen.qt_gui import (
     APPLICATION_NAME,
@@ -84,33 +84,36 @@ def test_gui_metadata_uses_canonical_version_and_logo_resource() -> None:
     assert runtime_logo.read_bytes() == source_logo.read_bytes()
 
 
-def test_live_gui_uses_shared_metadata_augmenting_factory(
+def test_live_gui_uses_set_scoped_card_data_client_without_startup_fetch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database = CardDatabase(cards={})
-    factory_calls: list[tuple[CardDatabase, Path | None, bool]] = []
-
-    monkeypatch.setattr(
-        "draftomen.qt_gui.load_or_refresh_card_database",
-        lambda *, app_dir: database,
+    database = CardDatabase(
+        cards={
+            1: CardInfo(
+                grp_id=1,
+                name="Test Card",
+                colors=(),
+                mana_value=1,
+                rarity="common",
+                types=("Creature",),
+                set_code="TST",
+            )
+        }
     )
+    client_instances: list[object] = []
 
-    def shared_loader_factory(
-        *,
-        database: CardDatabase,
-        load_ratings: object,
-        app_dir: Path | None,
-        persist_database: bool,
-    ) -> object:
-        del load_ratings
-        factory_calls.append((database, app_dir, persist_database))
-        return lambda set_code, progress_callback: None
+    class RecordingCardDataClient:
+        def __init__(self, *, app_dir: Path | None) -> None:
+            self.app_dir = app_dir
+            self.calls: list[tuple[str, bool]] = []
+            client_instances.append(self)
 
-    monkeypatch.setattr(
-        "draftomen.qt_gui.metadata_augmenting_ratings_progress_loader",
-        shared_loader_factory,
-    )
+        def load(self, set_code: str, *, allow_network: bool) -> CardDatabase:
+            self.calls.append((set_code, allow_network))
+            return database
+
+    monkeypatch.setattr("draftomen.qt_gui.CardDataClient", RecordingCardDataClient)
     app_dir = tmp_path / "app"
     session_factory = _live_session_factory(
         log_path=tmp_path / "Player.log",
@@ -120,9 +123,37 @@ def test_live_gui_uses_shared_metadata_augmenting_factory(
     )
     session = session_factory(lambda snapshot: None)
 
-    session.load_card_data()
-    assert factory_calls == [(database, app_dir, True)]
+    client = client_instances[0]
+    assert client.app_dir == app_dir  # type: ignore[attr-defined]
+    assert client.calls == []  # type: ignore[attr-defined]
+    assert session.card_database is None
+    session._load_card_data_for_set(  # type: ignore[attr-defined]
+        set_code="TST",
+        allow_network=True,
+    )
+    assert client.calls == [("TST", True)]  # type: ignore[attr-defined]
+    assert session.card_database is database
 
+
+def test_live_gui_bulk_file_injects_local_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = CardDatabase(cards={})
+    bulk_file = tmp_path / "cards.jsonl"
+    monkeypatch.setattr(
+        "draftomen.qt_gui.build_card_database_from_bulk_file",
+        lambda *, path: database,
+    )
+    session_factory = _live_session_factory(
+        log_path=tmp_path / "Player.log",
+        app_dir=tmp_path / "app",
+        bulk_file=bulk_file,
+        poll_interval=0.01,
+    )
+    session = session_factory(lambda snapshot: None)
+
+    assert session.card_database is database
 
 
 def test_live_gui_profile_manifest_flag_injects_configured_client(
@@ -649,7 +680,7 @@ recording_sessions: list[RecordingLiveSession] = []
 def factory(publish):
     session = RecordingLiveSession(
         log_path=log_path,
-        card_database_loader=load_image_database,
+        card_database=load_image_database(),
         app_dir=app_dir,
         poll_interval=0.01,
         snapshot_publisher=publish,
