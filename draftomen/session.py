@@ -90,7 +90,15 @@ from draftomen.seventeen import (
 PathInput: TypeAlias = str | PathLike[str]
 SnapshotPublisher: TypeAlias = Callable[["LiveSessionSnapshot"], None]
 EventPublisher: TypeAlias = Callable[["LiveSessionEvent"], None]
-CardDatabaseLoader: TypeAlias = Callable[[], CardDatabase]
+
+
+class SetCardDataLoader(Protocol):
+    """Load one validated set-scoped card database."""
+
+    def __call__(self, set_code: str, *, allow_network: bool) -> CardDatabase:
+        ...
+
+
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
 RatingsLoaderFactory: TypeAlias = Callable[[CardDatabase], RatingsLoader]
 
@@ -271,7 +279,8 @@ class RecommendationState:
 @dataclass(frozen=True, slots=True)
 class CardDataState:
     """Describe shared card metadata readiness for scoring operations.
-    Frontends schedule configured loading work and render this primitive state.
+    The live session synchronously loads the selected set at the pre-draft
+    boundary while frontends render this primitive state.
     """
 
     phase: DataLoadPhase = DataLoadPhase.UNAVAILABLE
@@ -677,7 +686,7 @@ class LiveSession:
         *,
         log_path: PathInput,
         card_database: CardDatabase | None = None,
-        card_database_loader: CardDatabaseLoader | None = None,
+        set_card_data_loader: SetCardDataLoader | None = None,
         app_dir: PathInput | None = None,
         poll_interval: float = POLL_INTERVAL_SECONDS,
         previous_log_path: PathInput | None = None,
@@ -695,9 +704,9 @@ class LiveSession:
         set_profile: SetProfile | None = None,
         profile_client: ProfileClient | None = None,
     ) -> None:
-        if card_database is not None and card_database_loader is not None:
+        if card_database is not None and set_card_data_loader is not None:
             raise ValueError(
-                "card_database and card_database_loader are mutually exclusive."
+                "card_database and set_card_data_loader are mutually exclusive."
             )
         configured_ratings_loaders = sum(
             loader is not None
@@ -728,7 +737,12 @@ class LiveSession:
         self._ranking_mode = validate_ranking_mode(ranking_mode=ranking_mode)
         self._splash_enabled = splash_enabled
         self._card_database = card_database
-        self._card_database_loader = card_database_loader
+        self._set_card_data_loader = set_card_data_loader
+        self._card_database_set_code: str | None = None
+        self._card_data_network_open = set_card_data_loader is not None
+        self._card_data_local_lookup_attempted = False
+        self._card_data_requested_set_code: str | None = None
+        self._card_data_detection_event_name: str | None = None
         self._configured_set_profile = set_profile
         self._set_profile = set_profile
         self._profile_client = profile_client
@@ -786,7 +800,7 @@ class LiveSession:
                     database=card_database
                 ),
             )
-        elif card_database_loader is not None:
+        elif set_card_data_loader is not None:
             card_data = CardDataState(
                 phase=DataLoadPhase.IDLE,
                 message="Card metadata is ready to load.",
@@ -1734,16 +1748,32 @@ class LiveSession:
 
         return account_id, draft_id
 
-    def load_card_data(self) -> LiveSessionSnapshot:
-        """Load configured card metadata and publish readiness or failure state.
-        Frontends call this synchronous operation from their chosen worker context.
-        """
+    def _load_card_data_for_set(
+        self,
+        *,
+        set_code: str,
+        allow_network: bool,
+    ) -> bool:
+        """Synchronously load one selected set and publish readiness state."""
 
-        if self._card_database is not None:
-            return self.snapshot
-        if self._card_database_loader is None:
-            raise ValueError("No card metadata loader is configured.")
+        normalized_set_code = set_code.upper()
+        if self._card_database is not None and (
+            self._set_card_data_loader is None
+            or self._card_database_set_code == normalized_set_code
+        ):
+            return True
+        if (
+            self._set_card_data_loader is not None
+            and self._card_database is not None
+            and self._card_database_set_code != normalized_set_code
+        ):
+            self._prepare_card_database_for_set(set_code=normalized_set_code)
+        loader = self._set_card_data_loader
+        if loader is None:
+            return False
+        self._card_data_requested_set_code = normalized_set_code
 
+        effective_allow_network = allow_network and self._card_data_network_open
         self._publish(
             snapshot=replace(
                 self.snapshot,
@@ -1762,13 +1792,28 @@ class LiveSession:
             )
         )
         try:
-            database = self._card_database_loader()
+            database = loader(
+                normalized_set_code,
+                allow_network=effective_allow_network,
+            )
+            self._validate_card_database_for_set(
+                database=database,
+                set_code=normalized_set_code,
+            )
         except Exception as error:
-            self._finish_card_data_load(database=None, error_message=str(error))
-        else:
-            self._finish_card_data_load(database=database, error_message=None)
+            self._finish_card_data_load(
+                database=None,
+                set_code=normalized_set_code,
+                error_message=str(error),
+            )
+            return False
 
-        return self.snapshot
+        self._finish_card_data_load(
+            database=database,
+            set_code=normalized_set_code,
+            error_message=None,
+        )
+        return True
 
     def stop(self) -> LiveSessionSnapshot:
         """Publish the terminal stopped state without owning process shutdown.
@@ -1834,13 +1879,104 @@ class LiveSession:
                 database
             )
 
+    @staticmethod
+    def _validate_card_database_for_set(
+        *,
+        database: CardDatabase,
+        set_code: str,
+    ) -> None:
+        """Reject malformed or mixed-set results from a configured loader."""
+
+        if not isinstance(database, CardDatabase):
+            raise TypeError("card data loader must return a CardDatabase.")
+        if not database.cards:
+            raise ValueError(f"Card metadata for {set_code} contains no cards.")
+        try:
+            cards = tuple(database.cards.items())
+        except AttributeError as error:
+            raise TypeError("Card database cards must be a mapping.") from error
+        observed_set_codes: set[str] = set()
+        for grp_id, card in cards:
+            if not isinstance(grp_id, int) or isinstance(grp_id, bool):
+                raise TypeError("Card database keys must be integer grpIds.")
+            if not isinstance(card, CardInfo):
+                raise TypeError("Card database values must be CardInfo values.")
+            if card.grp_id != grp_id:
+                raise ValueError("Card database key does not match card grpId.")
+            if card.set_code is None:
+                raise ValueError("Card database cards must declare their set code.")
+            if not isinstance(card.set_code, str):
+                raise TypeError("Card database card set codes must be strings.")
+            observed_set_codes.add(card.set_code.casefold())
+        normalized_set_code = set_code.casefold()
+        if observed_set_codes and observed_set_codes != {normalized_set_code}:
+            raise ValueError(
+                f"Card metadata contains cards outside selected set {set_code}."
+            )
+
+    def _prepare_card_database_for_set(
+        self,
+        *,
+        set_code: str,
+        force_reload: bool = False,
+    ) -> None:
+        """Discard a dynamic database when the selected set changes."""
+
+        if self._set_card_data_loader is None:
+            return
+        normalized_set_code = set_code.upper()
+        if (
+            not force_reload
+            and self._card_database is not None
+            and self._card_database_set_code == normalized_set_code
+        ):
+            return
+        if self._card_database is None and self._card_database_set_code is None:
+            return
+        self._card_database = None
+        self._card_database_set_code = None
+        if self._ratings_loader_factory is not None:
+            self._ratings_loader = None
+        if self._ratings_progress_loader_factory is not None:
+            self._ratings_progress_loader = None
+        self._publish(
+            snapshot=replace(
+                self.snapshot,
+                card_data=CardDataState(
+                    phase=DataLoadPhase.IDLE,
+                    message="Card metadata is ready to load.",
+                ),
+                progress=None,
+                errors=self._without_error_id(error_id="card-data"),
+            )
+        )
+
+    def _prepare_card_data_for_draft_start(self, *, set_code: str) -> None:
+        """Close static networking and make one local-only late-load attempt."""
+
+        self._prepare_card_database_for_set(set_code=set_code)
+        self._card_data_network_open = False
+        if (
+            self._card_database is not None
+            or self._set_card_data_loader is None
+            or self._card_data_local_lookup_attempted
+        ):
+            return
+        self._card_data_local_lookup_attempted = True
+        self._load_card_data_for_set(set_code=set_code, allow_network=False)
+
+
     def _finish_card_data_load(
         self,
         *,
         database: CardDatabase | None,
+        set_code: str,
         error_message: str | None,
     ) -> None:
         if database is None:
+            if self._set_card_data_loader is not None:
+                self._card_database = None
+                self._card_database_set_code = None
             detail = error_message or "no card metadata was returned"
             session_error = SessionError(
                 error_id="card-data",
@@ -1864,6 +2000,7 @@ class LiveSession:
             return
 
         self._card_database = database
+        self._card_database_set_code = set_code.upper()
         self._configure_ratings_loader_for_card_database()
         self._publish(
             snapshot=replace(
@@ -2882,9 +3019,16 @@ class LiveSession:
             raise ValueError(f"Unknown session error {error_id!r}.")
         if not error.recoverable:
             raise ValueError(f"Session error {error_id!r} is not recoverable.")
-
         if error.operation == OperationKind.CARD_DATA:
-            self.load_card_data()
+            set_code = (
+                self._active_set_code() or self._card_data_requested_set_code
+            )
+            if set_code is None:
+                raise ValueError("Card-data retry requires an active draft set.")
+            self._load_card_data_for_set(
+                set_code=set_code,
+                allow_network=self._card_data_network_open,
+            )
             return
         if error.operation == OperationKind.RATINGS:
             prefix = "ratings:"
@@ -3256,7 +3400,17 @@ class LiveSession:
     def _select_recovered_state(self, *, state: DraftState) -> None:
         self._current_pack_event = _pending_pack_event(state=state)
         self._current_scored_pack = None
+        self._card_data_local_lookup_attempted = False
+        self._prepare_card_database_for_set(set_code=state.set_code)
+        self._card_data_network_open = False
         self._select_state(state=state, recovered=True)
+        if (
+            self._card_database is None
+            and self._set_card_data_loader is not None
+            and not self._card_data_local_lookup_attempted
+        ):
+            self._card_data_local_lookup_attempted = True
+            self._load_card_data_for_set(set_code=state.set_code, allow_network=False)
         self._ensure_ratings_loaded(set_code=state.set_code)
         self._score_current_pack()
 
@@ -3333,12 +3487,15 @@ class LiveSession:
                 event=event,
                 message=f"Draft started for {event.set_code}.",
             )
-            self._ensure_ratings_loaded(set_code=event.set_code)
+            self._prepare_card_data_for_draft_start(set_code=event.set_code)
+            if self._card_database is not None:
+                self._ensure_ratings_loaded(set_code=event.set_code)
             return
 
         if isinstance(event, PackOfferedEvent):
             self._current_pack_event = event
             self._current_scored_pack = None
+            self._prepare_card_database_for_set(set_code=event.set_code)
             self._select_state(
                 state=state,
                 recovered=False,
@@ -3392,7 +3549,9 @@ class LiveSession:
                 message="Draft detected; waiting for an Arena account ID.",
                 keep_recommendations=False,
             )
-            self._ensure_ratings_loaded(set_code=event.set_code)
+            self._prepare_card_data_for_draft_start(set_code=event.set_code)
+            if self._card_database is not None:
+                self._ensure_ratings_loaded(set_code=event.set_code)
             return
 
         if isinstance(event, PackOfferedEvent):
@@ -3400,6 +3559,7 @@ class LiveSession:
             self._current_scored_pack = None
             self._transient_pool_grp_ids = event.pool_grp_ids
             self._set_active_set_code(set_code=event.set_code)
+            self._prepare_card_database_for_set(set_code=event.set_code)
             self._publish_accountless_state(
                 event=event,
                 phase=ApplicationPhase.DRAFTING,
@@ -3517,10 +3677,20 @@ class LiveSession:
             self._select_recovered_state(state=state)
 
     def _consume_detected_event(self, *, event: QuickDraftDetectedEvent) -> None:
+        normalized_set_code = event.set_code.upper()
+        new_lifecycle = (
+            event.event_name != self._card_data_detection_event_name
+            or not self._card_data_network_open
+        )
+        self._card_data_detection_event_name = event.event_name
+        if new_lifecycle:
+            self._card_data_network_open = True
+            self._card_data_local_lookup_attempted = False
         self._current_pack_event = None
         self._current_scored_pack = None
         self._transient_pool_grp_ids = ()
-        self._set_active_set_code(set_code=event.set_code)
+        self._set_active_set_code(set_code=normalized_set_code)
+        self._prepare_card_database_for_set(set_code=normalized_set_code)
         account_id = event.account_id or self._log_account_id
         active_account = self._identity_for(account_id=account_id)
         with self._state_lock:
@@ -3536,6 +3706,13 @@ class LiveSession:
                     ),
                     accounts=self._known_accounts(),
                     active_account=active_account,
+                    ratings=self._ratings_state_by_set.get(
+                        normalized_set_code,
+                        replace(
+                            self._initial_ratings_state(),
+                            set_code=normalized_set_code,
+                        ),
+                    ),
                     draft=None,
                     recommendations=RecommendationState(
                         ranking_mode=self._ranking_mode,
@@ -3549,7 +3726,13 @@ class LiveSession:
                     backtest=None,
                 )
             )
-        self._ensure_ratings_loaded(set_code=event.set_code)
+        if new_lifecycle:
+            self._load_card_data_for_set(
+                set_code=normalized_set_code,
+                allow_network=True,
+            )
+        if self._card_database is not None:
+            self._ensure_ratings_loaded(set_code=normalized_set_code)
 
     def _choose_account(self, *, account_id: str) -> None:
         known_account_ids = {account.account_id for account in self._known_accounts()}

@@ -74,8 +74,8 @@ download them.
 ### Terminal interface
 
 For a terminal workflow, use the stable `draftomen-tui` command. It preserves
-the watch, replay, build, backtest, benchmark, data-refresh, local
-`generate-profile`, and `refresh-profile` subcommands:
+the watch, replay, build, backtest, benchmark, data-refresh,
+`export-set-data`, local `generate-profile`, and `refresh-profile` subcommands:
 
 ```bash
 draftomen-tui
@@ -87,6 +87,41 @@ To generate a deterministic set profile from pinned input files, use
 card-database, and output paths. The producer and cache workflow, including
 remote manifest fields, validation, refresh, recovery, and opt-in live
 loading, is documented in [set profiles](docs/set-profiles.md).
+
+### Static set card data
+
+The live card lookup uses one schema-versioned (schema version `1`), canonical
+Scryfall artifact per Arena set. Artifacts are published at
+`website/public/card-data/<lowercase-set-code>.json.gz` and hosted at
+`https://www.draftomen.com/card-data/<lowercase-set-code>.json.gz`.
+Generate one set by exact code or full name, or discover every eligible set:
+
+```bash
+draftomen-tui export-set-data SET
+draftomen-tui export-set-data
+```
+
+Discovery makes one `17Lands /data/expansions` request and one Scryfall
+default-cards bulk acquisition. No-argument discovery requires at least 200
+distinct Arena card identities per set; paper-only, Cube, Chaos, and Remix
+sets are excluded. `--inventory-file PATH` and `--bulk-file PATH` replace
+those network sources for reproducible or offline runs. The all-set command
+validates existing artifacts, publishes pending sets in code order, and can be
+rerun to resume from the first pending set.
+
+In live mode, Draft Omen detects the set before loading its selected artifact.
+The default cache path is the application-data `card-data/<set-code>.json.gz`
+file (normally `~/.draftomen/card-data/<set-code>.json.gz`); a valid cache is
+reused without network access. Card metadata is automatically loaded at most
+once per pre-draft detection lifecycle for a selected set; no card-data network
+request is made after `DraftStartedEvent`.
+Printed card fields and images come from Scryfall; 17Lands ratings and
+statistics remain a separate data source and are not embedded in card-data
+artifacts.
+
+In the TUI, press `r` to retry a recoverable card-data error. Network repair is
+available only before draft start; after `DraftStartedEvent`, retries use the
+local cache only.
 
 ### Optional remote set profiles
 
@@ -105,7 +140,8 @@ The same profile can be refreshed manually with
 --manifest-url "$PROFILE_MANIFEST_URL"` and an optional `--app-dir PATH`.
 Refresh validates the manifest and artifact, keeps the last-good cache on
 failure, and reports compact maturity/outcome status. Draft Omen does not
-bundle a hosted manifest; hosting and publication automation belong to #227.
+bundle a hosted profile manifest; profile hosting remains separate from
+runtime.
 
 For development-only semantic analysis, use the reproducible [card corpus
 workflow](docs/corpus.md). It keeps pinned source bytes and locks outside

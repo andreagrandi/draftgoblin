@@ -90,6 +90,8 @@ from draftomen.session import (
     RequestBacktest,
     RequestBuild,
     RequestRatingsDownload,
+    RetryError,
+    SetCardDataLoader,
     SessionError,
 )
 from draftomen.seventeen import (
@@ -99,9 +101,10 @@ from draftomen.seventeen import (
 )
 from draftomen.setinfo import format_set_label
 
+_EMPTY_CARD_DATABASE = CardDatabase(cards={})
+
 PathInput: TypeAlias = str | PathLike[str]
 RatingsLoader: TypeAlias = Callable[[str], SeventeenLandsData]
-CardDatabaseLoader: TypeAlias = Callable[[], CardDatabase]
 RatingsLoaderFactory: TypeAlias = Callable[[CardDatabase], RatingsLoader]
 RatingsProgressLoaderFactory: TypeAlias = Callable[
     [CardDatabase],
@@ -574,6 +577,7 @@ class DraftomenTuiApp(App[None]):
         Binding("p", "rebuild_with_pair_override", "Pair", show=True),
         Binding("m", "toggle_mana_icons", "Mana", show=True),
         Binding("d", "download_ratings", "Data", show=True),
+        Binding("r", "retry_card_data", "Retry card data", show=True),
         Binding("up", "navigate_previous_card", "Previous", show=False, priority=True),
         Binding("left", "navigate_previous_card", "Previous", show=False, priority=True),
         Binding("k", "navigate_previous_card", "Previous", show=False, priority=True),
@@ -591,7 +595,7 @@ class DraftomenTuiApp(App[None]):
         *,
         log_path: PathInput,
         card_database: CardDatabase | None = None,
-        card_database_loader: CardDatabaseLoader | None = None,
+        set_card_data_loader: SetCardDataLoader | None = None,
         app_dir: PathInput | None = None,
         profile_client: ProfileClient | None = None,
         poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -611,10 +615,12 @@ class DraftomenTuiApp(App[None]):
         splash_enabled: bool | None = None,
     ) -> None:
         super().__init__()
-        if card_database is None and card_database_loader is None:
-            raise ValueError("card_database or card_database_loader is required.")
-        if card_database is not None and card_database_loader is not None:
-            raise ValueError("card_database and card_database_loader are mutually exclusive.")
+        if card_database is None and set_card_data_loader is None:
+            raise ValueError("card_database or set_card_data_loader is required.")
+        if card_database is not None and set_card_data_loader is not None:
+            raise ValueError(
+                "card_database and set_card_data_loader are mutually exclusive."
+            )
         configured_ratings_loaders = sum(
             loader is not None
             for loader in (
@@ -627,6 +633,9 @@ class DraftomenTuiApp(App[None]):
         if configured_ratings_loaders > 1:
             raise ValueError("Configure exactly one ratings loader or loader factory.")
         self._ratings_operations_may_block = configured_ratings_loaders > 0
+        self._session_ingestion_may_block = (
+            self._ratings_operations_may_block or set_card_data_loader is not None
+        )
 
         self.log_path = Path(log_path).expanduser().resolve(strict=False)
         self._preferences_app_dir = app_dir
@@ -653,7 +662,7 @@ class DraftomenTuiApp(App[None]):
         self.session = LiveSession(
             log_path=self.log_path,
             card_database=card_database,
-            card_database_loader=card_database_loader,
+            set_card_data_loader=set_card_data_loader,
             app_dir=app_dir,
             poll_interval=poll_interval,
             previous_log_path=previous_log_path,
@@ -727,26 +736,23 @@ class DraftomenTuiApp(App[None]):
 
     @property
     def card_database(self) -> CardDatabase:
-        """Return loaded card metadata for scoring and rendering.
-        Startup code must wait for the loader worker before accessing it.
+        """Return the session's current database for presentation.
+
+        Before selected card metadata is ready, presentation uses one stable
+        empty database so the shell and resize handlers remain safe. Once the
+        session publishes a database, every lookup uses that current object.
         """
 
         database = self.session.card_database
         if database is None:
-            raise RuntimeError("Card metadata is not ready.")
-
+            return _EMPTY_CARD_DATABASE
         return database
 
     @property
     def card_database_loading(self) -> bool:
-        """Return whether a card metadata worker is currently running.
-        Tests use this to verify startup work stays outside the render loop.
-        """
+        """Return whether selected card metadata is currently loading."""
 
-        return self.session.snapshot.card_data.phase in {
-            DataLoadPhase.IDLE,
-            DataLoadPhase.LOADING,
-        }
+        return self.session.snapshot.card_data.phase == DataLoadPhase.LOADING
 
     @property
     def visible_column_keys(self) -> tuple[str, ...]:
@@ -821,9 +827,7 @@ class DraftomenTuiApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        """Render the shell before starting metadata and log workers.
-        Log processing begins only after card data is available for scoring.
-        """
+        """Render the shell, then start log ingestion in its existing worker."""
 
         self._textual_thread_id = get_ident()
         table = self.query_one("#pack-table", DataTable)
@@ -832,15 +836,11 @@ class DraftomenTuiApp(App[None]):
         table.focus()
         self._render_all()
 
-        if self.card_database_loading:
-            self._load_card_database_worker()
-            return
-
         self._start_log_processing()
 
     def _start_log_processing(self) -> None:
-        """Start polling only once card metadata is safe to consume.
-        Deferring this preserves all events for normal scoring and recommendations.
+        """Start polling after the shell is mounted.
+        Selected card metadata loads when detection is ingested by this worker.
         """
 
         if not self.poll_enabled or self._log_processing_started:
@@ -954,6 +954,30 @@ class DraftomenTuiApp(App[None]):
             return
 
         self._show_missing_ratings_prompt(set_code=set_code, force=True)
+
+    def action_retry_card_data(self) -> None:
+        """Retry the current recoverable card-data error in the session worker.
+        The shared session decides whether network access remains allowed.
+        """
+
+        error = next(
+            (
+                candidate
+                for candidate in self.session.snapshot.errors
+                if candidate.operation == OperationKind.CARD_DATA
+                and candidate.recoverable
+            ),
+            None,
+        )
+        if error is None:
+            self._last_error = "No recoverable card-data error to retry."
+            self._render_all()
+            return
+
+        self._last_error = None
+        self._dispatch_session_command_worker(
+            command=RetryError(error_id=error.error_id)
+        )
 
     def action_cycle_sort(self) -> None:
         """Cycle pack ranking or build spell grouping.
@@ -1141,7 +1165,7 @@ class DraftomenTuiApp(App[None]):
         if (
             self.is_running
             and line_batch
-            and self._ratings_operations_may_block
+            and self._session_ingestion_may_block
         ):
             self._process_lines_worker(
                 lines=line_batch,
@@ -1184,21 +1208,6 @@ class DraftomenTuiApp(App[None]):
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.call_from_thread(self._record_error, str(error))
 
-    @work(thread=True, exclusive=True, group="card-database")
-    def _load_card_database_worker(self) -> None:
-        """Ask the shared session to load metadata outside the Textual thread.
-        Published readiness and errors are marshalled back as immutable state.
-        """
-
-        worker = get_current_worker()
-        if worker.is_cancelled:
-            return
-
-        try:
-            self.session.load_card_data()
-        except Exception as error:  # pragma: no cover - defensive UI boundary.
-            self.call_from_thread(self._record_error, str(error))
-
     @work(thread=True, exclusive=True, group="session-ingestion")
     def _poll_log_worker(self, *, exit_after: bool = False) -> None:
         """Schedule one shared-session polling cycle in a Textual worker.
@@ -1223,7 +1232,7 @@ class DraftomenTuiApp(App[None]):
     @work(thread=True, exclusive=True, group="session-ingestion")
     def _scan_startup_files_worker(self, *, exit_after: bool = False) -> None:
         """Schedule shared startup recovery in a Textual worker.
-        Historical pre-draft detection remains excluded from the live surface.
+        Recovery detection is retained so selected card data loads in this worker.
         """
 
         worker = get_current_worker()
@@ -1233,7 +1242,7 @@ class DraftomenTuiApp(App[None]):
                     return
                 self.session.scan_startup_files(
                     include_previous=True,
-                    include_pre_draft_detection=False,
+                    include_pre_draft_detection=True,
                 )
         except Exception as error:  # pragma: no cover - defensive UI boundary.
             self.call_from_thread(self._record_error, str(error))
@@ -1526,8 +1535,9 @@ class DraftomenTuiApp(App[None]):
             "."
         )
         self._card_database_error = (
-            f"{detail}. Run `draftomen-tui refresh-data` after checking your "
-            "network connection and local card-data cache."
+            f"{detail}. Press r to retry card metadata. Network repair is "
+            "available only before draft start; after draft start, retries "
+            "are local-only."
         )
 
     def _apply_ratings_state(self, *, snapshot: LiveSessionSnapshot) -> None:
@@ -3741,7 +3751,7 @@ def run_tui_watch(
     *,
     log_path: PathInput,
     card_database: CardDatabase | None = None,
-    card_database_loader: CardDatabaseLoader | None = None,
+    set_card_data_loader: SetCardDataLoader | None = None,
     app_dir: PathInput | None = None,
     profile_client: ProfileClient | None = None,
     poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -3762,7 +3772,7 @@ def run_tui_watch(
     app = DraftomenTuiApp(
         log_path=log_path,
         card_database=card_database,
-        card_database_loader=card_database_loader,
+        set_card_data_loader=set_card_data_loader,
         app_dir=app_dir,
         profile_client=profile_client,
         poll_interval=poll_interval,

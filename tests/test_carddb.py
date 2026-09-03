@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import io
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from draftomen.carddb import (
     build_card_database_from_arena_cards,
     build_card_database_from_bulk_file,
     build_card_database_from_scryfall_cards,
+    iter_scryfall_default_cards,
     card_database_cache_path,
     load_card_database,
     load_or_refresh_card_database,
@@ -1049,3 +1051,79 @@ def _write_arena_data_dir(*, directory: Path) -> Path:
     )
     return arena_data_dir
 
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_scryfall_default_card_iterator_reads_local_jsonl_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compressed: bool,
+) -> None:
+    rows = [
+        {"arena_id": 101, "name": "Local One"},
+        {"arena_id": 102, "name": "Local Two"},
+    ]
+    payload = "".join(json.dumps(row) + "\n" for row in rows).encode("utf-8")
+    suffix = ".jsonl.gz" if compressed else ".jsonl"
+    bulk_path = tmp_path / f"cards{suffix}"
+    if compressed:
+        bulk_path.write_bytes(gzip.compress(payload))
+    else:
+        bulk_path.write_bytes(payload)
+
+    def unexpected_network(*args: object, **kwargs: object) -> None:
+        raise AssertionError("local Scryfall bulk iteration must not use the network")
+
+    monkeypatch.setattr("draftomen.carddb.urllib.request.urlopen", unexpected_network)
+    source = iter_scryfall_default_cards(bulk_file=bulk_path)
+
+    assert list(source) == rows
+    assert list(source) == []
+
+
+def test_scryfall_default_card_iterator_remote_uses_one_metadata_and_download_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {"arena_id": 201, "name": "Remote One"},
+        {"arena_id": 202, "name": "Remote Two"},
+    ]
+    compressed_rows = gzip.compress(
+        ("".join(json.dumps(row) + "\n" for row in rows)).encode("utf-8")
+    )
+    metadata = {
+        "data": [
+            {"type": "bulk_data", "download_uri": "https://example.invalid/other"},
+            {
+                "type": "default_cards",
+                "jsonl_download_uri": "https://example.invalid/default.jsonl.gz",
+            },
+        ]
+    }
+    calls: list[tuple[str, int]] = []
+
+    class Response(io.BytesIO):
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.close()
+
+    def fake_urlopen(request: object, timeout: int) -> Response:
+        url = request.full_url
+        calls.append((url, timeout))
+        if url == "https://api.scryfall.com/bulk-data":
+            return Response(json.dumps(metadata).encode("utf-8"))
+        if url == "https://example.invalid/default.jsonl.gz":
+            return Response(compressed_rows)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr("draftomen.carddb.urllib.request.urlopen", fake_urlopen)
+    source = iter_scryfall_default_cards(timeout_seconds=17)
+
+    assert list(source) == rows
+    assert calls == [
+        ("https://api.scryfall.com/bulk-data", 17),
+        ("https://example.invalid/default.jsonl.gz", 17),
+    ]
+    assert list(source) == []

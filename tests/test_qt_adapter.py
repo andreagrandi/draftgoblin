@@ -60,7 +60,7 @@ class _FakeSession:
         self._model = MockLiveSession()
         self._publish = publish
         self.snapshot = self._model.snapshot
-        self.factory_thread_id: int | None = None
+        self.load_card_data_calls = 0
         self.startup_thread_ids: list[int] = []
         self.poll_thread_ids: list[int] = []
         self.startup_options: list[tuple[bool, bool]] = []
@@ -94,6 +94,10 @@ class _FakeSession:
 
     def stop(self) -> LiveSessionSnapshot:
         return self.snapshot
+
+    def load_card_data(self) -> LiveSessionSnapshot:
+        self.load_card_data_calls += 1
+        raise AssertionError("startup must not load a global card database")
 
 
 class _ProfileRefreshFakeClient:
@@ -432,10 +436,18 @@ class _BusySession(_FakeSession):
         self.release = threading.Event()
         self.stopped = False
 
-    def load_card_data(self) -> LiveSessionSnapshot:
+    def scan_startup_files(
+        self,
+        *,
+        include_previous: bool = True,
+        include_pre_draft_detection: bool = True,
+    ) -> LiveSessionSnapshot:
         self.started.set()
         self.release.wait(timeout=3.0)
-        return self.snapshot
+        return super().scan_startup_files(
+            include_previous=include_previous,
+            include_pre_draft_detection=include_pre_draft_detection,
+        )
 
     def stop(self) -> LiveSessionSnapshot:
         self.stopped = True
@@ -448,9 +460,15 @@ class _FailingStartupSession(_FakeSession):
         super().__init__(publish=publish)
         self.stopped = False
 
-    def load_card_data(self) -> LiveSessionSnapshot:
+    def scan_startup_files(
+        self,
+        *,
+        include_previous: bool = True,
+        include_pre_draft_detection: bool = True,
+    ) -> LiveSessionSnapshot:
+        del include_previous, include_pre_draft_detection
         self._publish(self.snapshot)
-        raise RuntimeError("startup load failed")
+        raise RuntimeError("startup scan failed")
 
     def stop(self) -> LiveSessionSnapshot:
         self.stopped = True
@@ -862,7 +880,8 @@ def test_live_adapter_runs_session_work_on_worker_and_queues_plain_snapshots(
         assert session.factory_thread_id != gui_thread_id
         assert all(thread_id != gui_thread_id for thread_id in session.startup_thread_ids)
         assert all(thread_id != gui_thread_id for thread_id in session.poll_thread_ids)
-        assert session.startup_options == [(True, False)]
+        assert session.startup_options == [(True, True)]
+        assert session.load_card_data_calls == 0
         assert observer.thread_ids
         assert set(observer.thread_ids) == {gui_thread_id}
         assert observer.states[-1] == adapter.state
@@ -1179,11 +1198,11 @@ def test_live_adapter_retains_startup_failure_when_stop_publishes(
             predicate=lambda: bool(adapter.state.get("errors"))
             and adapter.thread is not None
             and not adapter.thread.isRunning(),
-            description="the startup load failure and worker shutdown",
+            description="the startup scan failure and worker shutdown",
         )
 
         assert sessions[0].stopped is True
-        assert adapter.state["errors"][0]["message"] == "startup load failed"
+        assert adapter.state["errors"][0]["message"] == "startup scan failed"
         assert adapter.state["status"]["phase"] == "error"
     finally:
         adapter.shutdown()

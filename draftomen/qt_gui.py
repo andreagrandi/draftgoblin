@@ -18,11 +18,8 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
 from draftomen import __version__
-from draftomen.carddb import (
-    CardDatabase,
-    build_card_database_from_bulk_file,
-    load_or_refresh_card_database,
-)
+from draftomen.card_data_client import CardDataClient
+from draftomen.carddb import build_card_database_from_bulk_file
 from draftomen.cardimages import CardImageService, card_image_cache_dir
 from draftomen.mock_session import MOCK_SCENARIOS, MockLiveSession, MockScenario
 from draftomen.paths import resolve_player_log_path
@@ -47,7 +44,6 @@ from draftomen.seventeen import (
     SeventeenLandsData,
     has_cached_17lands_data,
     load_or_refresh_17lands_data,
-    metadata_augmenting_ratings_progress_loader,
 )
 
 
@@ -217,10 +213,9 @@ def _live_session_factory(
             app_dir=app_dir,
             manifest_url=profile_manifest_url,
         )
-    def load_card_database() -> CardDatabase:
-        if bulk_file is not None:
-            return build_card_database_from_bulk_file(path=bulk_file)
-        return load_or_refresh_card_database(app_dir=app_dir)
+    card_data_client = (
+        None if bulk_file is not None else CardDataClient(app_dir=app_dir)
+    )
 
     def load_ratings(
         set_code: str,
@@ -236,30 +231,32 @@ def _live_session_factory(
         )
 
     def factory(publish: SnapshotPublisher) -> LiveSession:
-        return LiveSession(
-            log_path=resolve_player_log_path(log_path=log_path),
-            card_database_loader=load_card_database,
-            app_dir=app_dir,
-            profile_client=profile_client,
-            poll_interval=poll_interval,
-            snapshot_publisher=publish,
-            ratings_progress_loader_factory=lambda database: (
-                metadata_augmenting_ratings_progress_loader(
-                    database=database,
-                    load_ratings=load_ratings,
-                    app_dir=app_dir,
-                    persist_database=bulk_file is None,
-                )
-            ),
-            card_image_service=CardImageService(
+        common_kwargs = {
+            "log_path": resolve_player_log_path(log_path=log_path),
+            "app_dir": app_dir,
+            "profile_client": profile_client,
+            "poll_interval": poll_interval,
+            "snapshot_publisher": publish,
+            "ratings_progress_loader": load_ratings,
+            "card_image_service": CardImageService(
                 cache_dir=card_image_cache_dir(app_dir=app_dir),
                 timeout_seconds=2.0,
                 max_attempts=1,
             ),
-            ratings_cache_checker=lambda set_code: has_cached_17lands_data(
+            "ratings_cache_checker": lambda set_code: has_cached_17lands_data(
                 set_code=set_code,
                 app_dir=app_dir,
             ),
+        }
+        if bulk_file is not None:
+            return LiveSession(
+                **common_kwargs,
+                card_database=build_card_database_from_bulk_file(path=bulk_file),
+            )
+        assert card_data_client is not None
+        return LiveSession(
+            **common_kwargs,
+            set_card_data_loader=card_data_client.load,
         )
 
     return factory

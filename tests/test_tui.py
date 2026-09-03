@@ -50,6 +50,7 @@ from draftomen.session import (
     DataLoadPhase,
     OperationKind,
     RatingsProgressLoader,
+    SetCardDataLoader,
 )
 from draftomen.splash import SplashAssessment
 from draftomen.tui import (
@@ -2000,8 +2001,8 @@ async def _assert_narrow_width_hides_secondary_columns(tmp_path: Path) -> None:
         )
 
 
-def test_tui_loads_card_metadata_after_rendering_the_shell(tmp_path: Path) -> None:
-    asyncio.run(_assert_card_metadata_load_starts_after_shell_renders(tmp_path=tmp_path))
+def test_tui_loads_card_metadata_after_detected_set(tmp_path: Path) -> None:
+    asyncio.run(_assert_card_metadata_load_starts_on_detected_set(tmp_path=tmp_path))
 
 
 def test_tui_startup_recovery_hands_off_to_exactly_once_polling(
@@ -2013,11 +2014,16 @@ def test_tui_startup_recovery_hands_off_to_exactly_once_polling(
 async def _assert_startup_recovery_serializes_polling(tmp_path: Path) -> None:
     started = threading.Event()
     release = threading.Event()
+    card_calls: list[tuple[str, bool]] = []
     log_path = tmp_path / "Player.log"
     log_path.write_text(
         "\n".join(_first_pack_lines()) + "\n",
         encoding="utf-8",
     )
+
+    def card_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        card_calls.append((set_code, allow_network))
+        return _fixture_card_database()
 
     def slow_loader(set_code: str) -> SeventeenLandsData:
         started.set()
@@ -2026,6 +2032,7 @@ async def _assert_startup_recovery_serializes_polling(tmp_path: Path) -> None:
 
     app = _tui_app(
         tmp_path=tmp_path,
+        set_card_data_loader=card_loader,
         ratings_loader=slow_loader,
         poll_enabled=True,
         startup_scan=True,
@@ -2035,6 +2042,7 @@ async def _assert_startup_recovery_serializes_polling(tmp_path: Path) -> None:
     try:
         async with app.run_test(size=(120, 30)) as pilot:
             assert await asyncio.to_thread(started.wait, 0.5)
+            assert card_calls == [("MSH", True)]
             with log_path.open(mode="a", encoding="utf-8") as log_file:
                 log_file.write(_first_pick_lines()[7] + "\n")
 
@@ -2062,77 +2070,123 @@ async def _assert_startup_recovery_serializes_polling(tmp_path: Path) -> None:
         release.set()
 
 
-async def _assert_card_metadata_load_starts_after_shell_renders(tmp_path: Path) -> None:
+async def _assert_card_metadata_load_starts_on_detected_set(
+    tmp_path: Path,
+) -> None:
     started = threading.Event()
     release = threading.Event()
+    calls: list[tuple[str, bool]] = []
+    database = _fixture_card_database()
+    selected_card = replace(database.cards[105097], name="Selected Spider")
+    selected_database = replace(
+        database,
+        cards={**database.cards, 105097: selected_card},
+    )
     log_path = tmp_path / "Player.log"
-    log_path.write_text("\n".join(_first_pack_lines()) + "\n", encoding="utf-8")
+    log_path.write_text("", encoding="utf-8")
 
-    def slow_loader() -> CardDatabase:
+    def slow_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        assert set_code == "MSH"
+        assert allow_network
+        calls.append((set_code, allow_network))
         started.set()
-        release.wait()
-        return _fixture_card_database()
+        if not release.wait(timeout=5.0):
+            raise TimeoutError("Test did not release card-data loader.")
+        return selected_database
 
     app = _tui_app(
         tmp_path=tmp_path,
-        card_database_loader=slow_loader,
+        set_card_data_loader=slow_loader,
         poll_enabled=True,
+        poll_interval=0.01,
     )
 
-    try:
-        async with app.run_test(size=(120, 24)) as pilot:
-            assert await asyncio.to_thread(started.wait, 0.5)
+    async with app.run_test(size=(120, 24)) as pilot:
+        try:
+            await pilot.pause()
+            assert not started.is_set()
+            log_path.write_text("\n".join(_first_pack_lines()) + "\n", encoding="utf-8")
+            for _ in range(40):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.05)
+            assert started.is_set()
             assert app.card_database_loading
             assert "Loading card metadata" in _status_text(app=app)
             assert app.query_one("#pack-table", DataTable).loading
 
-            await pilot.press("s")
-            assert app.sort_mode == "win_rate"
-            assert app.query_one("#pack-table", DataTable).row_count == 0
-
             release.set()
-            for _ in range(10):
+            table = app.query_one("#pack-table", DataTable)
+            for _ in range(40):
                 await pilot.pause(0.05)
-                if app.query_one("#pack-table", DataTable).row_count == 14:
+                if (
+                    app.session.snapshot.card_data.phase == DataLoadPhase.READY
+                    and table.row_count == 14
+                ):
                     break
 
-            table = app.query_one("#pack-table", DataTable)
             assert not app.card_database_loading
             assert not table.loading
             assert table.row_count == 14
-    finally:
-        release.set()
+            assert calls == [("MSH", True)]
+            rows = [list(table.get_row_at(index)) for index in range(table.row_count)]
+            assert any("Selected Spider" in row for row in _card_cells(rows=rows))
+        finally:
+            release.set()
+
+
+async def _assert_card_metadata_load_failure_is_visible(tmp_path: Path) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    def card_loader(set_code: str, *, allow_network: bool) -> CardDatabase:
+        calls.append((set_code, allow_network))
+        assert set_code == "MSH"
+        if len(calls) == 1:
+            raise CardDatabaseError("Scryfall is unavailable")
+        return _fixture_card_database()
+
+    app = _tui_app(
+        tmp_path=tmp_path,
+        set_card_data_loader=card_loader,
+        poll_enabled=True,
+    )
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.process_lines(lines=_first_pack_lines()[:3])
+        await pilot.pause(0.1)
+        for _ in range(10):
+            await pilot.pause(0.05)
+            if app.session.snapshot.card_data.phase == DataLoadPhase.FAILED:
+                break
+
+        table = app.query_one("#pack-table", DataTable)
+        status = _status_text(app=app)
+        assert app.session.snapshot.card_data.phase == DataLoadPhase.FAILED
+        assert not table.loading
+        assert table.row_count == 0
+        assert "Card metadata failed to load: Scryfall is unavailable" in status
+        assert "Press r to retry card metadata" in status
+        assert "available only before draft start" in status
+        assert "after draft start, retries are local-only" in status
+
+        app.action_retry_card_data()
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if app.session.snapshot.card_data.phase == DataLoadPhase.READY:
+                break
+
+        assert calls == [("MSH", True), ("MSH", True)]
+        assert app.session.snapshot.card_data.phase == DataLoadPhase.READY
+
+        app.action_retry_card_data()
+        await pilot.pause()
+        assert "No recoverable card-data error to retry." in _status_text(app=app)
 
 
 def test_tui_shows_actionable_error_when_card_metadata_load_fails(
     tmp_path: Path,
 ) -> None:
     asyncio.run(_assert_card_metadata_load_failure_is_visible(tmp_path=tmp_path))
-
-
-async def _assert_card_metadata_load_failure_is_visible(tmp_path: Path) -> None:
-    def failing_loader() -> CardDatabase:
-        raise CardDatabaseError("Scryfall is unavailable")
-
-    app = _tui_app(
-        tmp_path=tmp_path,
-        card_database_loader=failing_loader,
-        poll_enabled=True,
-    )
-
-    async with app.run_test(size=(120, 24)) as pilot:
-        for _ in range(10):
-            await pilot.pause(0.05)
-            if not app.card_database_loading:
-                break
-
-        table = app.query_one("#pack-table", DataTable)
-        status = _status_text(app=app)
-        assert not app.card_database_loading
-        assert not table.loading
-        assert table.row_count == 0
-        assert "Card metadata failed to load: Scryfall is unavailable" in status
-        assert "Run `draftomen-tui refresh-data`" in status
 
 
 def test_tui_slow_ratings_refresh_stays_responsive(tmp_path: Path) -> None:
@@ -2644,7 +2698,7 @@ def _tui_app(
     *,
     tmp_path: Path,
     card_database: CardDatabase | None = None,
-    card_database_loader: Callable[[], CardDatabase] | None = None,
+    set_card_data_loader: SetCardDataLoader | None = None,
     ratings_loader: Callable[[str], SeventeenLandsData] | None = None,
     ratings_progress_loader: RatingsProgressLoader | None = None,
     ratings_cache_checker: Callable[[str], bool] | None = None,
@@ -2660,10 +2714,10 @@ def _tui_app(
         log_path=tmp_path / "Player.log",
         card_database=(
             None
-            if card_database_loader is not None
+            if set_card_data_loader is not None
             else card_database if card_database is not None else _fixture_card_database()
         ),
-        card_database_loader=card_database_loader,
+        set_card_data_loader=set_card_data_loader,
         app_dir=tmp_path / "app",
         ratings_loader=ratings_loader,
         ratings_progress_loader=ratings_progress_loader,
@@ -2686,7 +2740,14 @@ def _tui_app(
 
 
 def _fixture_card_database() -> CardDatabase:
-    return build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+    database = build_card_database_from_bulk_file(path=SCRYFALL_BULK_SAMPLE_PATH)
+    return replace(
+        database,
+        cards={
+            grp_id: replace(card, set_code="msh")
+            for grp_id, card in database.cards.items()
+        },
+    )
 
 
 def _draft_state(

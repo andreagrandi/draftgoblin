@@ -2,6 +2,8 @@
 
 - Generate the validated HOB QuickDraft metadata-only profile snapshot with canonical provenance, lifecycle, licensing, and deterministic replay evidence. (#325)
 ## [Unreleased]
+- Add deterministic per-set Scryfall card-data export, static hosting headers,
+  and offline-first hosted artifact loading for live drafts. (#334)
 - Add the read-only, bounded CI profile-refresh workflow with explicit
   manual/history dispatch validation, ephemeral cache policy, report-only
   evidence, and privacy-safe summaries; active selection remains local-only
