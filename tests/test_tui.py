@@ -2090,7 +2090,7 @@ async def _assert_card_metadata_load_starts_on_detected_set(
         assert allow_network
         calls.append((set_code, allow_network))
         started.set()
-        if not release.wait(timeout=30.0):
+        if not release.wait(timeout=5.0):
             raise TimeoutError("Test did not release card-data loader.")
         return selected_database
 
@@ -2106,8 +2106,11 @@ async def _assert_card_metadata_load_starts_on_detected_set(
             await pilot.pause()
             assert not started.is_set()
             log_path.write_text("\n".join(_first_pack_lines()) + "\n", encoding="utf-8")
-            await pilot.pause(0.1)
-            assert await asyncio.to_thread(started.wait, 2.0)
+            for _ in range(40):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.05)
+            assert started.is_set()
             assert app.card_database_loading
             assert "Loading card metadata" in _status_text(app=app)
             assert app.query_one("#pack-table", DataTable).loading
