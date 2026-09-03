@@ -2,6 +2,10 @@
 
 - Generate the validated HOB QuickDraft metadata-only profile snapshot with canonical provenance, lifecycle, licensing, and deterministic replay evidence. (#325)
 ## [Unreleased]
+- Add the read-only, bounded CI profile-refresh workflow with explicit
+  manual/history dispatch validation, ephemeral cache policy, report-only
+  evidence, and privacy-safe summaries; active selection remains local-only
+  and no generated profile payload is published. (#303)
 - Bundle the immutable HOB/QuickDraft metadata-only baseline in native
   applications with validated offline fallback and hosted refresh
   supersession. (#313)

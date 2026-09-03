@@ -1044,10 +1044,10 @@ for mode in manual active history; do
 done
 ```
 
-`--generated-at` is required and must be timezone-aware ISO-8601. The optional
-`--profile-version` defaults to `1.0`; pass it explicitly when a different
-profile artifact version is required. Batch generation reads only the
-canonical plan and the existing staged execution authority and bundles. It
+`--generated-at` is required and must be timezone-aware ISO-8601. Batch
+generation uses the existing fixed profile artifact version default, `1.0`.
+Batch generation reads only the canonical plan and the existing staged
+execution authority and bundles. It
 does not acquire inputs, access the profile-input cache, invoke adapters, or
 access the network, and it has no `--offline` option. It also does not run
 GitHub Actions, publish a profile or manifest, or write artifacts or reports.
@@ -1090,10 +1090,161 @@ authority, or batch-input errors emit only generic, path-free stderr and exit
 `1` (argument syntax errors retain `2`).
 
 For deterministic repeats, keep the canonical plan bytes, staged input bytes,
-profile version, generator configuration, stage thresholds, and timezone-aware
-`--generated-at` unchanged. Repeating the batch then produces byte-identical
-report bytes and identical eligible payload bytes; the report itself does not
-include `generated_at` or `profile_version`.
+generator configuration, stage thresholds, and timezone-aware `--generated-at`
+unchanged. Repeating the batch then produces byte-identical report bytes and
+identical eligible payload bytes; the report itself does not include
+`generated_at` or `profile_version`.
+
+
+## Run the CI profile-refresh workflow
+
+The repository's CI entry point is
+`.github/workflows/profile-refresh.yml`. Its workflow name is `Profile Refresh`. It is a manually
+dispatched, read-only evidence workflow. It composes the same three commands described
+above, in this order:
+
+1. `plan-profile-refresh`
+2. `execute-profile-refresh`
+3. `generate-profile-refresh-batch`
+
+The dispatch form deliberately exposes exactly two selection choices:
+`manual` and `history`. It has no `active` choice and no implicit
+full/all-environments choice. `active` remains available for the local
+three-stage workflow only; it is never a CI fallback.
+
+### Dispatch inputs
+
+The workflow accepts these exact inputs:
+
+| Input | Manual selection | History selection |
+| --- | --- | --- |
+| `selection_mode` | `manual` | `history` |
+| `set_code` | Required and non-empty | Must be empty |
+| `event_format` | Required and non-empty | Required and non-empty |
+| `max_environments` | `0` sentinel; no history count | Integer `>= 1` |
+| `lifecycle_url` | Optional | Required public HTTPS URL |
+| `generated_at` | Required timezone-aware ISO-8601 timestamp | Required timezone-aware ISO-8601 timestamp |
+
+The selection columns are validation matrices, not suggestions for mixing
+fields. Manual mode plans exactly the one inventory environment named by its
+non-empty `set_code`; its `max_environments` input must remain the `0`
+sentinel and is not a history bound. History mode does not accept a
+`set_code`, requires a public `https://` lifecycle document in
+`lifecycle_url`, and plans no more than the explicitly supplied positive
+`max_environments` bound. The URL must be a public HTTPS URL, rather than a
+local file, a URL-only private endpoint, or an HTTP endpoint.
+
+Both modes require `event_format` and `generated_at` before planning starts.
+`generated_at` must include a timezone offset (for example,
+`2026-08-30T12:00:00+00:00`); a timezone-naive timestamp is rejected.
+The batch generator uses the existing fixed profile artifact version default,
+`1.0`; the workflow does not expose or pass a profile-version setting. The batch
+report and step summary intentionally do not expose either `generated_at` or
+`profile_version`.
+
+For history selection, validation is followed by the helper's
+`fetch-lifecycle` boundary. It resolves the URL before every request,
+requires every resolved address to be globally routable, and connects to the
+validated address while retaining the original hostname for HTTPS
+certificate/SNI checks. Every redirect is independently required to remain
+public HTTPS; HTTP downgrades, private or non-global DNS answers, malformed
+locations, and more than five redirects are rejected. Responses are bounded
+to `1 MiB` and must be a JSON object. The fetched document is written under
+the runner's temporary directory and planning consumes that file with
+`--lifecycle-file`; the planner never fetches the operator URL itself.
+
+The workflow validates the inputs before invoking the planner and then passes
+the canonical plan to execution and batch generation. Consequently, a
+successful manual run has exactly one environment, while a successful history
+run has at most its supplied history bound. The plan, execution authority, and
+batch report remain the canonical authorities; later stages do not rediscover
+inventory or lifecycle metadata.
+
+### Read-only and ephemeral execution boundary
+
+The workflow declares top-level `permissions: contents: read` and does not
+elevate permissions at the job level. It declares or consumes no secrets,
+publication credentials, deployment environments, release actions, or
+write-capable token. The only remote write is the GitHub Actions run-evidence
+artifact described below. CI does not publish a generated profile, manifest,
+website asset, package, or release, and it does not upload generated profile
+payloads.
+
+Execution uses a runner-temporary profile-input cache. Before running, the
+workflow checks the repository's explicit cache policy:
+
+- freshness: `7 days`;
+- maximum entry: `134217728` bytes (`128 MiB`);
+- maximum total: `536870912` bytes (`512 MiB`);
+- maximum records: `256`;
+- maximum versions per source: `3`.
+
+The check must match `DEFAULT_PROFILE_REFRESH_CACHE_POLICY`. Neither
+`actions/cache` nor `setup-uv` caching is enabled. Raw acquisition data is
+therefore not retained across workflow runs, and runner teardown bounds the
+cache lifetime further. The cache and staged raw bundles are never included
+in run evidence.
+
+### Report-only evidence and failure handling
+
+The uploaded evidence bundle is report-only and contains exactly these four
+files:
+
+```text
+refresh-plan.json
+execution.json
+batch-report.json
+summary.md
+```
+
+The workflow fails its pre-upload check if any expected file is absent, if an
+unexpected file, directory, or symlink is present, or if the aggregate
+uncompressed size exceeds `10485760` bytes (`10 MiB`). A passing bundle is
+uploaded with `retention-days: 7`; its artifact name contains both the GitHub
+run ID and run attempt, so reruns receive distinct evidence names.
+Profile-input cache entries, staged bundle
+objects, raw acquisition payloads, and generated profile/gzip payloads are
+excluded.
+
+Evidence collection is attempted even when planning, execution, or batch
+generation reports failure. Per-environment execution failures still leave
+their canonical execution authority for batch reporting; a batch can therefore
+produce a complete report containing successful siblings and failed
+environments, while its command exits non-zero. The workflow preserves such
+produced reports and runs the summary and exact-bundle checks. A fatal failure
+that prevents one of the four expected reports from being produced causes the
+pre-upload check to fail rather than fabricating an incomplete report or
+uploading partial evidence.
+
+Failed environments retain these labels with `not reported` when the canonical
+value is unavailable; any approved skip/error reason counts remain visible.
+
+### Step summary and privacy allowlist
+
+`$GITHUB_STEP_SUMMARY` is rendered from the canonical `batch-report.json`
+through an exact field allowlist with Markdown escaping. For every selected
+environment it lists:
+
+- set code, event format, lifecycle, outcome, and generation stage when one was
+  selected;
+- sample totals, including card-game and pair-game counts;
+- skip and error totals, with their reason counts when present;
+- approved logical source metadata: source name, SHA-256 digest, and safe
+  attribution/license fields when present; and
+- profile, gzip, and generation-report SHA-256 hashes and byte counts.
+
+It also lists aggregate planned, publication-eligible, and failed run counts,
+plus the batch `schema_version`, generator version, profile-generation schema
+and execution-schema versions, set-profile schema version, public-dump-manifest
+schema version, and statistics version. It does not invent or expose
+`generated_at` or `profile_version`.
+
+Unknown report keys are ignored, even when they contain hostile or irrelevant
+values. The summary is free of raw datasets and payload bytes, card names,
+retrieval URLs, local paths, source payloads, diagnostics, exception text,
+secrets, and workflow inputs other than the fields explicitly listed above.
+The report and summary are run evidence only; neither is a publication
+channel.
 
 
 ## Select a profile-generation stage
