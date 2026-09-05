@@ -2,6 +2,9 @@
 
 - Generate the validated HOB QuickDraft metadata-only profile snapshot with canonical provenance, lifecycle, licensing, and deterministic replay evidence. (#325)
 ## [Unreleased]
+- Add the local `refresh-profile-data` producer command for deterministic set
+  selection, cached aggregate 17Lands ratings, validated content-addressed
+  profile publication, and bounded partial-failure reporting. (#338)
 - Add deterministic per-set Scryfall card-data export, static hosting headers,
   and offline-first hosted artifact loading for live drafts. (#334)
 - Add the read-only, bounded CI profile-refresh workflow with explicit

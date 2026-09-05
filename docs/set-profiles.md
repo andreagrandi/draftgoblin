@@ -15,6 +15,31 @@ do bundle one validated baseline profile snapshot as a read-only module
 resource. The repository's optional hosted publication boundary is documented
 below and is never implicit in the runtime.
 
+For the complete local producer path, run `draftomen-tui refresh-profile-data`.
+With no selector it discovers every supported set/format pair represented by a
+validated `website/public/card-data/<lowercase-set-code>.json.gz` artifact; pass
+an exact case-insensitive set code or full set name to select one set, or use
+`--active`/`--historical` to select the corresponding pairs from 17Lands' first-
+party `/data/filters` format availability. The supported formats are
+`PremierDraft`, `TradDraft`, `QuickDraft`, and `PickTwoDraft`; other 17Lands
+formats are ignored. A set selector cannot be combined with either lifecycle
+flag. The command prints the deterministic pair list
+before fetching ratings, then uses the existing 24-hour cache for one aggregate
+full-set card-ratings request and one aggregate color-ratings request per pair.
+It never downloads or regenerates Scryfall card data and never makes per-card or
+pair-filtered ratings requests.
+
+Each successful pair is generated as an early profile, validated, and published
+to `website/public/profiles/objects/<gzip_sha256>.json.gz`; the production
+manifest is merged only after object publication, preserving failed or
+unrelated entries and all old objects. Identical output leaves website bytes
+and modification times unchanged. Every failure is printed with a bounded
+category; partial and all-failed runs return status `1`, while a run with no
+failures returns `0`. Generated profiles retain the visible attribution
+`Card data from 17Lands (17lands.com)`. This command does not provide a
+dashboard, regenerate static card data, alter runtime/session networking, run
+scheduled jobs, or publish through Cloudflare or GitHub.
+
 ## Static card-data artifacts
 Set card metadata is a separate schema-versioned (schema version `1`) artifact
 from set profiles and from 17Lands statistics. The exporter writes canonical

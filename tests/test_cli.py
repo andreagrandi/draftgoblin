@@ -106,6 +106,7 @@ def test_tui_parser_uses_tui_command_name(
         ("benchmark-picks", "Offline benchmark"),
         ("refresh-data", "Scryfall"),
         ("refresh-structure-targets", "17Lands"),
+        ("refresh-profile-data", "Refresh"),
         ("generate-profile", "Generate"),
         ("execute-profile-refresh", "Acquire and stage"),
         ("generate-profile-refresh-batch", "Generate profiles"),
@@ -157,6 +158,180 @@ def test_export_set_data_parser_defaults_and_options() -> None:
     assert args.bulk_file == Path("bulk.jsonl.gz")
     assert args.output_dir == Path("out")
     assert args.timeout == 17
+
+
+def test_refresh_profile_data_parser_supports_selector_modes_and_app_dir() -> None:
+    parser = build_parser()
+
+    defaults = parser.parse_args(args=["refresh-profile-data"])
+    assert defaults.set is None
+    assert defaults.active is False
+    assert defaults.historical is False
+    assert defaults.app_dir is None
+
+    selected = parser.parse_args(
+        args=["refresh-profile-data", "HOB", "--app-dir", "cache"]
+    )
+    assert selected.set == "HOB"
+    assert selected.app_dir == Path("cache")
+
+    active = parser.parse_args(args=["refresh-profile-data", "--active"])
+    historical = parser.parse_args(args=["refresh-profile-data", "--historical"])
+    assert active.active is True
+    assert historical.historical is True
+
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args(
+            args=["refresh-profile-data", "--active", "--historical"]
+        )
+    assert error.value.code == 2
+
+
+def test_refresh_profile_data_rejects_selector_with_lifecycle_flag(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(argv=["refresh-profile-data", "HOB", "--active"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert captured.err == (
+        "refresh-profile-data: SET cannot be combined with --active or --historical\n"
+    )
+
+
+def test_refresh_profile_data_passes_app_dir_only_to_ratings_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    execute_kwargs: dict[str, object] = {}
+    monkeypatch.setattr(
+        cli,
+        "prepare_profile_data_refresh",
+        lambda **kwargs: SimpleNamespace(count=0, pairs=()),
+    )
+
+    def fake_execute(plan: object, **kwargs: object) -> object:
+        execute_kwargs.update(kwargs)
+        return SimpleNamespace(failures=(), succeeded=True)
+
+    monkeypatch.setattr(cli, "execute_profile_data_refresh", fake_execute)
+
+    assert main(argv=["refresh-profile-data", "--app-dir", "cache"]) == 0
+    assert execute_kwargs == {"cache_dir": Path("cache")}
+
+
+def test_refresh_profile_data_prints_plan_before_execution_and_flushes(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    pairs = (
+        SimpleNamespace(set_code="aaa", set_name="Alpha Set", event_format="PremierDraft"),
+        SimpleNamespace(set_code="bbb", set_name="Beta Set", event_format="QuickDraft"),
+    )
+
+    def fake_prepare(**kwargs: object) -> object:
+        calls.append("prepare")
+        return SimpleNamespace(count=2, pairs=pairs)
+
+    def fake_execute(plan: object, **kwargs: object) -> object:
+        calls.append(capsys.readouterr().out)
+        return SimpleNamespace(failures=(), succeeded=True)
+
+    monkeypatch.setattr(cli, "prepare_profile_data_refresh", fake_prepare)
+    monkeypatch.setattr(cli, "execute_profile_data_refresh", fake_execute)
+
+    assert main(argv=["refresh-profile-data"]) == 0
+
+    assert calls == [
+        "prepare",
+        "selected 2 profile pairs\nAAA - Alpha Set / PremierDraft\n"
+        "BBB - Beta Set / QuickDraft\n",
+    ]
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("failure_count", [1, 2])
+def test_refresh_profile_data_prints_all_failures_and_returns_nonzero(
+    failure_count: int,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pairs = tuple(
+        SimpleNamespace(
+            set_code=code,
+            set_name=name,
+            event_format="QuickDraft",
+        )
+        for code, name in (("aaa", "Alpha Set"), ("bbb", "Beta Set"))
+    )
+    failures = tuple(
+        SimpleNamespace(pair=pairs[index], category="ratings-unavailable")
+        for index in range(failure_count)
+    )
+    monkeypatch.setattr(
+        cli,
+        "prepare_profile_data_refresh",
+        lambda **kwargs: SimpleNamespace(count=2, pairs=pairs),
+    )
+    monkeypatch.setattr(
+        cli,
+        "execute_profile_data_refresh",
+        lambda plan, **kwargs: SimpleNamespace(failures=failures, succeeded=False),
+    )
+
+    assert main(argv=["refresh-profile-data"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == (
+        "selected 2 profile pairs\nAAA - Alpha Set / QuickDraft\n"
+        "BBB - Beta Set / QuickDraft\n"
+    )
+    assert captured.err == "".join(
+        "refresh-profile-data failed: "
+        f"{pairs[index].set_code.upper()} - {pairs[index].set_name} / QuickDraft: "
+        "ratings-unavailable\n"
+        for index in range(failure_count)
+    )
+
+
+@pytest.mark.parametrize("stage", ["prepare", "execute"])
+def test_refresh_profile_data_top_level_errors_are_path_free(
+    stage: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if stage == "prepare":
+        monkeypatch.setattr(
+            cli,
+            "prepare_profile_data_refresh",
+            lambda **kwargs: (_ for _ in ()).throw(
+                RuntimeError("/private/user/path should not be printed")
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            cli,
+            "prepare_profile_data_refresh",
+            lambda **kwargs: SimpleNamespace(count=0, pairs=()),
+        )
+        monkeypatch.setattr(
+            cli,
+            "execute_profile_data_refresh",
+            lambda plan, **kwargs: (_ for _ in ()).throw(
+                RuntimeError("/private/user/path should not be printed")
+            ),
+        )
+
+    assert main(argv=["refresh-profile-data"]) == 1
+
+    captured = capsys.readouterr()
+    assert "/private/user/path" not in captured.err
+    assert captured.err in {
+        "refresh-profile-data: unable to prepare profile refresh plan\n",
+        "refresh-profile-data: unable to execute profile refresh\n",
+    }
 
 
 @pytest.mark.parametrize("timeout", ["0", "-1", "not-an-int"])

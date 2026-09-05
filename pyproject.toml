@@ -93,6 +93,7 @@ files = [
     "draftomen/profile_input_acquisition.py",
     "draftomen/profile_input_cache.py",
     "draftomen/profile_batch_generation.py",
+    "draftomen/profile_data_refresh.py",
     "draftomen/profile_manifest.py",
     "draftomen/profile_publication.py",
     "draftomen/profile_refresh_execution.py",
