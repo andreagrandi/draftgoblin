@@ -52,6 +52,10 @@ from draftomen.profile_publication import (
     ProfilePublicationError,
     generate_local_profile_artifacts,
 )
+from draftomen.profile_data_refresh import (
+    execute_profile_data_refresh,
+    prepare_profile_data_refresh,
+)
 from draftomen.corpus import (
     CorpusError,
     DEFAULT_ARTIFACT_DIR,
@@ -643,6 +647,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     refresh_profile_parser.set_defaults(handler=handle_refresh_profile)
 
+    refresh_profile_data_parser = subparsers.add_parser(
+        name="refresh-profile-data",
+        help="Refresh and publish local 17Lands set profiles.",
+        description=(
+            "Select validated local card-data artifacts, refresh aggregate 17Lands "
+            "ratings, and publish validated profile objects and a merged manifest."
+        ),
+    )
+    refresh_profile_data_parser.add_argument(
+        "set",
+        nargs="?",
+        default=None,
+        metavar="SET",
+        help="Exact set code or full set name (case-insensitive).",
+    )
+    refresh_selection = refresh_profile_data_parser.add_mutually_exclusive_group()
+    refresh_selection.add_argument(
+        "--active",
+        action="store_true",
+        help="Refresh only pairs currently listed as live by 17Lands.",
+    )
+    refresh_selection.add_argument(
+        "--historical",
+        action="store_true",
+        help="Refresh only supported pairs absent from 17Lands live formats.",
+    )
+    refresh_profile_data_parser.add_argument(
+        "--app-dir",
+        type=Path,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    refresh_profile_data_parser.set_defaults(handler=handle_refresh_profile_data)
+
     profile_parser = subparsers.add_parser(
         name="generate-profile",
         help="Generate and publish a validated local set profile.",
@@ -937,6 +975,55 @@ def handle_refresh_profile(args: argparse.Namespace) -> int:
         f"cache_path={cache_path}"
     )
     return 0 if result.maturity.value != "generic" else 1
+
+
+def handle_refresh_profile_data(args: argparse.Namespace) -> int:
+    """Select, generate, validate, and publish local profile data."""
+
+    selector = getattr(args, "set", None)
+    active = bool(getattr(args, "active", False))
+    historical = bool(getattr(args, "historical", False))
+    if selector is not None and (active or historical):
+        print(
+            "refresh-profile-data: SET cannot be combined with --active or --historical",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        plan = prepare_profile_data_refresh(
+            selector=selector,
+            active=active,
+            historical=historical,
+        )
+    except Exception:  # noqa: BLE001 - CLI diagnostics are intentionally path-free.
+        print("refresh-profile-data: unable to prepare profile refresh plan", file=sys.stderr)
+        return 1
+
+    print(f"selected {plan.count} profile pairs", flush=True)
+    for pair in plan.pairs:
+        print(
+            f"{pair.set_code.upper()} - {pair.set_name} / {pair.event_format}",
+            flush=True,
+        )
+
+    try:
+        result = execute_profile_data_refresh(
+            plan,
+            cache_dir=getattr(args, "app_dir", None),
+        )
+    except Exception:  # noqa: BLE001 - CLI diagnostics are intentionally path-free.
+        print("refresh-profile-data: unable to execute profile refresh", file=sys.stderr)
+        return 1
+
+    for failure in result.failures:
+        print(
+            "refresh-profile-data failed: "
+            f"{failure.pair.set_code.upper()} - {failure.pair.set_name} / "
+            f"{failure.pair.event_format}: {failure.category}",
+            file=sys.stderr,
+        )
+    return 0 if result.succeeded else 1
 
 
 def handle_plan_profile_refresh(args: argparse.Namespace) -> int:
